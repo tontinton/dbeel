@@ -251,6 +251,12 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.arena = Arena::new();
+        self.root = NodePtr::null();
+        self.length = 0;
+    }
+
     pub fn iter(&self) -> Iter<K, V> {
         Iter {
             head: self.root.find_min(),
@@ -517,5 +523,16 @@ mod tests {
         assert_eq!(iter.next(), Some((&75, &"b")));
         assert_eq!(iter.next(), Some((&50, &"a")));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn clear() {
+        let mut tree = RedBlackTree::new();
+        tree.insert(100, "c");
+        tree.insert(50, "a");
+        tree.insert(75, "b");
+        tree.insert(150, "d");
+        tree.clear();
+        assert_eq!(tree.len(), 0);
     }
 }
