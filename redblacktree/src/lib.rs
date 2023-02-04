@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::{cmp::Ordering, marker, ptr};
 
 use typed_arena::Arena;
@@ -242,6 +243,16 @@ pub struct RedBlackTree<K: Ord, V> {
     length: usize,
 }
 
+impl<K, V> Debug for RedBlackTree<K, V>
+where
+    K: Ord + Debug,
+    V: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
 impl<K: Ord, V> RedBlackTree<K, V> {
     pub fn new() -> Self {
         Self {
@@ -276,7 +287,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         return NodePtr(self.arena.alloc(node));
     }
 
-    fn find_node(&self, key: K) -> NodePtr<K, V> {
+    fn find_node(&self, key: &K) -> NodePtr<K, V> {
         let mut node_ptr = self.root;
 
         loop {
@@ -296,7 +307,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         NodePtr::null()
     }
 
-    pub fn get(&self, key: K) -> Option<&V> {
+    pub fn get(&self, key: &K) -> Option<&V> {
         let node_ptr = self.find_node(key);
         if node_ptr.is_null() {
             None
@@ -476,9 +487,9 @@ mod tests {
         assert_eq!(tree.len(), 2);
         tree.insert(2, 6);
         assert_eq!(tree.len(), 2);
-        assert_eq!(tree.get(1), Some(&2));
-        assert_eq!(tree.get(2), Some(&6));
-        assert_eq!(tree.get(3), None);
+        assert_eq!(tree.get(&1), Some(&2));
+        assert_eq!(tree.get(&2), Some(&6));
+        assert_eq!(tree.get(&3), None);
     }
 
     #[test]
@@ -489,10 +500,10 @@ mod tests {
         tree.insert("A", "Trees");
         tree.insert("C", "cool");
         assert_eq!(tree.len(), 3);
-        assert_eq!(tree.get("A"), Some(&"Trees"));
-        assert_eq!(tree.get("B"), Some(&"are"));
-        assert_eq!(tree.get("C"), Some(&"cool"));
-        assert_eq!(tree.get("D"), None);
+        assert_eq!(tree.get(&"A"), Some(&"Trees"));
+        assert_eq!(tree.get(&"B"), Some(&"are"));
+        assert_eq!(tree.get(&"C"), Some(&"cool"));
+        assert_eq!(tree.get(&"D"), None);
     }
 
     #[test]
