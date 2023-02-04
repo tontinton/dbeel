@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{cmp::Ordering, marker, ptr};
+use std::{cmp::Ordering, marker, ops::Index, ptr};
 
 use typed_arena::Arena;
 
@@ -275,6 +275,17 @@ where
 {
 }
 
+impl<'a, K, V> Index<&'a K> for RedBlackTree<K, V>
+where
+    K: Ord,
+{
+    type Output = V;
+
+    fn index(&self, index: &K) -> &V {
+        self.get(index).expect("key not found")
+    }
+}
+
 impl<K: Ord, V> RedBlackTree<K, V> {
     pub fn new() -> Self {
         Self {
@@ -509,6 +520,8 @@ mod tests {
         assert_eq!(tree.len(), 2);
         tree.insert(2, 6);
         assert_eq!(tree.len(), 2);
+        assert!(tree.contains_key(&1));
+        assert!(!tree.contains_key(&100));
         assert_eq!(tree.get(&1), Some(&2));
         assert_eq!(tree.get(&2), Some(&6));
         assert_eq!(tree.get(&3), None);
@@ -522,8 +535,10 @@ mod tests {
         tree.insert("A", "Trees");
         tree.insert("C", "cool");
         assert_eq!(tree.len(), 3);
+        assert!(tree.contains_key(&"C"));
+        assert!(!tree.contains_key(&"nope"));
         assert_eq!(tree.get(&"A"), Some(&"Trees"));
-        assert_eq!(tree.get(&"B"), Some(&"are"));
+        assert_eq!(tree[&"B"], "are");
         assert_eq!(tree.get(&"C"), Some(&"cool"));
         assert_eq!(tree.get(&"D"), None);
     }
@@ -567,5 +582,22 @@ mod tests {
         tree.insert(150, "d");
         tree.clear();
         assert_eq!(tree.len(), 0);
+    }
+
+    #[test]
+    fn equality() {
+        let mut tree1 = RedBlackTree::new();
+        tree1.insert(100, "c");
+        tree1.insert(50, "a");
+        tree1.insert(75, "b");
+        tree1.insert(150, "d");
+
+        let mut tree2 = RedBlackTree::new();
+        tree2.insert(150, "d");
+        tree2.insert(50, "a");
+        tree2.insert(100, "c");
+        tree2.insert(75, "b");
+
+        assert_eq!(tree1, tree2);
     }
 }
