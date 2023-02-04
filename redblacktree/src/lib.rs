@@ -253,6 +253,28 @@ where
     }
 }
 
+impl<K, V> PartialEq for RedBlackTree<K, V>
+where
+    K: Eq + Ord,
+    V: PartialEq,
+{
+    fn eq(&self, other: &RedBlackTree<K, V>) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        self.iter()
+            .all(|(key, value)| other.get(key).map_or(false, |v| *value == *v))
+    }
+}
+
+impl<K, V> Eq for RedBlackTree<K, V>
+where
+    K: Eq + Ord,
+    V: Eq,
+{
+}
+
 impl<K: Ord, V> RedBlackTree<K, V> {
     pub fn new() -> Self {
         Self {
