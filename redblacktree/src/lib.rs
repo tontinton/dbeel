@@ -1,7 +1,5 @@
 use core::fmt::Debug;
-use std::{cmp::Ordering, marker, ops::Index, ptr};
-
-use typed_arena::Arena;
+use std::{alloc::Layout, cmp::Ordering, marker, ops::Index};
 
 #[derive(Debug, PartialEq)]
 enum Color {
@@ -75,7 +73,7 @@ impl<K: Ord, V> Eq for NodePtr<K, V> {}
 impl<K: Ord, V> NodePtr<K, V> {
     #[inline]
     fn null() -> NodePtr<K, V> {
-        NodePtr(ptr::null_mut())
+        NodePtr(std::ptr::null_mut())
     }
 
     #[inline]
@@ -237,8 +235,78 @@ impl<'a, K: Ord + 'a, V: 'a> DoubleEndedIterator for Iter<'a, K, V> {
     }
 }
 
+pub struct IntoIter<K: Ord, V> {
+    head: NodePtr<K, V>,
+    tail: NodePtr<K, V>,
+    length: usize,
+
+    // Info to free the arena without dropping the key and values inside it, as
+    // they should already be freed by iterating them by value.
+    arena_ptr: *mut Node<K, V>,
+    arena_layout: Layout,
+}
+
+impl<K: Ord, V> Drop for IntoIter<K, V> {
+    fn drop(&mut self) {
+        let arena_ptr = self.arena_ptr;
+        let arena_layout = self.arena_layout;
+
+        // Drop keys and values we didn't get to iterate.
+        for (_, _) in self {}
+
+        // Free the arena's memory.
+        unsafe {
+            std::alloc::dealloc(arena_ptr as *mut u8, arena_layout);
+        }
+    }
+}
+
+impl<K: Ord, V> Iterator for IntoIter<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<(K, V)> {
+        if self.length == 0 || self.head.is_null() {
+            return None;
+        }
+
+        let next = self.head.next();
+        let (key, value) = unsafe {
+            (
+                core::ptr::read(&(*self.head.0).key),
+                core::ptr::read(&(*self.head.0).value),
+            )
+        };
+        self.head = next;
+        self.length -= 1;
+        Some((key, value))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.length, Some(self.length))
+    }
+}
+
+impl<K: Ord, V> DoubleEndedIterator for IntoIter<K, V> {
+    fn next_back(&mut self) -> Option<(K, V)> {
+        if self.length == 0 || self.tail.is_null() {
+            return None;
+        }
+
+        let prev = self.tail.prev();
+        let (key, value) = unsafe {
+            (
+                core::ptr::read(&(*self.tail.0).key),
+                core::ptr::read(&(*self.tail.0).value),
+            )
+        };
+        self.tail = prev;
+        self.length -= 1;
+        Some((key, value))
+    }
+}
+
 pub struct RedBlackTree<K: Ord, V> {
-    arena: Arena<Node<K, V>>,
+    arena: Vec<Node<K, V>>,
     root: NodePtr<K, V>,
     length: usize,
 }
@@ -286,19 +354,53 @@ where
     }
 }
 
+impl<K: Ord, V> IntoIterator for RedBlackTree<K, V> {
+    type Item = (K, V);
+    type IntoIter = IntoIter<K, V>;
+
+    fn into_iter(mut self) -> IntoIter<K, V> {
+        let length = self.len();
+        let head = self.root.find_min();
+        let tail = self.root.find_max();
+
+        self.clear_no_dealloc();
+
+        let arena_ptr = self.arena.as_mut_ptr();
+        let arena_layout = Layout::from_size_align(
+            std::mem::size_of_val(&self.arena),
+            std::mem::align_of::<Vec<Node<K, V>>>(),
+        )
+        .unwrap();
+
+        std::mem::forget(self.arena);
+
+        IntoIter {
+            head,
+            tail,
+            length,
+            arena_ptr,
+            arena_layout,
+        }
+    }
+}
+
 impl<K: Ord, V> RedBlackTree<K, V> {
     pub fn new() -> Self {
         Self {
-            arena: Arena::new(),
+            arena: Vec::new(),
             root: NodePtr::null(),
             length: 0,
         }
     }
 
-    pub fn clear(&mut self) {
-        self.arena = Arena::new();
+    fn clear_no_dealloc(&mut self) {
         self.root = NodePtr::null();
         self.length = 0;
+    }
+
+    pub fn clear(&mut self) {
+        self.clear_no_dealloc();
+        self.arena = Vec::new();
     }
 
     pub fn iter(&self) -> Iter<K, V> {
@@ -317,7 +419,8 @@ impl<K: Ord, V> RedBlackTree<K, V> {
 
     fn alloc_node(&mut self, node: Node<K, V>) -> NodePtr<K, V> {
         self.length += 1;
-        return NodePtr(self.arena.alloc(node));
+        self.arena.push(node);
+        unsafe { NodePtr(self.arena.as_mut_ptr().add(self.arena.len() - 1)) }
     }
 
     fn find_node(&self, key: &K) -> NodePtr<K, V> {
@@ -571,6 +674,63 @@ mod tests {
         assert_eq!(iter.next(), Some((&75, &"b")));
         assert_eq!(iter.next(), Some((&50, &"a")));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn into_iter() {
+        let mut tree = RedBlackTree::new();
+        tree.insert(100, "c");
+        tree.insert(50, "a");
+        tree.insert(75, "b");
+        tree.insert(150, "d");
+        let mut iter = tree.into_iter();
+        assert_eq!(iter.next(), Some((50, "a")));
+        assert_eq!(iter.next(), Some((75, "b")));
+        assert_eq!(iter.next(), Some((100, "c")));
+        assert_eq!(iter.next(), Some((150, "d")));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn into_iter_reverse() {
+        let mut tree = RedBlackTree::new();
+        tree.insert(100, "c");
+        tree.insert(50, "a");
+        tree.insert(75, "b");
+        tree.insert(150, "d");
+        let mut iter = tree.into_iter().rev();
+        assert_eq!(iter.next(), Some((150, "d")));
+        assert_eq!(iter.next(), Some((100, "c")));
+        assert_eq!(iter.next(), Some((75, "b")));
+        assert_eq!(iter.next(), Some((50, "a")));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn into_iter_for_loop_no_crash() {
+        struct User {
+            // Test there is no double free on a dynamically allocated struct.
+            _name: String,
+            _age: u8,
+        }
+
+        let mut tree = RedBlackTree::new();
+        tree.insert(
+            "id1",
+            User {
+                _name: "John Doe".to_string(),
+                _age: 123,
+            },
+        );
+        tree.insert(
+            "id2",
+            User {
+                _name: "Tony Solomonik".to_string(),
+                _age: 24,
+            },
+        );
+
+        for (_, _) in tree {}
     }
 
     #[test]
