@@ -385,12 +385,20 @@ impl<K: Ord, V> IntoIterator for RedBlackTree<K, V> {
 }
 
 impl<K: Ord, V> RedBlackTree<K, V> {
-    pub fn new() -> Self {
+    fn with_arena(arena: Vec<Node<K, V>>) -> Self {
         Self {
-            arena: Vec::new(),
+            arena,
             root: NodePtr::null(),
             length: 0,
         }
+    }
+
+    pub fn new() -> Self {
+        Self::with_arena(Vec::new())
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_arena(Vec::with_capacity(capacity))
     }
 
     fn clear_no_dealloc(&mut self) {
