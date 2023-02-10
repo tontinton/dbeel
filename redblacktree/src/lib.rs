@@ -538,7 +538,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         while node_ptr != self.root {
             let node = node_ptr.unwrap_mut();
             let parent_ptr = node.parent;
-            let parent = parent_ptr.unwrap_mut();
+            let mut parent = parent_ptr.unwrap_mut();
             if parent.color == Color::Black {
                 break;
             }
@@ -552,10 +552,14 @@ impl<K: Ord, V> RedBlackTree<K, V> {
                     || uncle_ptr.unsafe_deref().color == Color::Black;
                 if rotate {
                     if node_ptr == parent.right {
-                        self.rotate_left(parent_ptr);
+                        node_ptr = parent_ptr;
+                        self.rotate_left(node_ptr);
                     }
 
-                    node.color = Color::Black;
+                    parent =
+                        node_ptr.unsafe_deref_mut().parent.unsafe_deref_mut();
+                    grand_parent = parent.parent.unsafe_deref_mut();
+                    parent.color = Color::Black;
                     grand_parent.color = Color::Red;
                     node_ptr = parent_ptr;
                     self.rotate_right(grand_parent_ptr);
@@ -572,10 +576,14 @@ impl<K: Ord, V> RedBlackTree<K, V> {
                     || uncle_ptr.unsafe_deref().color == Color::Black;
                 if rotate {
                     if node_ptr == parent.left {
-                        self.rotate_right(parent_ptr);
+                        node_ptr = parent_ptr;
+                        self.rotate_right(node_ptr);
                     }
 
-                    node.color = Color::Black;
+                    parent =
+                        node_ptr.unsafe_deref_mut().parent.unsafe_deref_mut();
+                    grand_parent = parent.parent.unsafe_deref_mut();
+                    parent.color = Color::Black;
                     grand_parent.color = Color::Red;
                     node_ptr = parent_ptr;
                     self.rotate_left(grand_parent_ptr);
@@ -633,9 +641,9 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         match node.parent.as_option_mut() {
             Some(parent) => {
                 if node_ptr == parent.right {
-                    parent.left = left_ptr;
-                } else {
                     parent.right = left_ptr;
+                } else {
+                    parent.left = left_ptr;
                 }
             }
             None => self.root = left_ptr,
@@ -648,7 +656,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::RedBlackTree;
+    use super::*;
 
     #[test]
     fn insert_int() {
@@ -681,6 +689,37 @@ mod tests {
         assert_eq!(tree[&"B"], "are");
         assert_eq!(tree.get(&"C"), Some(&"cool"));
         assert_eq!(tree.get(&"D"), None);
+    }
+
+    #[test]
+    fn tree_that_runs_all_rotations_and_coloring() {
+        let mut tree = RedBlackTree::with_capacity(8);
+        for i in vec![8, 18, 5, 15, 17, 25, 40, 80] {
+            tree.insert(i, 0 as u8);
+        }
+        let seventeen = tree.root.unsafe_deref();
+        assert_eq!(seventeen.color, Color::Black);
+
+        let eight = seventeen.left.unsafe_deref();
+        assert_eq!(eight.color, Color::Red);
+
+        let five = eight.left.unsafe_deref();
+        assert_eq!(five.color, Color::Black);
+
+        let fifteen = eight.right.unsafe_deref();
+        assert_eq!(fifteen.color, Color::Black);
+
+        let twentyfive = seventeen.right.unsafe_deref();
+        assert_eq!(twentyfive.color, Color::Red);
+
+        let eighteen = twentyfive.left.unsafe_deref();
+        assert_eq!(eighteen.color, Color::Black);
+
+        let forty = twentyfive.right.unsafe_deref();
+        assert_eq!(forty.color, Color::Black);
+
+        let eighty = forty.right.unsafe_deref();
+        assert_eq!(eighty.color, Color::Red);
     }
 
     #[test]
