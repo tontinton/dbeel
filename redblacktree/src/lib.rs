@@ -321,6 +321,35 @@ where
     }
 }
 
+impl<K: Ord + Debug, V: Debug> RedBlackTree<K, V> {
+    fn print_tree(&self, node_ptr: NodePtr<K, V>, level: usize, left: bool) {
+        if node_ptr.is_null() {
+            return;
+        }
+        let node = node_ptr.unsafe_deref();
+        let before = if level > 0 {
+            format!(
+                "{}|-{}-",
+                "    ".repeat(level - 1),
+                if left { "L" } else { "R" }
+            )
+        } else {
+            "".to_string()
+        };
+        let color = match node.color {
+            Color::Red => "\x1b[31m",
+            Color::Black => "\x1b[90m",
+        };
+        println!("{}{}{:?}\x1b[0m: {:?}", before, color, node.key, node.value);
+        self.print_tree(node.left, level + 1, true);
+        self.print_tree(node.right, level + 1, false);
+    }
+
+    pub fn pretty_print(&self) {
+        self.print_tree(self.root, 0, true);
+    }
+}
+
 impl<K, V> PartialEq for RedBlackTree<K, V>
 where
     K: Eq + Ord,
