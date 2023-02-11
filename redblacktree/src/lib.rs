@@ -143,12 +143,14 @@ impl<K: Ord, V> NodePtr<K, V> {
         if !right.is_null() {
             right.find_min()
         } else {
+            let mut node_ptr = self;
             let mut node = self.unsafe_deref();
             loop {
                 if let Some(parent) = node.parent.as_option() {
-                    if parent.left == *self {
+                    if parent.left == *node_ptr {
                         return node.parent;
                     }
+                    node_ptr = &node.parent;
                     node = parent;
                 } else {
                     return NodePtr::null();
@@ -164,14 +166,16 @@ impl<K: Ord, V> NodePtr<K, V> {
 
         let left = self.unsafe_deref().left;
         if !left.is_null() {
-            left.find_min()
+            left
         } else {
+            let mut node_ptr = self;
             let mut node = self.unsafe_deref();
             loop {
                 if let Some(parent) = node.parent.as_option() {
-                    if parent.right == *self {
+                    if parent.right == *node_ptr {
                         return node.parent;
                     }
+                    node_ptr = &node.parent;
                     node = parent;
                 } else {
                     return NodePtr::null();
