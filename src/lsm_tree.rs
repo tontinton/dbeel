@@ -6,8 +6,11 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
-use futures_lite::AsyncWriteExt;
-use glommio::io::{DmaFile, DmaStreamWriterBuilder};
+use futures_lite::{AsyncReadExt, AsyncWriteExt};
+use glommio::io::{
+    BufferedFile, DmaFile, DmaStreamWriter, DmaStreamWriterBuilder,
+    StreamReaderBuilder,
+};
 use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -101,12 +104,16 @@ pub struct LSMTree {
     flush_memtable: Option<RedBlackTree<String, String>>,
     // The next sstable index.
     index: usize,
+    // The memtable WAL for durability in case the process crashes without
+    // flushing the memtable to disk.
+    wal_writer: DmaStreamWriter,
 }
 
 impl LSMTree {
-    pub fn new(dir: PathBuf) -> std::io::Result<Self> {
+    pub async fn new(dir: PathBuf) -> std::io::Result<Self> {
         let pattern = Regex::new(r#"^(\d+)\.data"#).unwrap();
         let index = if dir.is_dir() {
+            // TODO: check for missing files.
             std::fs::read_dir(dir.clone())?
                 .filter_map(Result::ok)
                 .filter_map(|entry| {
@@ -130,11 +137,38 @@ impl LSMTree {
             0
         };
 
+        let mut active_memtable = RedBlackTree::with_capacity(1024);
+
+        let mut wal_path = dir.clone();
+        wal_path.push("memtable.log");
+        if wal_path.exists() {
+            let wal_file = BufferedFile::open(wal_path.clone()).await?;
+            let mut reader = StreamReaderBuilder::new(wal_file).build();
+
+            let mut wal_buf = Vec::new();
+            reader.read_to_end(&mut wal_buf).await?;
+            let mut cursor = std::io::Cursor::new(&wal_buf[..]);
+            while let Ok(entry) =
+                bincode_options().deserialize_from::<_, Entry>(&mut cursor)
+            {
+                // TODO: not unwrap.
+                active_memtable.insert(entry.key, entry.value).unwrap();
+            }
+            reader.close().await?;
+        }
+
+        let wal_writer =
+            DmaStreamWriterBuilder::new(DmaFile::create(wal_path).await?)
+                .with_buffer_size(512)
+                .with_write_behind(10)
+                .build();
+
         Ok(Self {
             dir,
-            active_memtable: RedBlackTree::with_capacity(1024),
+            active_memtable,
             flush_memtable: None,
             index,
+            wal_writer,
         })
     }
 
@@ -187,7 +221,17 @@ impl LSMTree {
         key: String,
         value: String,
     ) -> glommio::Result<(), ()> {
-        self.active_memtable.insert(key, value).unwrap();
+        // Write to memtable in memory.
+        self.active_memtable
+            .insert(key.clone(), value.clone())
+            .unwrap();
+
+        // Write to WAL for persistance.
+        let entry = Entry { key, value };
+        let entry_encoded = bincode_options().serialize(&entry).unwrap();
+        self.wal_writer.write_all(&entry_encoded).await?;
+        self.wal_writer.sync().await?;
+
         if self.active_memtable.capacity() == self.active_memtable.len() {
             // Capacity is full, flush the active tree to disk.
             self.flush().await?;
@@ -245,6 +289,17 @@ impl LSMTree {
         }
         data_write_stream.close().await?;
         index_write_stream.close().await?;
+
+        // TODO: data added to memtable between std::mem::swap and here, will
+        // get destoryed, by creating a file as truncated.
+        let mut wal_path = self.dir.clone();
+        wal_path.push("memtable.log");
+        self.wal_writer =
+            DmaStreamWriterBuilder::new(DmaFile::create(wal_path).await?)
+                .with_buffer_size(512)
+                .with_write_behind(10)
+                .build();
+
         self.flush_memtable = None;
         self.index += 1;
 

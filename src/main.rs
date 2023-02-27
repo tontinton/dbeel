@@ -12,7 +12,7 @@ macro_rules! hashmap {
 }
 
 async fn run(dir: PathBuf) -> Result<()> {
-    let mut tree = LSMTree::new(dir)?;
+    let mut tree = LSMTree::new(dir).await?;
 
     let entries = hashmap![
         "B".to_string() => "are".to_string(),
