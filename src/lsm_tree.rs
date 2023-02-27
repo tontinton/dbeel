@@ -174,9 +174,9 @@ impl LSMTree {
 
     fn get_data_file_names(&self, index: usize) -> (PathBuf, PathBuf) {
         let mut data_filename = self.dir.clone();
-        data_filename.push(format!("{}.data", index));
+        data_filename.push(format!("{:01$}.data", index, 9));
         let mut index_filename = self.dir.clone();
-        index_filename.push(format!("{}.index", index));
+        index_filename.push(format!("{:01$}.index", index, 9));
         (data_filename, index_filename)
     }
 
