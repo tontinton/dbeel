@@ -32,8 +32,6 @@ async fn run(dir: PathBuf) -> Result<()> {
         println!("Key not found");
     }
 
-    tree.flush().await?;
-
     Ok(())
 }
 

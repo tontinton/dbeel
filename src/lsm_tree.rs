@@ -240,7 +240,7 @@ impl LSMTree {
         Ok(())
     }
 
-    pub async fn flush(&mut self) -> glommio::Result<(), ()> {
+    async fn flush(&mut self) -> glommio::Result<(), ()> {
         if self.active_memtable.len() == 0 {
             return Ok(());
         }
