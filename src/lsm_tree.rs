@@ -220,9 +220,10 @@ impl LSMTree {
         &mut self,
         key: String,
         value: String,
-    ) -> glommio::Result<(), ()> {
+    ) -> glommio::Result<Option<String>, ()> {
         // Write to memtable in memory.
-        self.active_memtable
+        let result = self
+            .active_memtable
             .set(key.clone(), value.clone())
             .unwrap();
 
@@ -237,7 +238,7 @@ impl LSMTree {
             self.flush().await?;
         }
 
-        Ok(())
+        Ok(result)
     }
 
     async fn flush(&mut self) -> glommio::Result<(), ()> {
