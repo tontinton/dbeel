@@ -9,7 +9,7 @@ use bincode::{
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::{
     BufferedFile, DmaFile, DmaStreamWriter, DmaStreamWriterBuilder,
-    StreamReaderBuilder,
+    OpenOptions, StreamReaderBuilder,
 };
 use redblacktree::RedBlackTree;
 use regex::Regex;
@@ -159,8 +159,8 @@ impl LSMTree {
 
         let wal_writer =
             DmaStreamWriterBuilder::new(DmaFile::create(wal_path).await?)
-                .with_buffer_size(512)
                 .with_write_behind(10)
+                .with_buffer_size(512)
                 .build();
 
         Ok(Self {
@@ -251,6 +251,14 @@ impl LSMTree {
             panic!("Flush memtable has not yet been flushed");
         }
 
+        let mut tmp_wal_path = self.dir.clone();
+        tmp_wal_path.push("memtable_tmp.log");
+        self.wal_writer =
+            DmaStreamWriterBuilder::new(DmaFile::create(&tmp_wal_path).await?)
+                .with_write_behind(10)
+                .with_buffer_size(512)
+                .build();
+
         let (data_filename, index_filename) =
             self.get_data_file_names(self.index);
         let data_file = DmaFile::create(&data_filename).await?;
@@ -291,18 +299,25 @@ impl LSMTree {
         data_write_stream.close().await?;
         index_write_stream.close().await?;
 
-        // TODO: data added to memtable between std::mem::swap and here, will
-        // get destoryed, by creating a file as truncated.
-        let mut wal_path = self.dir.clone();
-        wal_path.push("memtable.log");
-        self.wal_writer =
-            DmaStreamWriterBuilder::new(DmaFile::create(wal_path).await?)
-                .with_buffer_size(512)
-                .with_write_behind(10)
-                .build();
-
         self.flush_memtable = None;
         self.index += 1;
+
+        self.wal_writer.sync().await?;
+
+        let mut wal_path = self.dir.clone();
+        wal_path.push("memtable.log");
+
+        std::fs::rename(&tmp_wal_path, &wal_path)?;
+
+        let wal_file = OpenOptions::new()
+            .append(true)
+            .write(true)
+            .dma_open(wal_path)
+            .await?;
+        self.wal_writer = DmaStreamWriterBuilder::new(wal_file)
+            .with_write_behind(10)
+            .with_buffer_size(512)
+            .build();
 
         Ok(())
     }
