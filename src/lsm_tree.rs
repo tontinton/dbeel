@@ -152,7 +152,7 @@ impl LSMTree {
                 bincode_options().deserialize_from::<_, Entry>(&mut cursor)
             {
                 // TODO: not unwrap.
-                active_memtable.insert(entry.key, entry.value).unwrap();
+                active_memtable.set(entry.key, entry.value).unwrap();
             }
             reader.close().await?;
         }
@@ -223,7 +223,7 @@ impl LSMTree {
     ) -> glommio::Result<(), ()> {
         // Write to memtable in memory.
         self.active_memtable
-            .insert(key.clone(), value.clone())
+            .set(key.clone(), value.clone())
             .unwrap();
 
         // Write to WAL for persistance.

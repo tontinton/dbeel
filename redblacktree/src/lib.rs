@@ -507,7 +507,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         )
     }
 
-    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, String> {
+    pub fn set(&mut self, key: K, value: V) -> Result<Option<V>, String> {
         let mut node_ptr = self.root;
         if node_ptr.is_null() {
             let allocated =
@@ -686,27 +686,27 @@ mod tests {
     fn insert_int() {
         let mut tree = RedBlackTree::with_capacity(2);
         assert_eq!(tree.len(), 0);
-        assert_eq!(tree.insert(1, 2), Ok(None));
+        assert_eq!(tree.set(1, 2), Ok(None));
         assert_eq!(tree.len(), 1);
-        assert_eq!(tree.insert(2, 4), Ok(None));
+        assert_eq!(tree.set(2, 4), Ok(None));
         assert_eq!(tree.len(), 2);
-        assert_eq!(tree.insert(2, 6), Ok(Some(4)));
+        assert_eq!(tree.set(2, 6), Ok(Some(4)));
         assert_eq!(tree.len(), 2);
         assert!(tree.contains_key(&1));
         assert!(!tree.contains_key(&100));
         assert_eq!(tree.get(&1), Some(&2));
         assert_eq!(tree.get(&2), Some(&6));
         assert_eq!(tree.get(&3), None);
-        assert!(tree.insert(500, 600).is_err());
+        assert!(tree.set(500, 600).is_err());
     }
 
     #[test]
     fn insert_str() {
         let mut tree = RedBlackTree::with_capacity(3);
-        assert_eq!(tree.insert("B", "are"), Ok(None));
-        assert_eq!(tree.insert("A", "B"), Ok(None));
-        assert_eq!(tree.insert("A", "Trees"), Ok(Some("B")));
-        assert_eq!(tree.insert("C", "cool"), Ok(None));
+        assert_eq!(tree.set("B", "are"), Ok(None));
+        assert_eq!(tree.set("A", "B"), Ok(None));
+        assert_eq!(tree.set("A", "Trees"), Ok(Some("B")));
+        assert_eq!(tree.set("C", "cool"), Ok(None));
         assert_eq!(tree.len(), 3);
         assert!(tree.contains_key(&"C"));
         assert!(!tree.contains_key(&"nope"));
@@ -714,14 +714,14 @@ mod tests {
         assert_eq!(tree[&"B"], "are");
         assert_eq!(tree.get(&"C"), Some(&"cool"));
         assert_eq!(tree.get(&"D"), None);
-        assert!(tree.insert("does not exist", "?").is_err());
+        assert!(tree.set("does not exist", "?").is_err());
     }
 
     #[test]
     fn tree_that_runs_all_rotations_and_coloring() {
         let mut tree = RedBlackTree::with_capacity(8);
         for i in vec![8, 18, 5, 15, 17, 25, 40, 80] {
-            assert_eq!(tree.insert(i, 0 as u8), Ok(None));
+            assert_eq!(tree.set(i, 0 as u8), Ok(None));
         }
         let seventeen = tree.root.unsafe_deref();
         assert_eq!(seventeen.color, Color::Black);
@@ -751,10 +751,10 @@ mod tests {
     #[test]
     fn iter() {
         let mut tree = RedBlackTree::with_capacity(4);
-        tree.insert(100, "c").unwrap();
-        tree.insert(50, "a").unwrap();
-        tree.insert(75, "b").unwrap();
-        tree.insert(150, "d").unwrap();
+        tree.set(100, "c").unwrap();
+        tree.set(50, "a").unwrap();
+        tree.set(75, "b").unwrap();
+        tree.set(150, "d").unwrap();
         let mut iter = tree.iter();
         assert_eq!(iter.next(), Some((&50, &"a")));
         assert_eq!(iter.next(), Some((&75, &"b")));
@@ -766,10 +766,10 @@ mod tests {
     #[test]
     fn iter_reverse() {
         let mut tree = RedBlackTree::with_capacity(4);
-        tree.insert(100, "c").unwrap();
-        tree.insert(50, "a").unwrap();
-        tree.insert(75, "b").unwrap();
-        tree.insert(150, "d").unwrap();
+        tree.set(100, "c").unwrap();
+        tree.set(50, "a").unwrap();
+        tree.set(75, "b").unwrap();
+        tree.set(150, "d").unwrap();
         let mut iter = tree.iter().rev();
         assert_eq!(iter.next(), Some((&150, &"d")));
         assert_eq!(iter.next(), Some((&100, &"c")));
@@ -781,10 +781,10 @@ mod tests {
     #[test]
     fn into_iter() {
         let mut tree = RedBlackTree::with_capacity(4);
-        tree.insert(100, "c").unwrap();
-        tree.insert(50, "a").unwrap();
-        tree.insert(75, "b").unwrap();
-        tree.insert(150, "d").unwrap();
+        tree.set(100, "c").unwrap();
+        tree.set(50, "a").unwrap();
+        tree.set(75, "b").unwrap();
+        tree.set(150, "d").unwrap();
         let mut iter = tree.into_iter();
         assert_eq!(iter.next(), Some((50, "a")));
         assert_eq!(iter.next(), Some((75, "b")));
@@ -796,10 +796,10 @@ mod tests {
     #[test]
     fn into_iter_reverse() {
         let mut tree = RedBlackTree::with_capacity(4);
-        tree.insert(100, "c").unwrap();
-        tree.insert(50, "a").unwrap();
-        tree.insert(75, "b").unwrap();
-        tree.insert(150, "d").unwrap();
+        tree.set(100, "c").unwrap();
+        tree.set(50, "a").unwrap();
+        tree.set(75, "b").unwrap();
+        tree.set(150, "d").unwrap();
         let mut iter = tree.into_iter().rev();
         assert_eq!(iter.next(), Some((150, "d")));
         assert_eq!(iter.next(), Some((100, "c")));
@@ -817,7 +817,7 @@ mod tests {
         }
 
         let mut tree = RedBlackTree::with_capacity(2);
-        tree.insert(
+        tree.set(
             "id1",
             User {
                 _name: "John Doe".to_string(),
@@ -825,7 +825,7 @@ mod tests {
             },
         )
         .unwrap();
-        tree.insert(
+        tree.set(
             "id2",
             User {
                 _name: "Tony Solomonik".to_string(),
@@ -840,10 +840,10 @@ mod tests {
     #[test]
     fn clear() {
         let mut tree = RedBlackTree::with_capacity(4);
-        assert_eq!(tree.insert(100, "c"), Ok(None));
-        assert_eq!(tree.insert(50, "a"), Ok(None));
-        assert_eq!(tree.insert(75, "b"), Ok(None));
-        assert_eq!(tree.insert(150, "d"), Ok(None));
+        assert_eq!(tree.set(100, "c"), Ok(None));
+        assert_eq!(tree.set(50, "a"), Ok(None));
+        assert_eq!(tree.set(75, "b"), Ok(None));
+        assert_eq!(tree.set(150, "d"), Ok(None));
         tree.clear();
         assert_eq!(tree.len(), 0);
     }
@@ -851,16 +851,16 @@ mod tests {
     #[test]
     fn equality() {
         let mut tree1 = RedBlackTree::with_capacity(4);
-        assert_eq!(tree1.insert(100, "c"), Ok(None));
-        assert_eq!(tree1.insert(50, "a"), Ok(None));
-        assert_eq!(tree1.insert(75, "b"), Ok(None));
-        assert_eq!(tree1.insert(150, "d"), Ok(None));
+        assert_eq!(tree1.set(100, "c"), Ok(None));
+        assert_eq!(tree1.set(50, "a"), Ok(None));
+        assert_eq!(tree1.set(75, "b"), Ok(None));
+        assert_eq!(tree1.set(150, "d"), Ok(None));
 
         let mut tree2 = RedBlackTree::with_capacity(4);
-        assert_eq!(tree2.insert(150, "d"), Ok(None));
-        assert_eq!(tree2.insert(50, "a"), Ok(None));
-        assert_eq!(tree2.insert(100, "c"), Ok(None));
-        assert_eq!(tree2.insert(75, "b"), Ok(None));
+        assert_eq!(tree2.set(150, "d"), Ok(None));
+        assert_eq!(tree2.set(50, "a"), Ok(None));
+        assert_eq!(tree2.set(100, "c"), Ok(None));
+        assert_eq!(tree2.set(75, "b"), Ok(None));
 
         assert_eq!(tree1, tree2);
     }
