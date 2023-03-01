@@ -114,7 +114,7 @@ impl LSMTree {
         let pattern = Regex::new(r#"^(\d+)\.data"#).unwrap();
         let index = if dir.is_dir() {
             // TODO: check for missing files.
-            std::fs::read_dir(dir.clone())?
+            std::fs::read_dir(&dir)?
                 .filter_map(Result::ok)
                 .filter_map(|entry| {
                     let file_name = entry.file_name();
@@ -133,7 +133,7 @@ impl LSMTree {
                 .max()
                 .unwrap_or(0)
         } else {
-            std::fs::create_dir_all(dir.clone()).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
             0
         };
 
@@ -142,7 +142,7 @@ impl LSMTree {
         let mut wal_path = dir.clone();
         wal_path.push("memtable.log");
         if wal_path.exists() {
-            let wal_file = BufferedFile::open(wal_path.clone()).await?;
+            let wal_file = BufferedFile::open(&wal_path).await?;
             let mut reader = StreamReaderBuilder::new(wal_file).build();
 
             let mut wal_buf = Vec::new();
@@ -158,7 +158,7 @@ impl LSMTree {
         }
 
         let wal_writer =
-            DmaStreamWriterBuilder::new(DmaFile::create(wal_path).await?)
+            DmaStreamWriterBuilder::new(DmaFile::create(&wal_path).await?)
                 .with_write_behind(10)
                 .with_buffer_size(512)
                 .build();
