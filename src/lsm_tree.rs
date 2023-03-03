@@ -15,6 +15,8 @@ use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+const TREE_CAPACITY: usize = 8096;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Entry {
     key: String,
@@ -173,7 +175,7 @@ impl LSMTree {
             let wal_writer = StreamWriterBuilder::new(file).build();
             (wal_writer, memtable)
         } else {
-            let memtable = RedBlackTree::with_capacity(1024);
+            let memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
             let wal_writer = StreamWriterBuilder::new(
                 BufferedFile::create(&wal_path).await?,
             )
@@ -205,7 +207,7 @@ impl LSMTree {
     async fn read_memtable_from_wal_file(
         wal_path: &PathBuf,
     ) -> std::io::Result<RedBlackTree<String, String>> {
-        let mut memtable = RedBlackTree::with_capacity(1024);
+        let mut memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
         let wal_file = BufferedFile::open(&wal_path).await?;
         let mut reader = StreamReaderBuilder::new(wal_file).build();
 
