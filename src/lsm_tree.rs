@@ -134,18 +134,18 @@ impl LSMTree {
             data_file_indices.iter().max().map(|i| *i + 1).unwrap_or(0);
 
         let pattern = Regex::new(r#"^(\d+)\.memtable"#).unwrap();
-        let wal_indexes: Vec<usize> = std::fs::read_dir(&dir)?
+        let wal_indices: Vec<usize> = std::fs::read_dir(&dir)?
             .filter_map(Result::ok)
             .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
             .collect();
 
-        let wal_file_index = match wal_indexes.len() {
+        let wal_file_index = match wal_indices.len() {
             0 => 0,
-            1 => wal_indexes[0],
+            1 => wal_indices[0],
             2 => {
                 // A flush did not finish for some reason, do it now.
-                let wal_file_index = wal_indexes[1];
-                let unflashed_file_index = wal_indexes[0];
+                let wal_file_index = wal_indices[1];
+                let unflashed_file_index = wal_indices[0];
                 let mut unflashed_file_path = dir.clone();
                 unflashed_file_path
                     .push(format!("{:01$}.memtable", unflashed_file_index, 9));
