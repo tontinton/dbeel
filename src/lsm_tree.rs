@@ -16,6 +16,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const TREE_CAPACITY: usize = 8096;
+const INDEX_PADDING: usize = 20; // Number of integers in max u64.
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Entry {
@@ -147,8 +148,10 @@ impl LSMTree {
                 let wal_file_index = wal_indices[1];
                 let unflashed_file_index = wal_indices[0];
                 let mut unflashed_file_path = dir.clone();
-                unflashed_file_path
-                    .push(format!("{:01$}.memtable", unflashed_file_index, 9));
+                unflashed_file_path.push(format!(
+                    "{:01$}.memtable",
+                    unflashed_file_index, INDEX_PADDING
+                ));
                 let (data_file_path, index_file_path) =
                     Self::get_data_file_paths(
                         dir.clone(),
@@ -168,7 +171,8 @@ impl LSMTree {
         };
 
         let mut wal_path = dir.clone();
-        wal_path.push(format!("{:01$}.memtable", wal_file_index, 9));
+        wal_path
+            .push(format!("{:01$}.memtable", wal_file_index, INDEX_PADDING));
 
         let (wal_writer, active_memtable) = if wal_path.exists() {
             let memtable = Self::read_memtable_from_wal_file(&wal_path).await?;
@@ -230,9 +234,9 @@ impl LSMTree {
 
     fn get_data_file_paths(dir: PathBuf, index: usize) -> (PathBuf, PathBuf) {
         let mut data_filename = dir.clone();
-        data_filename.push(format!("{:01$}.data", index, 9));
+        data_filename.push(format!("{:01$}.data", index, INDEX_PADDING));
         let mut index_filename = dir.clone();
-        index_filename.push(format!("{:01$}.index", index, 9));
+        index_filename.push(format!("{:01$}.index", index, INDEX_PADDING));
         (data_filename, index_filename)
     }
 
@@ -309,12 +313,18 @@ impl LSMTree {
         }
 
         let mut flush_wal_path = self.dir.clone();
-        flush_wal_path.push(format!("{:01$}.memtable", self.memtable_index, 9));
+        flush_wal_path.push(format!(
+            "{:01$}.memtable",
+            self.memtable_index, INDEX_PADDING
+        ));
 
         self.memtable_index += 1;
 
         let mut next_wal_path = self.dir.clone();
-        next_wal_path.push(format!("{:01$}.memtable", self.memtable_index, 9));
+        next_wal_path.push(format!(
+            "{:01$}.memtable",
+            self.memtable_index, INDEX_PADDING
+        ));
 
         self.wal_writer = StreamWriterBuilder::new(
             BufferedFile::create(&next_wal_path).await?,
