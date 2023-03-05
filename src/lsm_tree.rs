@@ -104,8 +104,10 @@ pub struct LSMTree {
     active_memtable: RedBlackTree<String, String>,
     // The memtable that is currently being flushed to disk.
     flush_memtable: Option<RedBlackTree<String, String>>,
-    // The next sstable index.
-    sstable_index: usize,
+    // The next sstable index that is going to be written.
+    write_sstable_index: usize,
+    // The sstable indices to query from.
+    read_sstable_indices: Vec<usize>,
     // The next memtable index.
     memtable_index: usize,
     // The memtable WAL for durability in case the process crashes without
@@ -116,18 +118,20 @@ pub struct LSMTree {
 impl LSMTree {
     pub async fn new(dir: PathBuf) -> std::io::Result<Self> {
         let pattern = Regex::new(r#"^(\d+)\.data"#).unwrap();
-        let data_file_index = if dir.is_dir() {
-            // TODO: check for missing files.
-            std::fs::read_dir(&dir)?
+        let data_file_indices = if dir.is_dir() {
+            let mut vec: Vec<usize> = std::fs::read_dir(&dir)?
                 .filter_map(Result::ok)
                 .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
-                .map(|n| n + 1)
-                .max()
-                .unwrap_or(0)
+                .collect();
+            vec.sort();
+            vec
         } else {
-            std::fs::create_dir_all(&dir).unwrap();
-            0
+            std::fs::create_dir_all(&dir)?;
+            Vec::new()
         };
+
+        let write_file_index =
+            data_file_indices.iter().max().map(|i| *i + 1).unwrap_or(0);
 
         let pattern = Regex::new(r#"^(\d+)\.memtable"#).unwrap();
         let wal_indexes: Vec<usize> = std::fs::read_dir(&dir)?
@@ -187,7 +191,8 @@ impl LSMTree {
             dir,
             active_memtable,
             flush_memtable: None,
-            sstable_index: data_file_index,
+            write_sstable_index: write_file_index,
+            read_sstable_indices: data_file_indices,
             memtable_index: wal_file_index,
             wal_writer,
         })
@@ -251,9 +256,9 @@ impl LSMTree {
 
         // Key not found in memory, query all files from the newest to the
         // oldest.
-        for i in (0..self.sstable_index).rev() {
+        for i in self.read_sstable_indices.iter().rev() {
             let (data_filename, index_filename) =
-                Self::get_data_file_paths(self.dir.clone(), i);
+                Self::get_data_file_paths(self.dir.clone(), *i);
 
             let data_file = DmaFile::open(&data_filename).await?;
             let index_file = DmaFile::open(&index_filename).await?;
@@ -316,8 +321,10 @@ impl LSMTree {
         )
         .build();
 
-        let (data_filename, index_filename) =
-            Self::get_data_file_paths(self.dir.clone(), self.sstable_index);
+        let (data_filename, index_filename) = Self::get_data_file_paths(
+            self.dir.clone(),
+            self.write_sstable_index,
+        );
         let data_file = DmaFile::create(&data_filename).await?;
         let index_file = DmaFile::create(&index_filename).await?;
 
@@ -334,7 +341,8 @@ impl LSMTree {
         .await?;
 
         self.flush_memtable = None;
-        self.sstable_index += 1;
+        self.read_sstable_indices.push(self.write_sstable_index);
+        self.write_sstable_index += 1;
 
         std::fs::remove_file(&flush_wal_path)?;
 
