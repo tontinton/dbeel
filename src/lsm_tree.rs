@@ -1,4 +1,6 @@
-use std::{fs::DirEntry, path::PathBuf};
+use std::{
+    cmp::Ordering, collections::BinaryHeap, fs::DirEntry, path::PathBuf,
+};
 
 use bincode::{
     config::{
@@ -8,14 +10,14 @@ use bincode::{
 };
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::{
-    BufferedFile, DmaFile, DmaStreamWriterBuilder, OpenOptions,
+    BufferedFile, DmaFile, DmaStreamWriterBuilder, OpenOptions, StreamReader,
     StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
 };
 use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-const TREE_CAPACITY: usize = 8096;
+const TREE_CAPACITY: usize = 1024;
 const INDEX_PADDING: usize = 20; // Number of integers in max u64.
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,6 +25,26 @@ struct Entry {
     key: String,
     value: String,
 }
+
+impl Ord for Entry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+impl PartialOrd for Entry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for Entry {}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct EntryOffset {
@@ -37,6 +59,33 @@ impl Default for EntryOffset {
             entry_size: Default::default(),
         }
     }
+}
+
+#[derive(Eq, PartialEq)]
+struct CompactionItem {
+    entry: Entry,
+    index: usize,
+}
+
+impl Ord for CompactionItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .entry
+            .cmp(&self.entry)
+            .then(self.index.cmp(&other.index))
+    }
+}
+
+impl PartialOrd for CompactionItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct CompactionAction {
+    renames: Vec<(PathBuf, PathBuf)>,
+    deletes: Vec<PathBuf>,
 }
 
 fn bincode_options() -> WithOtherIntEncoding<
@@ -118,17 +167,40 @@ pub struct LSMTree {
 
 impl LSMTree {
     pub async fn new(dir: PathBuf) -> std::io::Result<Self> {
+        if !dir.is_dir() {
+            std::fs::create_dir_all(&dir)?;
+        }
+
+        let pattern = Regex::new(r#"^(\d+)\.compact_action"#).unwrap();
+        let compact_action_paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
+            .filter_map(Result::ok)
+            .filter(|entry| Self::get_first_capture(&pattern, &entry).is_some())
+            .map(|entry| entry.path())
+            .collect();
+        for compact_action_path in &compact_action_paths {
+            let file = BufferedFile::open(compact_action_path).await?;
+            let mut reader = StreamReaderBuilder::new(file).build();
+
+            let mut buf = Vec::new();
+            reader.read_to_end(&mut buf).await?;
+            let mut cursor = std::io::Cursor::new(&buf[..]);
+            while let Ok(action) = bincode_options()
+                .deserialize_from::<_, CompactionAction>(&mut cursor)
+            {
+                Self::run_compaction_action(&action)?;
+            }
+            reader.close().await?;
+            Self::remove_file_log_on_err(compact_action_path);
+        }
+
         let pattern = Regex::new(r#"^(\d+)\.data"#).unwrap();
-        let data_file_indices = if dir.is_dir() {
+        let data_file_indices = {
             let mut vec: Vec<usize> = std::fs::read_dir(&dir)?
                 .filter_map(Result::ok)
                 .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
                 .collect();
             vec.sort();
             vec
-        } else {
-            std::fs::create_dir_all(&dir)?;
-            Vec::new()
         };
 
         let write_file_index =
@@ -237,6 +309,19 @@ impl LSMTree {
         data_filename.push(format!("{:01$}.data", index, INDEX_PADDING));
         let mut index_filename = dir.clone();
         index_filename.push(format!("{:01$}.index", index, INDEX_PADDING));
+        (data_filename, index_filename)
+    }
+
+    fn get_compaction_file_paths(
+        dir: PathBuf,
+        index: usize,
+    ) -> (PathBuf, PathBuf) {
+        let mut data_filename = dir.clone();
+        data_filename
+            .push(format!("{:01$}.compact_data", index, INDEX_PADDING));
+        let mut index_filename = dir.clone();
+        index_filename
+            .push(format!("{:01$}.compact_index", index, INDEX_PADDING));
         (data_filename, index_filename)
     }
 
@@ -395,5 +480,174 @@ impl LSMTree {
         index_write_stream.close().await?;
 
         Ok(())
+    }
+
+    // Compact all sstables in the given list of sstable files, write the result
+    // to the output file given.
+    pub async fn compact(
+        &mut self,
+        indices_to_compact: Vec<usize>,
+        output_index: usize,
+    ) -> std::io::Result<()> {
+        let sstable_paths: Vec<(PathBuf, PathBuf)> = indices_to_compact
+            .iter()
+            .map(|i| Self::get_data_file_paths(self.dir.clone(), *i))
+            .collect();
+
+        // No stable AsyncIterator yet...
+        // If there was, itertools::kmerge would probably solve it all.
+        let mut sstable_readers = Vec::with_capacity(sstable_paths.len());
+        for (data_path, index_path) in &sstable_paths {
+            let data_file = BufferedFile::open(data_path).await?;
+            let index_file = BufferedFile::open(index_path).await?;
+            let data_reader = StreamReaderBuilder::new(data_file).build();
+            let index_reader = StreamReaderBuilder::new(index_file).build();
+            sstable_readers.push((data_reader, index_reader));
+        }
+
+        let (compact_data_path, compact_index_path) =
+            Self::get_compaction_file_paths(self.dir.clone(), output_index);
+        let compact_data_file =
+            BufferedFile::create(&compact_data_path).await?;
+        let compact_index_file =
+            BufferedFile::create(&compact_index_path).await?;
+        let mut compact_data_writer =
+            StreamWriterBuilder::new(compact_data_file).build();
+        let mut compact_index_writer =
+            StreamWriterBuilder::new(compact_index_file).build();
+
+        let item_size = bincode_options()
+            .serialized_size(&EntryOffset::default())
+            .unwrap();
+
+        let mut offset_bytes = vec![0; item_size as usize];
+        let mut heap = BinaryHeap::new();
+
+        for (index, (data_reader, index_reader)) in
+            sstable_readers.iter_mut().enumerate()
+        {
+            let entry_result = Self::read_next_entry(
+                data_reader,
+                index_reader,
+                &mut offset_bytes,
+            )
+            .await;
+            if let Ok(entry) = entry_result {
+                heap.push(CompactionItem { entry, index });
+            }
+        }
+
+        let mut entry_offset = 0u64;
+
+        while let Some(next) = heap.pop() {
+            let index = next.index;
+
+            let next_data_encoded =
+                bincode_options().serialize(&next.entry).unwrap();
+            let entry_size = next_data_encoded.len();
+            let entry_index = EntryOffset {
+                entry_offset,
+                entry_size,
+            };
+            entry_offset += entry_size as u64;
+            let next_index_encoded =
+                bincode_options().serialize(&entry_index).unwrap();
+
+            compact_data_writer.write(&next_data_encoded).await?;
+            compact_index_writer.write(&next_index_encoded).await?;
+
+            let (data_reader, index_reader): &mut (StreamReader, StreamReader) =
+                sstable_readers.get_mut(index).unwrap();
+
+            let entry_result = Self::read_next_entry(
+                data_reader,
+                index_reader,
+                &mut offset_bytes,
+            )
+            .await;
+            if let Ok(entry) = entry_result {
+                heap.push(CompactionItem { entry, index });
+            }
+        }
+
+        compact_data_writer.close().await?;
+        compact_index_writer.close().await?;
+
+        let mut files_to_delete = Vec::with_capacity(sstable_paths.len() * 2);
+        for (data_path, index_path) in sstable_paths {
+            files_to_delete.push(data_path);
+            files_to_delete.push(index_path);
+        }
+
+        let (output_data_path, output_index_path) =
+            Self::get_data_file_paths(self.dir.clone(), output_index);
+
+        let action = CompactionAction {
+            renames: vec![
+                (compact_data_path, output_data_path),
+                (compact_index_path, output_index_path),
+            ],
+            deletes: files_to_delete,
+        };
+        let action_encoded = bincode_options().serialize(&action).unwrap();
+
+        let mut compact_action_path = self.dir.clone();
+        compact_action_path.push(format!(
+            "{:01$}.compact_action",
+            output_index, INDEX_PADDING
+        ));
+        let compact_action_file =
+            BufferedFile::create(&compact_action_path).await?;
+        let mut compact_action_writer =
+            StreamWriterBuilder::new(compact_action_file).build();
+        compact_action_writer.write_all(&action_encoded).await?;
+        compact_action_writer.close().await?;
+
+        Self::run_compaction_action(&action)?;
+        Self::remove_file_log_on_err(&compact_action_path);
+
+        self.read_sstable_indices
+            .retain(|x| *x == output_index || !indices_to_compact.contains(x));
+
+        Ok(())
+    }
+
+    async fn read_next_entry(
+        data_reader: &mut StreamReader,
+        index_reader: &mut StreamReader,
+        offset_bytes: &mut Vec<u8>,
+    ) -> std::io::Result<Entry> {
+        index_reader.read_exact(offset_bytes).await?;
+        let entry_offset: EntryOffset =
+            bincode_options().deserialize(&offset_bytes).unwrap();
+        let mut data_bytes = vec![0; entry_offset.entry_size];
+        data_reader.read_exact(&mut data_bytes).await?;
+        let entry: Entry = bincode_options().deserialize(&data_bytes).unwrap();
+        Ok(entry)
+    }
+
+    fn run_compaction_action(action: &CompactionAction) -> std::io::Result<()> {
+        for path_to_delete in &action.deletes {
+            Self::remove_file_log_on_err(path_to_delete);
+        }
+
+        for (source_path, destination_path) in &action.renames {
+            if source_path.exists() {
+                std::fs::rename(source_path, destination_path)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn remove_file_log_on_err(file_path: &PathBuf) {
+        if let Err(e) = std::fs::remove_file(file_path) {
+            eprintln!(
+                "Failed to remove file '{}', that is irrelevant after \
+                 compaction: {}",
+                file_path.display(),
+                e
+            );
+        }
     }
 }
