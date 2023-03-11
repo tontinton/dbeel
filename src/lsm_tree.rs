@@ -214,10 +214,14 @@ impl LSMTree {
             data_file_indices.iter().max().map(|i| *i + 1).unwrap_or(0);
 
         let pattern = Regex::new(r#"^(\d+)\.memtable"#).unwrap();
-        let wal_indices: Vec<usize> = std::fs::read_dir(&dir)?
-            .filter_map(Result::ok)
-            .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
-            .collect();
+        let wal_indices: Vec<usize> = {
+            let mut vec: Vec<usize> = std::fs::read_dir(&dir)?
+                .filter_map(Result::ok)
+                .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
+                .collect();
+            vec.sort();
+            vec
+        };
 
         let wal_file_index = match wal_indices.len() {
             0 => 0,
