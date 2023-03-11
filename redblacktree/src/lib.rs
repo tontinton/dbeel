@@ -398,11 +398,8 @@ impl<K: Ord, V> IntoIterator for RedBlackTree<K, V> {
         self.clear_no_dealloc();
 
         let arena_ptr = self.arena.as_mut_ptr();
-        let arena_layout = Layout::from_size_align(
-            std::mem::size_of_val(&self.arena),
-            std::mem::align_of::<Vec<Node<K, V>>>(),
-        )
-        .unwrap();
+        let arena_layout =
+            Layout::array::<Node<K, V>>(self.arena.len()).unwrap();
 
         std::mem::forget(self.arena);
 
