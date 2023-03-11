@@ -406,9 +406,9 @@ impl LSMTree {
             return Ok(());
         }
 
-        // TODO: do not panic here.
-        if self.flush_memtable.is_some() {
-            panic!("Flush memtable has not yet been flushed");
+        // Wait until the previous flush is finished.
+        while self.flush_memtable.is_some() {
+            futures_lite::future::yield_now().await;
         }
 
         let mut flush_wal_path = self.dir.clone();
