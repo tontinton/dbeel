@@ -1,5 +1,6 @@
 use std::{
-    cmp::Ordering, collections::BinaryHeap, fs::DirEntry, path::PathBuf,
+    cell::Cell, cmp::Ordering, collections::BinaryHeap, fs::DirEntry,
+    path::PathBuf, rc::Rc,
 };
 
 use bincode::{
@@ -158,6 +159,12 @@ pub struct LSMTree {
     write_sstable_index: usize,
     // The sstable indices to query from.
     read_sstable_indices: Vec<usize>,
+    // Track the number of sstable file reads are happening.
+    // The reason for tracking is that when ending a compaction, there are
+    // sstable files that should be removed / replaced, but there could be
+    // reads to the same files concurrently, so the compaction process will
+    // wait for the number of reads to reach 0.
+    number_of_sstable_reads: Rc<Cell<usize>>,
     // The next memtable index.
     memtable_index: usize,
     // The memtable WAL for durability in case the process crashes without
@@ -269,6 +276,7 @@ impl LSMTree {
             flush_memtable: None,
             write_sstable_index: write_file_index,
             read_sstable_indices: data_file_indices,
+            number_of_sstable_reads: Rc::new(Cell::new(0)),
             memtable_index: wal_file_index,
             wal_writer,
         })
@@ -345,6 +353,9 @@ impl LSMTree {
 
         // Key not found in memory, query all files from the newest to the
         // oldest.
+        let counter = self.number_of_sstable_reads.clone();
+        counter.set(counter.get() + 1);
+
         for i in self.read_sstable_indices.iter().rev() {
             let (data_filename, index_filename) =
                 Self::get_data_file_paths(self.dir.clone(), *i);
@@ -355,9 +366,12 @@ impl LSMTree {
             if let Some(result) =
                 binary_search(&data_file, &index_file, key).await?
             {
+                counter.set(counter.get() - 1);
                 return Ok(Some(result.value));
             }
         }
+
+        counter.set(counter.get() - 1);
 
         Ok(None)
     }
@@ -602,6 +616,15 @@ impl LSMTree {
             StreamWriterBuilder::new(compact_action_file).build();
         compact_action_writer.write_all(&action_encoded).await?;
         compact_action_writer.close().await?;
+
+        let counter = self.number_of_sstable_reads.clone();
+        self.number_of_sstable_reads = Rc::new(Cell::new(0));
+
+        // Block the current execution task until all currently running read
+        // tasks finish, to make sure we don't delete files that are being read.
+        while counter.get() > 0 {
+            futures_lite::future::yield_now().await;
+        }
 
         Self::run_compaction_action(&action)?;
         Self::remove_file_log_on_err(&compact_action_path);
