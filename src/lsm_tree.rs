@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell, cmp::Ordering, collections::BinaryHeap, fs::DirEntry,
+    cmp::Ordering, collections::BinaryHeap, fs::DirEntry, marker::PhantomData,
     path::PathBuf, rc::Rc,
 };
 
@@ -164,7 +164,7 @@ pub struct LSMTree {
     // sstable files that should be removed / replaced, but there could be
     // reads to the same files concurrently, so the compaction process will
     // wait for the number of reads to reach 0.
-    number_of_sstable_reads: Rc<Cell<usize>>,
+    number_of_sstable_reads: Rc<PhantomData<usize>>,
     // The next memtable index.
     memtable_index: usize,
     // The memtable WAL for durability in case the process crashes without
@@ -280,7 +280,7 @@ impl LSMTree {
             flush_memtable: None,
             write_sstable_index: write_file_index,
             read_sstable_indices: data_file_indices,
-            number_of_sstable_reads: Rc::new(Cell::new(0)),
+            number_of_sstable_reads: Rc::new(PhantomData::<usize>),
             memtable_index: wal_file_index,
             wal_writer,
         })
@@ -373,8 +373,7 @@ impl LSMTree {
 
         // Key not found in memory, query all files from the newest to the
         // oldest.
-        let counter = self.number_of_sstable_reads.clone();
-        counter.set(counter.get() + 1);
+        let _counter = self.number_of_sstable_reads.clone();
 
         for i in self.read_sstable_indices.iter().rev() {
             let (data_filename, index_filename) =
@@ -386,12 +385,9 @@ impl LSMTree {
             if let Some(result) =
                 binary_search(&data_file, &index_file, key).await?
             {
-                counter.set(counter.get() - 1);
                 return Ok(Some(result.value));
             }
         }
-
-        counter.set(counter.get() - 1);
 
         Ok(None)
     }
@@ -638,7 +634,7 @@ impl LSMTree {
         compact_action_writer.close().await?;
 
         let counter = self.number_of_sstable_reads.clone();
-        self.number_of_sstable_reads = Rc::new(Cell::new(0));
+        self.number_of_sstable_reads = Rc::new(PhantomData::<usize>);
 
         self.read_sstable_indices
             .retain(|x| !indices_to_compact.contains(x));
@@ -650,7 +646,7 @@ impl LSMTree {
 
         // Block the current execution task until all currently running read
         // tasks finish, to make sure we don't delete files that are being read.
-        while counter.get() > 0 {
+        while Rc::strong_count(&counter) > 1 {
             futures_lite::future::yield_now().await;
         }
 
