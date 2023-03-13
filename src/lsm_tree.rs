@@ -316,6 +316,22 @@ impl LSMTree {
         Ok(memtable)
     }
 
+    fn run_compaction_action(action: &CompactionAction) -> std::io::Result<()> {
+        for path_to_delete in &action.deletes {
+            if path_to_delete.exists() {
+                Self::remove_file_log_on_err(path_to_delete);
+            }
+        }
+
+        for (source_path, destination_path) in &action.renames {
+            if source_path.exists() {
+                std::fs::rename(source_path, destination_path)?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn get_data_file_paths(dir: PathBuf, index: usize) -> (PathBuf, PathBuf) {
         let mut data_filename = dir.clone();
         data_filename.push(format!("{:01$}.data", index, INDEX_PADDING));
@@ -421,7 +437,7 @@ impl LSMTree {
             self.memtable_index, INDEX_PADDING
         ));
 
-        self.memtable_index += 1;
+        self.memtable_index += 2;
 
         let mut next_wal_path = self.dir.clone();
         next_wal_path.push(format!(
@@ -455,7 +471,7 @@ impl LSMTree {
 
         self.flush_memtable = None;
         self.read_sstable_indices.push(self.write_sstable_index);
-        self.write_sstable_index += 1;
+        self.write_sstable_index += 2;
 
         std::fs::remove_file(&flush_wal_path)?;
 
@@ -624,17 +640,27 @@ impl LSMTree {
         let counter = self.number_of_sstable_reads.clone();
         self.number_of_sstable_reads = Rc::new(Cell::new(0));
 
+        self.read_sstable_indices
+            .retain(|x| !indices_to_compact.contains(x));
+        self.read_sstable_indices.push(output_index);
+
+        for (source_path, destination_path) in &action.renames {
+            std::fs::rename(source_path, destination_path)?;
+        }
+
         // Block the current execution task until all currently running read
         // tasks finish, to make sure we don't delete files that are being read.
         while counter.get() > 0 {
             futures_lite::future::yield_now().await;
         }
 
-        Self::run_compaction_action(&action)?;
-        Self::remove_file_log_on_err(&compact_action_path);
+        for path_to_delete in &action.deletes {
+            if path_to_delete.exists() {
+                Self::remove_file_log_on_err(path_to_delete);
+            }
+        }
 
-        self.read_sstable_indices
-            .retain(|x| *x == output_index || !indices_to_compact.contains(x));
+        Self::remove_file_log_on_err(&compact_action_path);
 
         Ok(())
     }
@@ -651,20 +677,6 @@ impl LSMTree {
         data_reader.read_exact(&mut data_bytes).await?;
         let entry: Entry = bincode_options().deserialize(&data_bytes).unwrap();
         Ok(entry)
-    }
-
-    fn run_compaction_action(action: &CompactionAction) -> std::io::Result<()> {
-        for path_to_delete in &action.deletes {
-            Self::remove_file_log_on_err(path_to_delete);
-        }
-
-        for (source_path, destination_path) in &action.renames {
-            if source_path.exists() {
-                std::fs::rename(source_path, destination_path)?;
-            }
-        }
-
-        Ok(())
     }
 
     fn remove_file_log_on_err(file_path: &PathBuf) {

@@ -23,7 +23,7 @@ async fn write(dir: PathBuf) -> Result<()> {
         println!("Key not found");
     }
 
-    tree.compact(vec![0, 1, 2, 3, 4, 5, 6], 6).await?;
+    tree.compact(vec![0, 2, 4, 6, 8, 10, 12], 13).await?;
 
     Ok(())
 }
