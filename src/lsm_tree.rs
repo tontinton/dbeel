@@ -23,8 +23,8 @@ const INDEX_PADDING: usize = 20; // Number of integers in max u64.
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Entry {
-    key: String,
-    value: String,
+    key: Vec<u8>,
+    value: Vec<u8>,
 }
 
 impl Ord for Entry {
@@ -101,7 +101,7 @@ fn bincode_options() -> WithOtherIntEncoding<
 async fn binary_search(
     data_file: &DmaFile,
     index_file: &DmaFile,
-    key: &String,
+    key: &Vec<u8>,
 ) -> glommio::Result<Option<Entry>, ()> {
     let item_size = bincode_options()
         .serialized_size(&EntryOffset::default())
@@ -152,9 +152,9 @@ async fn binary_search(
 pub struct LSMTree {
     dir: PathBuf,
     // The memtable that is currently being written to.
-    active_memtable: RedBlackTree<String, String>,
+    active_memtable: RedBlackTree<Vec<u8>, Vec<u8>>,
     // The memtable that is currently being flushed to disk.
-    flush_memtable: Option<RedBlackTree<String, String>>,
+    flush_memtable: Option<RedBlackTree<Vec<u8>, Vec<u8>>>,
     // The next sstable index that is going to be written.
     write_sstable_index: usize,
     // The sstable indices to query from.
@@ -299,7 +299,7 @@ impl LSMTree {
 
     async fn read_memtable_from_wal_file(
         wal_path: &PathBuf,
-    ) -> std::io::Result<RedBlackTree<String, String>> {
+    ) -> std::io::Result<RedBlackTree<Vec<u8>, Vec<u8>>> {
         let mut memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
         let wal_file = BufferedFile::open(&wal_path).await?;
         let mut reader = StreamReaderBuilder::new(wal_file).build();
@@ -355,8 +355,8 @@ impl LSMTree {
 
     pub async fn get(
         &self,
-        key: &String,
-    ) -> glommio::Result<Option<String>, ()> {
+        key: &Vec<u8>,
+    ) -> glommio::Result<Option<Vec<u8>>, ()> {
         // Query the active tree first.
         let result = self.active_memtable.get(key);
         if result.is_some() {
@@ -394,9 +394,9 @@ impl LSMTree {
 
     pub async fn set(
         &mut self,
-        key: String,
-        value: String,
-    ) -> glommio::Result<Option<String>, ()> {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> glommio::Result<Option<Vec<u8>>, ()> {
         // Write to memtable in memory.
         let result = self
             .active_memtable
@@ -475,7 +475,7 @@ impl LSMTree {
     }
 
     async fn flush_memtable_to_disk(
-        memtable: &RedBlackTree<String, String>,
+        memtable: &RedBlackTree<Vec<u8>, Vec<u8>>,
         data_file: DmaFile,
         index_file: DmaFile,
     ) -> glommio::Result<(), ()> {
@@ -491,8 +491,8 @@ impl LSMTree {
         for (key, value) in memtable.iter() {
             let entry_offset = data_write_stream.current_pos();
             let entry = Entry {
-                key: key.to_string(),
-                value: value.to_string(),
+                key: key.clone(),
+                value: value.clone(),
             };
             let entry_encoded = bincode_options().serialize(&entry).unwrap();
             let entry_size = entry_encoded.len();

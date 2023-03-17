@@ -12,4 +12,6 @@ glommio = "0.8.0"
 rand = "0.8.5"
 redblacktree = { path = "redblacktree" }
 regex = "1.7.1"
+rmp = "0.8.11"
+rmpv = "1.0.0"
 serde = { version = "1.0.152", features = ["derive"] }

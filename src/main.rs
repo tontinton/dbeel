@@ -1,6 +1,7 @@
 use dbil::lsm_tree::LSMTree;
 use glommio::{LocalExecutorBuilder, Placement};
 use rand::{seq::SliceRandom, thread_rng};
+use rmpv::{decode::read_value_ref, encode::write_value_ref, ValueRef};
 use std::time::Duration;
 use std::{env::temp_dir, io::Result, path::PathBuf};
 
@@ -8,17 +9,23 @@ async fn write(dir: PathBuf) -> Result<()> {
     let mut tree = LSMTree::new(dir).await?;
 
     let mut rng = thread_rng();
-    let mut nums: Vec<u32> = (0..10000).collect();
+    let mut nums: Vec<String> = (0..10000).map(|n| n.to_string()).collect();
     nums.shuffle(&mut rng);
     for i in nums {
-        tree.set(i.to_string(), i.to_string()).await?;
+        let msgpack_value = ValueRef::String(i.as_str().into());
+        let mut encoded: Vec<u8> = Vec::new();
+        write_value_ref(&mut encoded, &msgpack_value).unwrap();
+        tree.set(encoded.clone(), encoded).await?;
     }
 
-    let lookup_key = "5000".to_string();
-    println!("Querying for key '{}'", lookup_key);
+    let lookup_key = ValueRef::String("5000".into());
+    let mut lookup_key_encoded: Vec<u8> = Vec::new();
+    write_value_ref(&mut lookup_key_encoded, &lookup_key).unwrap();
+    println!("Querying for key {}", lookup_key);
 
-    if let Ok(Some(v)) = tree.get(&lookup_key).await {
-        println!("Found: {}", v);
+    if let Ok(Some(v)) = tree.get(&lookup_key_encoded).await {
+        let msgpack_value = read_value_ref(&mut &v[..]).unwrap().to_owned();
+        println!("Found: {}", msgpack_value);
     } else {
         println!("Key not found");
     }
@@ -31,11 +38,14 @@ async fn write(dir: PathBuf) -> Result<()> {
 async fn read(dir: PathBuf) -> Result<()> {
     let tree = LSMTree::new(dir).await?;
 
-    let lookup_key = "1234".to_string();
-    println!("Querying for key '{}'", lookup_key);
+    let lookup_key = ValueRef::String("1234".into());
+    let mut lookup_key_encoded: Vec<u8> = Vec::new();
+    write_value_ref(&mut lookup_key_encoded, &lookup_key).unwrap();
+    println!("Querying for key {}", lookup_key);
 
-    if let Ok(Some(v)) = tree.get(&lookup_key).await {
-        println!("Found: {}", v);
+    if let Ok(Some(v)) = tree.get(&lookup_key_encoded).await {
+        let msgpack_value = read_value_ref(&mut &v[..]).unwrap().to_owned();
+        println!("Found: {}", msgpack_value);
     } else {
         println!("Key not found");
     }
