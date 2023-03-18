@@ -715,7 +715,7 @@ mod tests {
         Ok(())
     }
 
-    async fn _set_and_get(dir: PathBuf) -> std::io::Result<()> {
+    async fn _set_and_get_memtable(dir: PathBuf) -> std::io::Result<()> {
         // New tree.
         {
             let mut tree = LSMTree::new(dir.clone()).await?;
@@ -733,7 +733,47 @@ mod tests {
     }
 
     #[test]
-    fn set_and_get() -> std::io::Result<()> {
-        run_with_glommio(_set_and_get)
+    fn set_and_get_memtable() -> std::io::Result<()> {
+        run_with_glommio(_set_and_get_memtable)
+    }
+
+    async fn _set_and_get_sstable(dir: PathBuf) -> std::io::Result<()> {
+        // New tree.
+        {
+            let mut tree = LSMTree::new(dir.clone()).await?;
+            assert_eq!(tree.write_sstable_index, 0);
+
+            let values: Vec<Vec<u8>> = (0..TREE_CAPACITY as u16)
+                .map(|n| n.to_le_bytes().to_vec())
+                .collect();
+
+            // This causes a flush to disk.
+            for v in values {
+                tree.set(v.clone(), v).await?;
+            }
+
+            assert_eq!(tree.active_memtable.len(), 0);
+            assert_eq!(tree.write_sstable_index, 2);
+            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
+            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
+            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+        }
+
+        // Reopening the tree.
+        {
+            let tree = LSMTree::new(dir).await?;
+            assert_eq!(tree.active_memtable.len(), 0);
+            assert_eq!(tree.write_sstable_index, 2);
+            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
+            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
+            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn set_and_get_sstable() -> std::io::Result<()> {
+        run_with_glommio(_set_and_get_sstable)
     }
 }
