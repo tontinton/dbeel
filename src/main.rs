@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{env::temp_dir, io::Result, path::PathBuf};
 
 async fn write(dir: PathBuf) -> Result<()> {
-    let mut tree = LSMTree::new(dir).await?;
+    let mut tree = LSMTree::open_or_create(dir).await?;
 
     let mut rng = thread_rng();
     let mut nums: Vec<String> = (0..10000).map(|n| n.to_string()).collect();
@@ -36,7 +36,7 @@ async fn write(dir: PathBuf) -> Result<()> {
 }
 
 async fn read(dir: PathBuf) -> Result<()> {
-    let tree = LSMTree::new(dir).await?;
+    let tree = LSMTree::open_or_create(dir).await?;
 
     let lookup_key = ValueRef::String("1234".into());
     let mut lookup_key_encoded: Vec<u8> = Vec::new();

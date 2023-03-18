@@ -173,7 +173,7 @@ pub struct LSMTree {
 }
 
 impl LSMTree {
-    pub async fn new(dir: PathBuf) -> std::io::Result<Self> {
+    pub async fn open_or_create(dir: PathBuf) -> std::io::Result<Self> {
         if !dir.is_dir() {
             std::fs::create_dir_all(&dir)?;
         }
@@ -721,14 +721,14 @@ mod tests {
     async fn _set_and_get_memtable(dir: PathBuf) -> std::io::Result<()> {
         // New tree.
         {
-            let mut tree = LSMTree::new(dir.clone()).await?;
+            let mut tree = LSMTree::open_or_create(dir.clone()).await?;
             tree.set(vec![100], vec![200]).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
         }
 
         // Reopening the tree.
         {
-            let tree = LSMTree::new(dir).await?;
+            let tree = LSMTree::open_or_create(dir).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
         }
 
@@ -743,7 +743,7 @@ mod tests {
     async fn _set_and_get_sstable(dir: PathBuf) -> std::io::Result<()> {
         // New tree.
         {
-            let mut tree = LSMTree::new(dir.clone()).await?;
+            let mut tree = LSMTree::open_or_create(dir.clone()).await?;
             assert_eq!(tree.write_sstable_index, 0);
 
             let values: Vec<Vec<u8>> = (0..TREE_CAPACITY as u16)
@@ -764,7 +764,7 @@ mod tests {
 
         // Reopening the tree.
         {
-            let tree = LSMTree::new(dir).await?;
+            let tree = LSMTree::open_or_create(dir).await?;
             assert_eq!(tree.active_memtable.len(), 0);
             assert_eq!(tree.write_sstable_index, 2);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
@@ -783,7 +783,7 @@ mod tests {
     async fn _get_after_compaction(dir: PathBuf) -> std::io::Result<()> {
         // New tree.
         {
-            let mut tree = LSMTree::new(dir.clone()).await?;
+            let mut tree = LSMTree::open_or_create(dir.clone()).await?;
             assert_eq!(tree.write_sstable_index, 0);
             assert_eq!(tree.read_sstable_indices, vec![]);
 
@@ -808,7 +808,7 @@ mod tests {
 
         // Reopening the tree.
         {
-            let tree = LSMTree::new(dir).await?;
+            let tree = LSMTree::open_or_create(dir).await?;
             assert_eq!(tree.read_sstable_indices, vec![5]);
             assert_eq!(tree.write_sstable_index, 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
