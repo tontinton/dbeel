@@ -686,3 +686,54 @@ impl LSMTree {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use futures_lite::Future;
+    use glommio::{LocalExecutorBuilder, Placement};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn run_with_glommio<G, F, T>(fut_gen: G) -> std::io::Result<()>
+    where
+        G: FnOnce(PathBuf) -> F + Send + 'static,
+        F: Future<Output = T> + 'static,
+        T: Send + 'static,
+    {
+        let builder = LocalExecutorBuilder::new(Placement::Fixed(1))
+            .spin_before_park(Duration::from_millis(10));
+        let handle = builder.name("test").spawn(|| async move {
+            let dir = tempdir().unwrap().into_path();
+            let result = fut_gen(dir.clone()).await;
+            std::fs::remove_dir_all(dir).unwrap();
+            result
+        })?;
+        handle.join()?;
+        Ok(())
+    }
+
+    async fn _set_and_get(dir: PathBuf) -> std::io::Result<()> {
+        // New tree.
+        {
+            let mut tree = LSMTree::new(dir.clone()).await?;
+            tree.set(vec![100], vec![200]).await?;
+            assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
+        }
+
+        // Reopening the tree.
+        {
+            let tree = LSMTree::new(dir).await?;
+            assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn set_and_get() -> std::io::Result<()> {
+        run_with_glommio(_set_and_get)
+    }
+}

@@ -15,3 +15,6 @@ regex = "1.7.1"
 rmp = "0.8.11"
 rmpv = "1.0.0"
 serde = { version = "1.0.152", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.4.0"
