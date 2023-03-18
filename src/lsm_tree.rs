@@ -779,4 +779,48 @@ mod tests {
     fn set_and_get_sstable() -> std::io::Result<()> {
         run_with_glommio(_set_and_get_sstable)
     }
+
+    async fn _get_after_compaction(dir: PathBuf) -> std::io::Result<()> {
+        // New tree.
+        {
+            let mut tree = LSMTree::new(dir.clone()).await?;
+            assert_eq!(tree.write_sstable_index, 0);
+            assert_eq!(tree.read_sstable_indices, vec![]);
+
+            let values: Vec<Vec<u8>> = (0..(TREE_CAPACITY as u16) * 3)
+                .map(|n| n.to_le_bytes().to_vec())
+                .collect();
+
+            for v in values {
+                tree.set(v.clone(), v).await?;
+            }
+
+            assert_eq!(tree.read_sstable_indices, vec![0, 2, 4]);
+
+            tree.compact(vec![0, 2, 4], 5).await?;
+
+            assert_eq!(tree.read_sstable_indices, vec![5]);
+            assert_eq!(tree.write_sstable_index, 6);
+            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
+            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
+            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+        }
+
+        // Reopening the tree.
+        {
+            let tree = LSMTree::new(dir).await?;
+            assert_eq!(tree.read_sstable_indices, vec![5]);
+            assert_eq!(tree.write_sstable_index, 6);
+            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
+            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
+            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_after_compaction() -> std::io::Result<()> {
+        run_with_glommio(_get_after_compaction)
+    }
 }
