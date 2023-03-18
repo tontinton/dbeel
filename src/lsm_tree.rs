@@ -210,8 +210,11 @@ impl LSMTree {
             vec
         };
 
-        let write_file_index =
-            data_file_indices.iter().max().map(|i| *i + 1).unwrap_or(0);
+        let write_file_index = data_file_indices
+            .iter()
+            .max()
+            .map(|i| (*i + 2 - (*i & 1)))
+            .unwrap_or(0);
 
         let pattern = Regex::new(r#"^(\d+)\.memtable"#).unwrap();
         let wal_indices: Vec<usize> = {
