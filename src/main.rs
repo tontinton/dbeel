@@ -1,68 +1,144 @@
 use dbil::lsm_tree::LSMTree;
-use glommio::{LocalExecutorBuilder, Placement};
-use rand::{seq::SliceRandom, thread_rng};
-use rmpv::{decode::read_value_ref, encode::write_value_ref, ValueRef};
+use futures_lite::{AsyncReadExt, AsyncWriteExt};
+use glommio::net::{TcpListener, TcpStream};
+use glommio::{spawn_local, LocalExecutorBuilder, Placement};
+use rmpv::encode::write_value;
+use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
-use std::{env::temp_dir, io::Result, path::PathBuf};
+use std::{env::temp_dir, io::Result};
 
-async fn write(dir: PathBuf) -> Result<()> {
-    let mut tree = LSMTree::open_or_create(dir).await?;
+async fn read_exactly(
+    stream: &mut TcpStream,
+    n: usize,
+) -> std::io::Result<Vec<u8>> {
+    let mut buf = vec![0; n];
+    let mut bytes_read = 0;
 
-    let mut rng = thread_rng();
-    let mut nums: Vec<String> = (0..10000).map(|n| n.to_string()).collect();
-    nums.shuffle(&mut rng);
-    for i in nums {
-        let msgpack_value = ValueRef::String(i.as_str().into());
-        let mut encoded: Vec<u8> = Vec::new();
-        write_value_ref(&mut encoded, &msgpack_value).unwrap();
-        tree.set(encoded.clone(), encoded).await?;
+    while bytes_read < n {
+        match stream.read(&mut buf[bytes_read..]).await {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "unexpected end of file",
+                ))
+            }
+            Ok(n) => bytes_read += n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
     }
 
-    let lookup_key = ValueRef::String("5000".into());
-    let mut lookup_key_encoded: Vec<u8> = Vec::new();
-    write_value_ref(&mut lookup_key_encoded, &lookup_key).unwrap();
-    println!("Querying for key {}", lookup_key);
-
-    if let Ok(Some(v)) = tree.get(&lookup_key_encoded).await {
-        let msgpack_value = read_value_ref(&mut &v[..]).unwrap().to_owned();
-        println!("Found: {}", msgpack_value);
-    } else {
-        println!("Key not found");
-    }
-
-    tree.compact(vec![0, 2, 4, 6, 8, 10, 12], 13).await?;
-
-    Ok(())
+    Ok(buf)
 }
 
-async fn read(dir: PathBuf) -> Result<()> {
-    let tree = LSMTree::open_or_create(dir).await?;
+async fn handle_request(
+    tree: Rc<RefCell<LSMTree>>,
+    client: &mut TcpStream,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let size_buf = read_exactly(client, 2).await?;
+    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
+    let request_buf = read_exactly(client, size.into()).await?;
 
-    let lookup_key = ValueRef::String("1234".into());
-    let mut lookup_key_encoded: Vec<u8> = Vec::new();
-    write_value_ref(&mut lookup_key_encoded, &lookup_key).unwrap();
-    println!("Querying for key {}", lookup_key);
+    let msgpack_request = read_value_ref(&mut &request_buf[..])
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "could not parse msgpack",
+            )
+        })?
+        .to_owned();
+    if let Some(map_vec) = msgpack_request.as_map() {
+        let map = Value::Map(map_vec.to_vec());
+        match map["type"].as_str() {
+            Some("set") => {
+                let mut key_encoded: Vec<u8> = Vec::new();
+                write_value(&mut key_encoded, &map["key"]).unwrap();
+                let mut value_encoded: Vec<u8> = Vec::new();
+                write_value(&mut value_encoded, &map["value"]).unwrap();
 
-    if let Ok(Some(v)) = tree.get(&lookup_key_encoded).await {
-        let msgpack_value = read_value_ref(&mut &v[..]).unwrap().to_owned();
-        println!("Found: {}", msgpack_value);
+                tree.borrow_mut().set(key_encoded, value_encoded).await?;
+            }
+            Some("get") => {
+                let mut key_encoded: Vec<u8> = Vec::new();
+                write_value(&mut key_encoded, &map["key"]).unwrap();
+
+                if let Some(value) = tree.borrow().get(&key_encoded).await? {
+                    return Ok(Some(value));
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "key not found",
+                    ));
+                }
+            }
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "unsupported request",
+                ));
+            }
+        }
     } else {
-        println!("Key not found");
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "request should be a map",
+        ));
     }
 
-    Ok(())
+    Ok(None)
+}
+
+async fn handle_client(tree: Rc<RefCell<LSMTree>>, client: &mut TcpStream) {
+    match handle_request(tree.clone(), client).await {
+        Ok(None) => {
+            let mut buf: Vec<u8> = Vec::new();
+            write_value_ref(&mut buf, &ValueRef::String("OK".into())).unwrap();
+            client.write_all(&buf).await.unwrap();
+        }
+        Ok(Some(buf)) => {
+            client.write_all(&buf).await.unwrap();
+        }
+        Err(e) => {
+            let error_string = format!("Error: {}", e.to_string());
+            let mut buf: Vec<u8> = Vec::new();
+            write_value_ref(
+                &mut buf,
+                &ValueRef::String(error_string.as_str().into()),
+            )
+            .unwrap();
+            client.write_all(&buf).await.unwrap();
+        }
+    }
+}
+
+async fn run_server() -> Result<()> {
+    let mut db_dir = temp_dir();
+    db_dir.push("dbil");
+
+    let tree = Rc::new(RefCell::new(LSMTree::open_or_create(db_dir).await?));
+
+    let server = TcpListener::bind("127.0.0.1:10000")?;
+    loop {
+        match server.accept().await {
+            Ok(mut client) => {
+                let cloned_tree = tree.clone();
+                spawn_local(async move {
+                    handle_client(cloned_tree, &mut client).await;
+                })
+                .detach();
+            }
+            Err(e) => {
+                eprintln!("Failed to accept client: {}", e);
+            }
+        }
+    }
 }
 
 fn main() -> Result<()> {
     let builder = LocalExecutorBuilder::new(Placement::Fixed(1))
         .spin_before_park(Duration::from_millis(10));
-    let handle = builder.name("dbil").spawn(|| async move {
-        let mut db_dir = temp_dir();
-        db_dir.push("dbil");
-        write(db_dir.clone()).await?;
-        read(db_dir).await
-    })?;
-
-    handle.join()??;
-    Ok(())
+    let handle = builder.name("dbil").spawn(run_server)?;
+    handle.join()?
 }
