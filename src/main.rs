@@ -4,7 +4,7 @@ use glommio::net::{TcpListener, TcpStream};
 use glommio::{spawn_local, LocalExecutorBuilder, Placement};
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{env::temp_dir, io::Result};
@@ -34,7 +34,7 @@ async fn read_exactly(
 }
 
 async fn handle_request(
-    tree: Rc<RefCell<LSMTree>>,
+    tree: *mut LSMTree,
     client: &mut TcpStream,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let size_buf = read_exactly(client, 2).await?;
@@ -58,13 +58,16 @@ async fn handle_request(
                 let mut value_encoded: Vec<u8> = Vec::new();
                 write_value(&mut value_encoded, &map["value"]).unwrap();
 
-                tree.borrow_mut().set(key_encoded, value_encoded).await?;
+                unsafe {
+                    (*tree).set(key_encoded, value_encoded).await?;
+                }
             }
             Some("get") => {
                 let mut key_encoded: Vec<u8> = Vec::new();
                 write_value(&mut key_encoded, &map["key"]).unwrap();
 
-                if let Some(value) = tree.borrow().get(&key_encoded).await? {
+                let result = unsafe { (*tree).get(&key_encoded).await? };
+                if let Some(value) = result {
                     return Ok(Some(value));
                 } else {
                     return Err(std::io::Error::new(
@@ -90,8 +93,8 @@ async fn handle_request(
     Ok(None)
 }
 
-async fn handle_client(tree: Rc<RefCell<LSMTree>>, client: &mut TcpStream) {
-    match handle_request(tree.clone(), client).await {
+async fn handle_client(tree: *mut LSMTree, client: &mut TcpStream) {
+    match handle_request(tree, client).await {
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(&mut buf, &ValueRef::String("OK".into())).unwrap();
@@ -117,7 +120,7 @@ async fn run_server() -> Result<()> {
     let mut db_dir = temp_dir();
     db_dir.push("dbil");
 
-    let tree = Rc::new(RefCell::new(LSMTree::open_or_create(db_dir).await?));
+    let tree = Rc::new(UnsafeCell::new(LSMTree::open_or_create(db_dir).await?));
 
     let server = TcpListener::bind("127.0.0.1:10000")?;
     loop {
@@ -125,7 +128,7 @@ async fn run_server() -> Result<()> {
             Ok(mut client) => {
                 let cloned_tree = tree.clone();
                 spawn_local(async move {
-                    handle_client(cloned_tree, &mut client).await;
+                    handle_client(cloned_tree.get(), &mut client).await;
                 })
                 .detach();
             }
