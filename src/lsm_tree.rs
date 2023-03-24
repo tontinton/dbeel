@@ -170,6 +170,8 @@ pub struct LSMTree {
     // The memtable WAL for durability in case the process crashes without
     // flushing the memtable to disk.
     wal_writer: StreamWriter,
+    // A lock to guarantee wal isolation.
+    is_wal_writing: bool,
 }
 
 impl LSMTree {
@@ -286,6 +288,7 @@ impl LSMTree {
             number_of_sstable_reads: Rc::new(PhantomData::<usize>),
             memtable_index: wal_file_index,
             wal_writer,
+            is_wal_writing: false,
         })
     }
 
@@ -407,10 +410,7 @@ impl LSMTree {
             .unwrap();
 
         // Write to WAL for persistance.
-        let entry = Entry { key, value };
-        let entry_encoded = bincode_options().serialize(&entry).unwrap();
-        self.wal_writer.write_all(&entry_encoded).await?;
-        self.wal_writer.flush().await?;
+        self.write_to_wal(&Entry { key, value }).await?;
 
         if self.active_memtable.capacity() == self.active_memtable.len() {
             // Capacity is full, flush the active tree to disk.
@@ -418,6 +418,22 @@ impl LSMTree {
         }
 
         Ok(result)
+    }
+
+    async fn write_to_wal(&mut self, entry: &Entry) -> glommio::Result<(), ()> {
+        let entry_encoded = bincode_options().serialize(entry).unwrap();
+
+        while self.is_wal_writing {
+            futures_lite::future::yield_now().await;
+        }
+
+        self.is_wal_writing = true;
+        self.wal_writer.write_all(&entry_encoded).await?;
+        self.is_wal_writing = false;
+
+        self.wal_writer.flush().await?;
+
+        Ok(())
     }
 
     async fn flush(&mut self) -> glommio::Result<(), ()> {
