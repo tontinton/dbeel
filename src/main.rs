@@ -53,18 +53,43 @@ async fn handle_request(
         let map = Value::Map(map_vec.to_vec());
         match map["type"].as_str() {
             Some("set") => {
+                let key = &map["key"];
+                let value = &map["value"];
+
+                if key.is_nil() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "field 'key' is missing",
+                    ));
+                }
+                if value.is_nil() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "field 'value' is missing",
+                    ));
+                }
+
                 let mut key_encoded: Vec<u8> = Vec::new();
-                write_value(&mut key_encoded, &map["key"]).unwrap();
+                write_value(&mut key_encoded, key).unwrap();
                 let mut value_encoded: Vec<u8> = Vec::new();
-                write_value(&mut value_encoded, &map["value"]).unwrap();
+                write_value(&mut value_encoded, value).unwrap();
 
                 unsafe {
                     (*tree).set(key_encoded, value_encoded).await?;
                 }
             }
             Some("get") => {
+                let key = &map["key"];
+
+                if key.is_nil() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "field 'key' is missing",
+                    ));
+                }
+
                 let mut key_encoded: Vec<u8> = Vec::new();
-                write_value(&mut key_encoded, &map["key"]).unwrap();
+                write_value(&mut key_encoded, key).unwrap();
 
                 let result = unsafe { (*tree).get(&key_encoded).await? };
                 if let Some(value) = result {
