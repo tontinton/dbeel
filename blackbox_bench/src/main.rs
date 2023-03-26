@@ -7,6 +7,7 @@ use rmpv::{decode::read_value_ref, encode::write_value, Value, ValueRef};
 use std::time::{Duration, Instant};
 
 async fn run_benchmark(
+    address: (String, u16),
     num_clients: usize,
     num_requests: usize,
 ) -> Vec<(usize, Vec<Duration>)> {
@@ -20,6 +21,7 @@ async fn run_benchmark(
             cpus[client_index % cpus.len()].cpu,
         ));
 
+        let address = address.clone();
         let handle = executor
             .name(format!("client-{}", client_index).as_str())
             .spawn(move || async move {
@@ -54,7 +56,7 @@ async fn run_benchmark(
 
                     let start_time = Instant::now();
                     let mut stream =
-                        TcpStream::connect(("127.0.0.1", 10000)).await.unwrap();
+                        TcpStream::connect(&address).await.unwrap();
 
                     let size_buffer = (data_encoded.len() as u16).to_le_bytes();
                     if let Err(e) = stream.write_all(&size_buffer).await {
@@ -104,7 +106,22 @@ struct Args {
     #[clap(
         short,
         long,
-        value_name = "clients",
+        help = "Server hostname (default %v)",
+        default_value = "127.0.0.1"
+    )]
+    hostname: String,
+
+    #[clap(
+        short,
+        long,
+        help = "Server port (default %v)",
+        default_value = "10000"
+    )]
+    port: u16,
+
+    #[clap(
+        short,
+        long,
         help = "Number of parallel connections (default %v)",
         default_value = "20"
     )]
@@ -113,7 +130,6 @@ struct Args {
     #[clap(
         short = 'n',
         long,
-        value_name = "requests",
         help = "Total number of requests each client sends (default %v)",
         default_value = "5000"
     )]
@@ -128,7 +144,12 @@ fn main() {
     let handle = builder
         .name("bb-bench")
         .spawn(move || async move {
-            run_benchmark(args.clients, args.requests).await
+            run_benchmark(
+                (args.hostname, args.port),
+                args.clients,
+                args.requests,
+            )
+            .await
         })
         .unwrap();
     let all_stats = handle.join().unwrap();
