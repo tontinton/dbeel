@@ -446,6 +446,11 @@ impl LSMTree {
             futures_lite::future::yield_now().await;
         }
 
+        let mut memtable_to_flush =
+            RedBlackTree::with_capacity(self.active_memtable.capacity());
+        std::mem::swap(&mut memtable_to_flush, &mut self.active_memtable);
+        self.flush_memtable = Some(memtable_to_flush);
+
         let mut flush_wal_path = self.dir.clone();
         flush_wal_path.push(format!(
             "{:01$}.memtable",
@@ -471,11 +476,6 @@ impl LSMTree {
         );
         let data_file = DmaFile::create(&data_filename).await?;
         let index_file = DmaFile::create(&index_filename).await?;
-
-        let mut memtable_to_flush =
-            RedBlackTree::with_capacity(self.active_memtable.capacity());
-        std::mem::swap(&mut memtable_to_flush, &mut self.active_memtable);
-        self.flush_memtable = Some(memtable_to_flush);
 
         Self::flush_memtable_to_disk(
             self.flush_memtable.as_ref().unwrap(),
