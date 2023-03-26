@@ -129,7 +129,9 @@ async fn handle_client(tree: *mut LSMTree, client: &mut TcpStream) {
             client.write_all(&buf).await.unwrap();
         }
         Err(e) => {
-            let error_string = format!("Error: {}", e.to_string());
+            let error_string = format!("Error: {}", e);
+            eprintln!("{}", error_string);
+
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(
                 &mut buf,
