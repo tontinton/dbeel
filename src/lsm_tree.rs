@@ -429,9 +429,8 @@ impl LSMTree {
 
         self.is_wal_writing = true;
         self.wal_writer.write_all(&entry_encoded).await?;
-        self.is_wal_writing = false;
-
         self.wal_writer.flush().await?;
+        self.is_wal_writing = false;
 
         Ok(())
     }
