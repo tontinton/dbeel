@@ -47,6 +47,7 @@ async fn run_benchmark(
     address: (String, u16),
     num_clients: usize,
     num_requests: usize,
+    set: bool,
 ) -> Vec<(usize, Vec<Duration>)> {
     let mut handles = Vec::new();
 
@@ -66,30 +67,36 @@ async fn run_benchmark(
 
                 for request_index in 0..num_requests {
                     let mut data_encoded: Vec<u8> = Vec::new();
-                    write_value(
-                        &mut data_encoded,
-                        &Value::Map(vec![
+                    let key = format!("{}_{}", client_index, request_index);
+                    let key_str = key.as_str();
+                    let map = if set {
+                        Value::Map(vec![
                             (
                                 Value::String("type".into()),
                                 Value::String("set".into()),
                             ),
                             (
                                 Value::String("key".into()),
-                                Value::String(
-                                    format!(
-                                        "{}_{}",
-                                        client_index, request_index
-                                    )
-                                    .into(),
-                                ),
+                                Value::String(key_str.into()),
                             ),
                             (
                                 Value::String("value".into()),
-                                Value::String("value".into()),
+                                Value::String(key_str.into()),
                             ),
-                        ]),
-                    )
-                    .unwrap();
+                        ])
+                    } else {
+                        Value::Map(vec![
+                            (
+                                Value::String("type".into()),
+                                Value::String("get".into()),
+                            ),
+                            (
+                                Value::String("key".into()),
+                                Value::String(key_str.into()),
+                            ),
+                        ])
+                    };
+                    write_value(&mut data_encoded, &map).unwrap();
 
                     let start_time = Instant::now();
                     let mut stream =
@@ -116,9 +123,16 @@ async fn run_benchmark(
 
                     let response =
                         read_value_ref(&mut &response_buffer[..]).unwrap();
-                    if response != ValueRef::String("OK".into()) {
-                        eprintln!("Response not OK: {}", response);
-                        continue;
+                    if set {
+                        if response != ValueRef::String("OK".into()) {
+                            eprintln!("Response not OK: {}", response);
+                            continue;
+                        }
+                    } else {
+                        if response != ValueRef::String(key_str.into()) {
+                            eprintln!("Response not OK: {}", response);
+                            continue;
+                        }
                     }
 
                     stats.push(Instant::now().duration_since(start_time));
@@ -166,14 +180,32 @@ fn main() {
     let handle = builder
         .name("bb-bench")
         .spawn(move || async move {
-            run_benchmark(
+            let set_results = run_benchmark(
+                (args.hostname.clone(), args.port),
+                args.clients,
+                args.requests,
+                true,
+            )
+            .await;
+
+            let get_results = run_benchmark(
                 (args.hostname, args.port),
                 args.clients,
                 args.requests,
+                false,
             )
-            .await
+            .await;
+
+            (set_results, get_results)
         })
         .unwrap();
-    let all_stats = handle.join().unwrap();
-    print_stats(all_stats);
+    let (set_stats, get_stats) = handle.join().unwrap();
+
+    println!("Set:");
+    print_stats(set_stats);
+
+    println!("");
+
+    println!("Get:");
+    print_stats(get_stats);
 }
