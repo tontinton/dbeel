@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering, collections::BinaryHeap, fs::DirEntry, marker::PhantomData,
-    path::PathBuf, rc::Rc,
+    os::unix::prelude::MetadataExt, path::PathBuf, rc::Rc,
 };
 
 use bincode::{
@@ -12,7 +12,7 @@ use bincode::{
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::{
     BufferedFile, DmaFile, DmaStreamWriterBuilder, OpenOptions, StreamReader,
-    StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
+    StreamReaderBuilder, StreamWriterBuilder,
 };
 use redblacktree::RedBlackTree;
 use regex::Regex;
@@ -169,9 +169,11 @@ pub struct LSMTree {
     memtable_index: usize,
     // The memtable WAL for durability in case the process crashes without
     // flushing the memtable to disk.
-    wal_writer: StreamWriter,
-    // A lock to guarantee wal isolation.
-    is_wal_writing: bool,
+    wal_file: BufferedFile,
+    // The current end offset of the wal file.
+    wal_offset: u64,
+    // The filesystem block size of where our data is written to.
+    block_size: u64,
 }
 
 impl LSMTree {
@@ -228,6 +230,8 @@ impl LSMTree {
             vec
         };
 
+        let block_size = std::fs::metadata(dir.clone())?.blksize();
+
         let wal_file_index = match wal_indices.len() {
             0 => 0,
             1 => wal_indices[0],
@@ -245,9 +249,11 @@ impl LSMTree {
                         dir.clone(),
                         unflashed_file_index,
                     );
-                let memtable =
-                    Self::read_memtable_from_wal_file(&unflashed_file_path)
-                        .await?;
+                let memtable = Self::read_memtable_from_wal_file(
+                    &unflashed_file_path,
+                    block_size,
+                )
+                .await?;
                 let data_file = DmaFile::open(&data_file_path).await?;
                 let index_file = DmaFile::open(&index_file_path).await?;
                 Self::flush_memtable_to_disk(&memtable, data_file, index_file)
@@ -261,22 +267,17 @@ impl LSMTree {
         let mut wal_path = dir.clone();
         wal_path
             .push(format!("{:01$}.memtable", wal_file_index, INDEX_PADDING));
+        let wal_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .buffered_open(&wal_path)
+            .await?;
+        let wal_offset = wal_file.file_size().await?;
 
-        let (wal_writer, active_memtable) = if wal_path.exists() {
-            let memtable = Self::read_memtable_from_wal_file(&wal_path).await?;
-            let file = OpenOptions::new()
-                .append(true)
-                .buffered_open(&wal_path)
-                .await?;
-            let wal_writer = StreamWriterBuilder::new(file).build();
-            (wal_writer, memtable)
+        let active_memtable = if wal_path.exists() {
+            Self::read_memtable_from_wal_file(&wal_path, block_size).await?
         } else {
-            let memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
-            let wal_writer = StreamWriterBuilder::new(
-                BufferedFile::create(&wal_path).await?,
-            )
-            .build();
-            (wal_writer, memtable)
+            RedBlackTree::with_capacity(TREE_CAPACITY)
         };
 
         Ok(Self {
@@ -287,8 +288,9 @@ impl LSMTree {
             read_sstable_indices: data_file_indices,
             number_of_sstable_reads: Rc::new(PhantomData::<usize>),
             memtable_index: wal_file_index,
-            wal_writer,
-            is_wal_writing: false,
+            wal_file,
+            wal_offset,
+            block_size,
         })
     }
 
@@ -305,6 +307,7 @@ impl LSMTree {
 
     async fn read_memtable_from_wal_file(
         wal_path: &PathBuf,
+        block_size: u64,
     ) -> std::io::Result<RedBlackTree<Vec<u8>, Vec<u8>>> {
         let mut memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
         let wal_file = BufferedFile::open(&wal_path).await?;
@@ -313,10 +316,14 @@ impl LSMTree {
         let mut wal_buf = Vec::new();
         reader.read_to_end(&mut wal_buf).await?;
         let mut cursor = std::io::Cursor::new(&wal_buf[..]);
-        while let Ok(entry) =
-            bincode_options().deserialize_from::<_, Entry>(&mut cursor)
-        {
-            memtable.set(entry.key, entry.value).unwrap();
+        while cursor.position() < wal_buf.len() as u64 {
+            if let Ok(entry) =
+                bincode_options().deserialize_from::<_, Entry>(&mut cursor)
+            {
+                memtable.set(entry.key, entry.value).unwrap();
+            }
+            let pos = cursor.position();
+            cursor.set_position(pos + block_size - pos % block_size);
         }
         reader.close().await?;
         Ok(memtable)
@@ -403,6 +410,11 @@ impl LSMTree {
         key: Vec<u8>,
         value: Vec<u8>,
     ) -> glommio::Result<Option<Vec<u8>>, ()> {
+        // Wait for flush.
+        while self.active_memtable.capacity() == self.active_memtable.len() {
+            futures_lite::future::yield_now().await;
+        }
+
         // Write to memtable in memory.
         let result = self
             .active_memtable
@@ -421,16 +433,15 @@ impl LSMTree {
     }
 
     async fn write_to_wal(&mut self, entry: &Entry) -> glommio::Result<(), ()> {
-        let entry_encoded = bincode_options().serialize(entry).unwrap();
+        let buf = bincode_options().serialize(entry).unwrap();
+        let size = buf.len() as u64;
 
-        while self.is_wal_writing {
-            futures_lite::future::yield_now().await;
-        }
+        let size_padded = size + self.block_size - size % self.block_size;
+        let offset = self.wal_offset;
+        self.wal_offset += size_padded;
 
-        self.is_wal_writing = true;
-        self.wal_writer.write_all(&entry_encoded).await?;
-        self.wal_writer.flush().await?;
-        self.is_wal_writing = false;
+        self.wal_file.write_at(buf, offset).await?;
+        // TODO: fdatasync to ensure durability
 
         Ok(())
     }
@@ -463,11 +474,8 @@ impl LSMTree {
             "{:01$}.memtable",
             self.memtable_index, INDEX_PADDING
         ));
-
-        self.wal_writer = StreamWriterBuilder::new(
-            BufferedFile::create(&next_wal_path).await?,
-        )
-        .build();
+        self.wal_file = BufferedFile::create(&next_wal_path).await?;
+        self.wal_offset = 0;
 
         let (data_filename, index_filename) = Self::get_data_file_paths(
             self.dir.clone(),
