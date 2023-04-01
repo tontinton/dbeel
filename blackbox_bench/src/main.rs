@@ -6,6 +6,43 @@ use glommio::{
 use rmpv::{decode::read_value_ref, encode::write_value, Value, ValueRef};
 use std::time::{Duration, Instant};
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+/// Benchmark the database.
+struct Args {
+    #[clap(
+        short,
+        long,
+        help = "Server hostname (default %v)",
+        default_value = "127.0.0.1"
+    )]
+    hostname: String,
+
+    #[clap(
+        short,
+        long,
+        help = "Server port (default %v)",
+        default_value = "10000"
+    )]
+    port: u16,
+
+    #[clap(
+        short,
+        long,
+        help = "Number of parallel connections (default %v)",
+        default_value = "20"
+    )]
+    clients: usize,
+
+    #[clap(
+        short = 'n',
+        long,
+        help = "Total number of requests each client sends (default %v)",
+        default_value = "1000"
+    )]
+    requests: usize,
+}
+
 async fn run_benchmark(
     address: (String, u16),
     num_clients: usize,
@@ -97,43 +134,6 @@ async fn run_benchmark(
         .into_iter()
         .map(|(i, handle)| (i, handle.join().unwrap()))
         .collect()
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-/// Benchmark the database.
-struct Args {
-    #[clap(
-        short,
-        long,
-        help = "Server hostname (default %v)",
-        default_value = "127.0.0.1"
-    )]
-    hostname: String,
-
-    #[clap(
-        short,
-        long,
-        help = "Server port (default %v)",
-        default_value = "10000"
-    )]
-    port: u16,
-
-    #[clap(
-        short,
-        long,
-        help = "Number of parallel connections (default %v)",
-        default_value = "20"
-    )]
-    clients: usize,
-
-    #[clap(
-        short = 'n',
-        long,
-        help = "Total number of requests each client sends (default %v)",
-        default_value = "1000"
-    )]
-    requests: usize,
 }
 
 fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
