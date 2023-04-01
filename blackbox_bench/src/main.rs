@@ -131,9 +131,31 @@ struct Args {
         short = 'n',
         long,
         help = "Total number of requests each client sends (default %v)",
-        default_value = "5000"
+        default_value = "1000"
     )]
     requests: usize,
+}
+
+fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
+    let mut stats: Vec<Duration> = client_stats
+        .into_iter()
+        .map(|(_, stats)| stats)
+        .flatten()
+        .collect();
+    stats.sort();
+
+    let total: Duration = stats.iter().sum();
+    let last_index = stats.len() - 1;
+    let min = stats[0];
+    let max = stats[last_index];
+    let p50 = stats[last_index / 2];
+    let p90 = stats[last_index * 9 / 10];
+    let p99 = stats[last_index * 99 / 100];
+    let p999 = stats[last_index * 999 / 1000];
+    println!(
+        "total: {:?}, min: {:?}, p50: {:?}, p90: {:?}, p99: {:?}, p999: {:?} max: {:?}",
+        total, min, p50, p90, p99, p999, max
+    );
 }
 
 fn main() {
@@ -153,8 +175,5 @@ fn main() {
         })
         .unwrap();
     let all_stats = handle.join().unwrap();
-
-    for (client, stats) in all_stats {
-        println!("{}: {}", client, stats.len());
-    }
+    print_stats(all_stats);
 }
