@@ -1,13 +1,55 @@
 use dbil::lsm_tree::LSMTree;
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
-use glommio::net::{TcpListener, TcpStream};
-use glommio::{spawn_local, LocalExecutorBuilder, Placement};
+use glommio::{
+    enclose,
+    net::{TcpListener, TcpStream},
+    spawn_local,
+    timer::sleep,
+    LocalExecutorBuilder, Placement,
+};
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
 use std::cell::UnsafeCell;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{env::temp_dir, io::Result};
+
+// How much files to compact.
+const COMPACTION_FACTOR: usize = 8;
+
+async fn run_compaction_loop(tree: Rc<UnsafeCell<LSMTree>>) {
+    loop {
+        let indices = unsafe { (*tree.get()).sstable_indices() };
+        let (even, mut odd): (Vec<usize>, Vec<usize>) =
+            indices.into_iter().partition(|i| *i % 2 == 0);
+
+        if even.len() >= COMPACTION_FACTOR {
+            let new_index = even[even.len() - 1] + 1;
+            if let Err(e) =
+                unsafe { (*tree.get()).compact(even, new_index) }.await
+            {
+                eprintln!("Failed to compact files: {}", e);
+            }
+            continue;
+        }
+
+        if odd.len() >= COMPACTION_FACTOR && even.len() >= 1 {
+            debug_assert!(even[0] > odd[odd.len() - 1]);
+
+            odd.push(even[0]);
+
+            let new_index = even[0] + 1;
+            if let Err(e) =
+                unsafe { (*tree.get()).compact(odd, new_index) }.await
+            {
+                eprintln!("Failed to compact files: {}", e);
+            }
+            continue;
+        }
+
+        sleep(Duration::from_millis(10)).await;
+    }
+}
 
 async fn read_exactly(
     stream: &mut TcpStream,
@@ -34,7 +76,7 @@ async fn read_exactly(
 }
 
 async fn handle_request(
-    tree: *mut LSMTree,
+    tree: Rc<UnsafeCell<LSMTree>>,
     client: &mut TcpStream,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let size_buf = read_exactly(client, 2).await?;
@@ -74,8 +116,24 @@ async fn handle_request(
                 let mut value_encoded: Vec<u8> = Vec::new();
                 write_value(&mut value_encoded, value).unwrap();
 
-                unsafe {
-                    (*tree).set(key_encoded, value_encoded).await?;
+                // Wait for flush.
+                while unsafe { (*tree.get()).memtable_full() } {
+                    futures_lite::future::yield_now().await;
+                }
+
+                unsafe { (*tree.get()).set(key_encoded, value_encoded) }
+                    .await?;
+
+                if unsafe { (*tree.get()).memtable_full() } {
+                    // Capacity is full, flush memtable to disk.
+                    spawn_local(enclose!((tree.clone() => tree) async move {
+                        if let Err(e) =
+                            unsafe { (*tree.get()).flush() }.await
+                        {
+                            eprintln!("Failed to flush memtable: {}", e);
+                        }
+                    }))
+                    .detach();
                 }
             }
             Some("get") => {
@@ -91,7 +149,7 @@ async fn handle_request(
                 let mut key_encoded: Vec<u8> = Vec::new();
                 write_value(&mut key_encoded, key).unwrap();
 
-                let result = unsafe { (*tree).get(&key_encoded).await? };
+                let result = unsafe { (*tree.get()).get(&key_encoded) }.await?;
                 if let Some(value) = result {
                     return Ok(Some(value));
                 } else {
@@ -118,7 +176,7 @@ async fn handle_request(
     Ok(None)
 }
 
-async fn handle_client(tree: *mut LSMTree, client: &mut TcpStream) {
+async fn handle_client(tree: Rc<UnsafeCell<LSMTree>>, client: &mut TcpStream) {
     match handle_request(tree, client).await {
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
@@ -149,14 +207,18 @@ async fn run_server() -> Result<()> {
 
     let tree = Rc::new(UnsafeCell::new(LSMTree::open_or_create(db_dir).await?));
 
+    spawn_local(enclose!((tree.clone() => tree) async move {
+        run_compaction_loop(tree).await;
+    }))
+    .detach();
+
     let server = TcpListener::bind("127.0.0.1:10000")?;
     loop {
         match server.accept().await {
             Ok(mut client) => {
-                let cloned_tree = tree.clone();
-                spawn_local(async move {
-                    handle_client(cloned_tree.get(), &mut client).await;
-                })
+                spawn_local(enclose!((tree.clone() => tree) async move {
+                    handle_client(tree, &mut client).await;
+                }))
                 .detach();
             }
             Err(e) => {

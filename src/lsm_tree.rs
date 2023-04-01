@@ -366,6 +366,14 @@ impl LSMTree {
         (data_filename, index_filename)
     }
 
+    pub fn sstable_indices(&self) -> &Vec<usize> {
+        &self.read_sstable_indices
+    }
+
+    pub fn memtable_full(&self) -> bool {
+        self.active_memtable.capacity() == self.active_memtable.len()
+    }
+
     pub async fn get(
         &self,
         key: &Vec<u8>,
@@ -410,11 +418,6 @@ impl LSMTree {
         key: Vec<u8>,
         value: Vec<u8>,
     ) -> glommio::Result<Option<Vec<u8>>, ()> {
-        // Wait for flush.
-        while self.active_memtable.capacity() == self.active_memtable.len() {
-            futures_lite::future::yield_now().await;
-        }
-
         // Write to memtable in memory.
         let result = self
             .active_memtable
@@ -423,11 +426,6 @@ impl LSMTree {
 
         // Write to WAL for persistance.
         self.write_to_wal(&Entry { key, value }).await?;
-
-        if self.active_memtable.capacity() == self.active_memtable.len() {
-            // Capacity is full, flush the active tree to disk.
-            self.flush().await?;
-        }
 
         Ok(result)
     }
@@ -446,14 +444,14 @@ impl LSMTree {
         Ok(())
     }
 
-    async fn flush(&mut self) -> glommio::Result<(), ()> {
-        if self.active_memtable.len() == 0 {
-            return Ok(());
-        }
-
+    pub async fn flush(&mut self) -> glommio::Result<(), ()> {
         // Wait until the previous flush is finished.
         while self.flush_memtable.is_some() {
             futures_lite::future::yield_now().await;
+        }
+
+        if self.active_memtable.len() == 0 {
+            return Ok(());
         }
 
         let mut memtable_to_flush =
@@ -665,6 +663,7 @@ impl LSMTree {
         self.read_sstable_indices
             .retain(|x| !indices_to_compact.contains(x));
         self.read_sstable_indices.push(output_index);
+        self.read_sstable_indices.sort();
 
         for (source_path, destination_path) in &action.renames {
             std::fs::rename(source_path, destination_path)?;
@@ -773,10 +772,10 @@ mod tests {
                 .map(|n| n.to_le_bytes().to_vec())
                 .collect();
 
-            // This causes a flush to disk.
             for v in values {
                 tree.set(v.clone(), v).await?;
             }
+            tree.flush().await?;
 
             assert_eq!(tree.active_memtable.len(), 0);
             assert_eq!(tree.write_sstable_index, 2);
@@ -816,6 +815,9 @@ mod tests {
 
             for v in values {
                 tree.set(v.clone(), v).await?;
+                if tree.memtable_full() {
+                    tree.flush().await?;
+                }
             }
 
             assert_eq!(tree.read_sstable_indices, vec![0, 2, 4]);
