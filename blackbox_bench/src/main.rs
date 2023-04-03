@@ -3,6 +3,7 @@ use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
     net::TcpStream, CpuLocation, CpuSet, LocalExecutorBuilder, Placement,
 };
+use rand::{seq::SliceRandom, thread_rng};
 use rmpv::{decode::read_value_ref, encode::write_value, Value, ValueRef};
 use std::time::{Duration, Instant};
 
@@ -65,7 +66,10 @@ async fn run_benchmark(
             .spawn(move || async move {
                 let mut stats = Vec::new();
 
-                for request_index in 0..num_requests {
+                let mut indices: Vec<usize> = (0..num_requests).collect();
+                indices.shuffle(&mut thread_rng());
+
+                for request_index in indices {
                     let mut data_encoded: Vec<u8> = Vec::new();
                     let key = format!("{}_{}", client_index, request_index);
                     let key_str = key.as_str();

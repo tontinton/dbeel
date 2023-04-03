@@ -86,6 +86,7 @@ dependencies = [
  "clap",
  "futures-lite",
  "glommio",
+ "rand",
  "rmpv",
 ]
 
@@ -244,7 +245,6 @@ dependencies = [
  "bincode",
  "futures-lite",
  "glommio",
- "rand",
  "redblacktree",
  "regex",
  "rmp",
