@@ -99,8 +99,8 @@ fn bincode_options() -> WithOtherIntEncoding<
 }
 
 async fn binary_search(
-    data_file: &DmaFile,
-    index_file: &DmaFile,
+    data_file: &BufferedFile,
+    index_file: &BufferedFile,
     key: &Vec<u8>,
 ) -> glommio::Result<Option<Entry>, ()> {
     let item_size = bincode_options()
@@ -405,8 +405,8 @@ impl LSMTree {
             let (data_filename, index_filename) =
                 Self::get_data_file_paths(self.dir.clone(), *i);
 
-            let data_file = DmaFile::open(&data_filename).await?;
-            let index_file = DmaFile::open(&index_filename).await?;
+            let data_file = BufferedFile::open(&data_filename).await?;
+            let index_file = BufferedFile::open(&index_filename).await?;
 
             if let Some(result) =
                 binary_search(&data_file, &index_file, key).await?
