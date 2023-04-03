@@ -136,6 +136,11 @@ async fn binary_search(
             std::cmp::Ordering::Less => lind = half + 1,
             std::cmp::Ordering::Greater => hind = half - 1,
         }
+
+        if half == 0 || half == length {
+            break;
+        }
+
         half = (hind + lind) / 2;
         current = bincode_options()
             .deserialize(
