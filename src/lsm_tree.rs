@@ -812,7 +812,7 @@ mod tests {
         {
             let mut tree = LSMTree::open_or_create(dir.clone()).await?;
             assert_eq!(tree.write_sstable_index, 0);
-            assert_eq!(tree.read_sstable_indices, vec![]);
+            assert_eq!(tree.sstable_indices(), &vec![]);
 
             let values: Vec<Vec<u8>> = (0..(TREE_CAPACITY as u16) * 3)
                 .map(|n| n.to_le_bytes().to_vec())
@@ -825,11 +825,11 @@ mod tests {
                 }
             }
 
-            assert_eq!(tree.read_sstable_indices, vec![0, 2, 4]);
+            assert_eq!(tree.sstable_indices(), &vec![0, 2, 4]);
 
             tree.compact(vec![0, 2, 4], 5).await?;
 
-            assert_eq!(tree.read_sstable_indices, vec![5]);
+            assert_eq!(tree.sstable_indices(), &vec![5]);
             assert_eq!(tree.write_sstable_index, 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
@@ -839,7 +839,7 @@ mod tests {
         // Reopening the tree.
         {
             let tree = LSMTree::open_or_create(dir).await?;
-            assert_eq!(tree.read_sstable_indices, vec![5]);
+            assert_eq!(tree.sstable_indices(), &vec![5]);
             assert_eq!(tree.write_sstable_index, 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
