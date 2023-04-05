@@ -18,6 +18,8 @@ use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+pub const TOMBSTONE: Vec<u8> = vec![];
+
 const TREE_CAPACITY: usize = 1024;
 const INDEX_PADDING: usize = 20; // Number of integers in max u64.
 
@@ -73,7 +75,7 @@ impl Ord for CompactionItem {
         other
             .entry
             .cmp(&self.entry)
-            .then(self.index.cmp(&other.index))
+            .then(other.index.cmp(&self.index))
     }
 }
 
@@ -435,6 +437,13 @@ impl LSMTree {
         Ok(result)
     }
 
+    pub async fn delete(
+        &mut self,
+        key: Vec<u8>,
+    ) -> glommio::Result<Option<Vec<u8>>, ()> {
+        self.set(key, TOMBSTONE).await
+    }
+
     async fn write_to_wal(&mut self, entry: &Entry) -> glommio::Result<(), ()> {
         let buf = bincode_options().serialize(entry).unwrap();
         let size = buf.len() as u64;
@@ -503,6 +512,28 @@ impl LSMTree {
         Ok(())
     }
 
+    async fn write_entry(
+        entry: &Entry,
+        offset: u64,
+        data_writer: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        index_writer: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> std::io::Result<usize> {
+        let data_encoded = bincode_options().serialize(&entry).unwrap();
+        if data_encoded == [2, 0, 0, 0, 0, 0, 0, 0, 70, 8, 2, 0] {
+            panic!("{:?}: {:?}", entry.key, entry.value);
+        }
+        let entry_size = data_encoded.len();
+        let entry_index = EntryOffset {
+            entry_offset: offset,
+            entry_size,
+        };
+        let index_encoded = bincode_options().serialize(&entry_index).unwrap();
+
+        data_writer.write_all(&data_encoded).await?;
+        index_writer.write_all(&index_encoded).await?;
+        Ok(entry_size)
+    }
+
     async fn flush_memtable_to_disk(
         memtable: &RedBlackTree<Vec<u8>, Vec<u8>>,
         data_file: DmaFile,
@@ -523,17 +554,13 @@ impl LSMTree {
                 key: key.clone(),
                 value: value.clone(),
             };
-            let entry_encoded = bincode_options().serialize(&entry).unwrap();
-            let entry_size = entry_encoded.len();
-            data_write_stream.write_all(&entry_encoded).await?;
-
-            let entry_index = EntryOffset {
+            Self::write_entry(
+                &entry,
                 entry_offset,
-                entry_size,
-            };
-            let index_encoded =
-                bincode_options().serialize(&entry_index).unwrap();
-            index_write_stream.write_all(&index_encoded).await?;
+                &mut data_write_stream,
+                &mut index_write_stream,
+            )
+            .await?;
         }
         data_write_stream.close().await?;
         index_write_stream.close().await?;
@@ -547,6 +574,7 @@ impl LSMTree {
         &mut self,
         indices_to_compact: Vec<usize>,
         output_index: usize,
+        remove_tombstones: bool,
     ) -> std::io::Result<()> {
         let sstable_paths: Vec<(PathBuf, PathBuf)> = indices_to_compact
             .iter()
@@ -598,26 +626,28 @@ impl LSMTree {
 
         let mut entry_offset = 0u64;
 
-        while let Some(next) = heap.pop() {
-            let index = next.index;
+        while let Some(current) = heap.pop() {
+            let index = current.index;
 
-            let next_data_encoded =
-                bincode_options().serialize(&next.entry).unwrap();
-            let entry_size = next_data_encoded.len();
-            let entry_index = EntryOffset {
-                entry_offset,
-                entry_size,
-            };
-            entry_offset += entry_size as u64;
-            let next_index_encoded =
-                bincode_options().serialize(&entry_index).unwrap();
+            let mut should_write_current = true;
+            if let Some(next) = heap.peek() {
+                should_write_current &= next.entry.key != current.entry.key;
+            }
+            should_write_current &=
+                !remove_tombstones || current.entry.value != TOMBSTONE;
 
-            compact_data_writer.write(&next_data_encoded).await?;
-            compact_index_writer.write(&next_index_encoded).await?;
+            if should_write_current {
+                let written = Self::write_entry(
+                    &current.entry,
+                    entry_offset,
+                    &mut compact_data_writer,
+                    &mut compact_index_writer,
+                )
+                .await?;
+                entry_offset += written as u64;
+            }
 
-            let (data_reader, index_reader): &mut (StreamReader, StreamReader) =
-                sstable_readers.get_mut(index).unwrap();
-
+            let (data_reader, index_reader) = &mut sstable_readers[index];
             let entry_result = Self::read_next_entry(
                 data_reader,
                 index_reader,
@@ -751,12 +781,14 @@ mod tests {
             let mut tree = LSMTree::open_or_create(dir.clone()).await?;
             tree.set(vec![100], vec![200]).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
+            assert_eq!(tree.get(&vec![0]).await?, None);
         }
 
         // Reopening the tree.
         {
             let tree = LSMTree::open_or_create(dir).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
+            assert_eq!(tree.get(&vec![0]).await?, None);
         }
 
         Ok(())
@@ -814,7 +846,7 @@ mod tests {
             assert_eq!(tree.write_sstable_index, 0);
             assert_eq!(tree.sstable_indices(), &vec![]);
 
-            let values: Vec<Vec<u8>> = (0..(TREE_CAPACITY as u16) * 3)
+            let values: Vec<Vec<u8>> = (0..((TREE_CAPACITY as u16) * 3) - 2)
                 .map(|n| n.to_le_bytes().to_vec())
                 .collect();
 
@@ -824,16 +856,21 @@ mod tests {
                     tree.flush().await?;
                 }
             }
+            tree.delete(vec![0, 1]).await?;
+            tree.delete(vec![100, 2]).await?;
+            tree.flush().await?;
 
             assert_eq!(tree.sstable_indices(), &vec![0, 2, 4]);
 
-            tree.compact(vec![0, 2, 4], 5).await?;
+            tree.compact(vec![0, 2, 4], 5, true).await?;
 
             assert_eq!(tree.sstable_indices(), &vec![5]);
             assert_eq!(tree.write_sstable_index, 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
             assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+            assert_eq!(tree.get(&vec![0, 1]).await?, None);
+            assert_eq!(tree.get(&vec![100, 2]).await?, None);
         }
 
         // Reopening the tree.
@@ -844,6 +881,8 @@ mod tests {
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
             assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+            assert_eq!(tree.get(&vec![0, 1]).await?, None);
+            assert_eq!(tree.get(&vec![100, 2]).await?, None);
         }
 
         Ok(())

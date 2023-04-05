@@ -25,8 +25,10 @@ async fn run_compaction_loop(tree: Rc<UnsafeCell<LSMTree>>) {
 
         if even.len() >= COMPACTION_FACTOR {
             let new_index = even[even.len() - 1] + 1;
-            if let Err(e) =
-                unsafe { (*tree.get()).compact(even, new_index) }.await
+            if let Err(e) = unsafe {
+                (*tree.get()).compact(even, new_index, odd.is_empty())
+            }
+            .await
             {
                 eprintln!("Failed to compact files: {}", e);
             }
@@ -40,7 +42,7 @@ async fn run_compaction_loop(tree: Rc<UnsafeCell<LSMTree>>) {
 
             let new_index = even[0] + 1;
             if let Err(e) =
-                unsafe { (*tree.get()).compact(odd, new_index) }.await
+                unsafe { (*tree.get()).compact(odd, new_index, true) }.await
             {
                 eprintln!("Failed to compact files: {}", e);
             }
