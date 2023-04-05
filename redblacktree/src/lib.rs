@@ -1,5 +1,7 @@
 use core::fmt::Debug;
-use std::{alloc::Layout, cmp::Ordering, marker, ops::Index};
+use std::{
+    alloc::Layout, cmp::Ordering, collections::VecDeque, marker, ops::Index,
+};
 
 #[derive(Debug, PartialEq)]
 enum Color {
@@ -309,6 +311,49 @@ impl<K: Ord, V> DoubleEndedIterator for IntoIter<K, V> {
     }
 }
 
+pub struct IterBfs<'a, K: Ord + 'a, V: 'a> {
+    queue: VecDeque<NodePtr<K, V>>,
+    length: usize,
+    _marker: marker::PhantomData<&'a ()>,
+}
+
+impl<'a, K: Ord + 'a, V: 'a> Clone for IterBfs<'a, K, V> {
+    fn clone(&self) -> IterBfs<'a, K, V> {
+        IterBfs {
+            queue: self.queue.clone(),
+            length: self.length,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<'a, K: Ord + 'a, V: 'a> Iterator for IterBfs<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<(&'a K, &'a V)> {
+        if self.length == 0 || self.queue.is_empty() {
+            return None;
+        }
+
+        let node_ptr = self.queue.pop_front().unwrap();
+        let (key, value) =
+            unsafe { (&(*node_ptr.0).key, &(*node_ptr.0).value) };
+        let node = node_ptr.unsafe_deref();
+        if !node.left.is_null() {
+            self.queue.push_back(node.left);
+        }
+        if !node.right.is_null() {
+            self.queue.push_back(node.right);
+        }
+        self.length -= 1;
+        Some((key, value))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.length, Some(self.length))
+    }
+}
+
 pub struct RedBlackTree<K: Ord, V> {
     arena: Vec<Node<K, V>>,
     root: NodePtr<K, V>,
@@ -434,10 +479,24 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         self.arena = Vec::new();
     }
 
+    // Iterate using depth first search (minimum to maximum).
     pub fn iter(&self) -> Iter<K, V> {
         Iter {
             head: self.root.find_min(),
             tail: self.root.find_max(),
+            length: self.len(),
+            _marker: marker::PhantomData,
+        }
+    }
+
+    // Iterate using breadth first search (starting from root).
+    pub fn iter_bfs(&self) -> IterBfs<K, V> {
+        let mut queue = VecDeque::new();
+        if !self.root.is_null() {
+            queue.push_back(self.root);
+        }
+        IterBfs {
+            queue,
             length: self.len(),
             _marker: marker::PhantomData,
         }
@@ -757,6 +816,23 @@ mod tests {
         assert_eq!(iter.next(), Some((&75, &"b")));
         assert_eq!(iter.next(), Some((&100, &"c")));
         assert_eq!(iter.next(), Some((&150, &"d")));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn iter_bfs() {
+        let mut tree = RedBlackTree::with_capacity(5);
+        tree.set(100, "c").unwrap();
+        tree.set(50, "a").unwrap();
+        tree.set(25, "b").unwrap();
+        tree.set(75, "d").unwrap();
+        tree.set(150, "e").unwrap();
+        let mut iter = tree.iter_bfs();
+        assert_eq!(iter.next(), Some((&50, &"a")));
+        assert_eq!(iter.next(), Some((&25, &"b")));
+        assert_eq!(iter.next(), Some((&100, &"c")));
+        assert_eq!(iter.next(), Some((&75, &"d")));
+        assert_eq!(iter.next(), Some((&150, &"e")));
         assert_eq!(iter.next(), None);
     }
 
