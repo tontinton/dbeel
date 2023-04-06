@@ -123,7 +123,7 @@ impl<K: Ord, V> NodePtr<K, V> {
             result = node_ptr;
             node_ptr = &node.left;
         }
-        return *result;
+        *result
     }
 
     fn find_max(&self) -> NodePtr<K, V> {
@@ -133,7 +133,7 @@ impl<K: Ord, V> NodePtr<K, V> {
             result = node_ptr;
             node_ptr = &node.right;
         }
-        return *result;
+        *result
     }
 
     fn next(&self) -> NodePtr<K, V> {
@@ -370,7 +370,7 @@ where
 }
 
 impl<K: Ord + Debug, V: Debug> RedBlackTree<K, V> {
-    fn print_tree(&self, node_ptr: NodePtr<K, V>, level: usize, left: bool) {
+    fn print_tree(node_ptr: NodePtr<K, V>, level: usize, left: bool) {
         if node_ptr.is_null() {
             return;
         }
@@ -389,12 +389,12 @@ impl<K: Ord + Debug, V: Debug> RedBlackTree<K, V> {
             Color::Black => "\x1b[90m",
         };
         println!("{}{}{:?}\x1b[0m: {:?}", before, color, node.key, node.value);
-        self.print_tree(node.left, level + 1, true);
-        self.print_tree(node.right, level + 1, false);
+        Self::print_tree(node.left, level + 1, true);
+        Self::print_tree(node.right, level + 1, false);
     }
 
     pub fn pretty_print(&self) {
-        self.print_tree(self.root, 0, true);
+        Self::print_tree(self.root, 0, true);
     }
 }
 
@@ -504,12 +504,17 @@ impl<K: Ord, V> RedBlackTree<K, V> {
 
     #[inline]
     pub fn len(&self) -> usize {
-        return self.arena.len();
+        self.arena.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     #[inline]
     pub fn capacity(&self) -> usize {
-        return self.arena.capacity();
+        self.arena.capacity()
     }
 
     fn alloc_node(&mut self, node: Node<K, V>) -> Option<NodePtr<K, V>> {
@@ -525,18 +530,13 @@ impl<K: Ord, V> RedBlackTree<K, V> {
     fn find_node(&self, key: &K) -> NodePtr<K, V> {
         let mut node_ptr = self.root;
 
-        loop {
-            match node_ptr.as_option_mut() {
-                Some(node) => {
-                    let next = match key.cmp(&node.key) {
-                        Ordering::Less => &mut node.left,
-                        Ordering::Greater => &mut node.right,
-                        Ordering::Equal => return node_ptr,
-                    };
-                    node_ptr = *next;
-                }
-                None => break,
-            }
+        while let Some(node) = node_ptr.as_option_mut() {
+            let next = match key.cmp(&node.key) {
+                Ordering::Less => &mut node.left,
+                Ordering::Greater => &mut node.right,
+                Ordering::Equal => return node_ptr,
+            };
+            node_ptr = *next;
         }
 
         NodePtr::null()
@@ -553,7 +553,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
 
     pub fn contains_key(&self, k: &K) -> bool {
         let node_ptr = self.find_node(k);
-        return !node_ptr.is_null();
+        !node_ptr.is_null()
     }
 
     fn capacity_limit_string(&self) -> String {
