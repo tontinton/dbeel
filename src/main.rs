@@ -1,4 +1,4 @@
-use dbil::lsm_tree::LSMTree;
+use dbil::lsm_tree::{LSMTree, TOMBSTONE};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
@@ -77,6 +77,33 @@ async fn read_exactly(
     Ok(buf)
 }
 
+async fn write_to_tree(
+    tree: Rc<UnsafeCell<LSMTree>>,
+    key: Vec<u8>,
+    value: Vec<u8>,
+) -> std::io::Result<()> {
+    // Wait for flush.
+    while unsafe { (*tree.get()).memtable_full() } {
+        futures_lite::future::yield_now().await;
+    }
+
+    unsafe { (*tree.get()).set(key, value) }.await?;
+
+    if unsafe { (*tree.get()).memtable_full() } {
+        // Capacity is full, flush memtable to disk.
+        spawn_local(enclose!((tree.clone() => tree) async move {
+            if let Err(e) =
+                unsafe { (*tree.get()).flush() }.await
+            {
+                eprintln!("Failed to flush memtable: {}", e);
+            }
+        }))
+        .detach();
+    }
+
+    Ok(())
+}
+
 async fn handle_request(
     tree: Rc<UnsafeCell<LSMTree>>,
     client: &mut TcpStream,
@@ -118,25 +145,22 @@ async fn handle_request(
                 let mut value_encoded: Vec<u8> = Vec::new();
                 write_value(&mut value_encoded, value).unwrap();
 
-                // Wait for flush.
-                while unsafe { (*tree.get()).memtable_full() } {
-                    futures_lite::future::yield_now().await;
+                write_to_tree(tree, key_encoded, value_encoded).await?;
+            }
+            Some("delete") => {
+                let key = &map["key"];
+
+                if key.is_nil() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "field 'key' is missing",
+                    ));
                 }
 
-                unsafe { (*tree.get()).set(key_encoded, value_encoded) }
-                    .await?;
+                let mut key_encoded: Vec<u8> = Vec::new();
+                write_value(&mut key_encoded, key).unwrap();
 
-                if unsafe { (*tree.get()).memtable_full() } {
-                    // Capacity is full, flush memtable to disk.
-                    spawn_local(enclose!((tree.clone() => tree) async move {
-                        if let Err(e) =
-                            unsafe { (*tree.get()).flush() }.await
-                        {
-                            eprintln!("Failed to flush memtable: {}", e);
-                        }
-                    }))
-                    .detach();
-                }
+                write_to_tree(tree, key_encoded, TOMBSTONE).await?;
             }
             Some("get") => {
                 let key = &map["key"];
@@ -151,15 +175,13 @@ async fn handle_request(
                 let mut key_encoded: Vec<u8> = Vec::new();
                 write_value(&mut key_encoded, key).unwrap();
 
-                let result = unsafe { (*tree.get()).get(&key_encoded) }.await?;
-                if let Some(value) = result {
-                    return Ok(Some(value));
-                } else {
-                    return Err(std::io::Error::new(
+                return match unsafe { (*tree.get()).get(&key_encoded) }.await? {
+                    Some(value) if value != TOMBSTONE => Ok(Some(value)),
+                    _ => Err(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "key not found",
-                    ));
-                }
+                    )),
+                };
             }
             _ => {
                 return Err(std::io::Error::new(
