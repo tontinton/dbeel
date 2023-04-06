@@ -1,4 +1,7 @@
-use dbil::lsm_tree::{LSMTree, TOMBSTONE};
+use dbil::{
+    lsm_tree::{LSMTree, TOMBSTONE},
+    lsm_tree_mut::LSMTreeMut,
+};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
@@ -9,7 +12,6 @@ use glommio::{
 };
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
-use std::cell::UnsafeCell;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{env::temp_dir, io::Result};
@@ -17,18 +19,15 @@ use std::{env::temp_dir, io::Result};
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 8;
 
-async fn run_compaction_loop(tree: Rc<UnsafeCell<LSMTree>>) {
+async fn run_compaction_loop(tree: &LSMTreeMut) {
     loop {
-        let indices = unsafe { (*tree.get()).sstable_indices() };
+        let indices = tree.sstable_indices();
         let (even, mut odd): (Vec<usize>, Vec<usize>) =
             indices.into_iter().partition(|i| *i % 2 == 0);
 
         if even.len() >= COMPACTION_FACTOR {
             let new_index = even[even.len() - 1] + 1;
-            if let Err(e) = unsafe {
-                (*tree.get()).compact(even, new_index, odd.is_empty())
-            }
-            .await
+            if let Err(e) = tree.compact(even, new_index, odd.is_empty()).await
             {
                 eprintln!("Failed to compact files: {}", e);
             }
@@ -41,9 +40,7 @@ async fn run_compaction_loop(tree: Rc<UnsafeCell<LSMTree>>) {
             odd.push(even[0]);
 
             let new_index = even[0] + 1;
-            if let Err(e) =
-                unsafe { (*tree.get()).compact(odd, new_index, true) }.await
-            {
+            if let Err(e) = tree.compact(odd, new_index, true).await {
                 eprintln!("Failed to compact files: {}", e);
             }
             continue;
@@ -78,22 +75,21 @@ async fn read_exactly(
 }
 
 async fn write_to_tree(
-    tree: Rc<UnsafeCell<LSMTree>>,
+    tree: Rc<LSMTreeMut>,
     key: Vec<u8>,
     value: Vec<u8>,
 ) -> std::io::Result<()> {
     // Wait for flush.
-    while unsafe { (*tree.get()).memtable_full() } {
+    while tree.memtable_full() {
         futures_lite::future::yield_now().await;
     }
 
-    unsafe { (*tree.get()).set(key, value) }.await?;
+    tree.set(key, value).await?;
 
-    if unsafe { (*tree.get()).memtable_full() } {
+    if tree.memtable_full() {
         // Capacity is full, flush memtable to disk.
         spawn_local(enclose!((tree.clone() => tree) async move {
-            if let Err(e) =
-                unsafe { (*tree.get()).flush() }.await
+            if let Err(e) = tree.flush().await
             {
                 eprintln!("Failed to flush memtable: {}", e);
             }
@@ -105,7 +101,7 @@ async fn write_to_tree(
 }
 
 async fn handle_request(
-    tree: Rc<UnsafeCell<LSMTree>>,
+    tree: Rc<LSMTreeMut>,
     client: &mut TcpStream,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let size_buf = read_exactly(client, 2).await?;
@@ -175,7 +171,7 @@ async fn handle_request(
                 let mut key_encoded: Vec<u8> = Vec::new();
                 write_value(&mut key_encoded, key).unwrap();
 
-                return match unsafe { (*tree.get()).get(&key_encoded) }.await? {
+                return match tree.get(&key_encoded).await? {
                     Some(value) if value != TOMBSTONE => Ok(Some(value)),
                     _ => Err(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
@@ -200,7 +196,7 @@ async fn handle_request(
     Ok(None)
 }
 
-async fn handle_client(tree: Rc<UnsafeCell<LSMTree>>, client: &mut TcpStream) {
+async fn handle_client(tree: Rc<LSMTreeMut>, client: &mut TcpStream) {
     match handle_request(tree, client).await {
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
@@ -229,10 +225,10 @@ async fn run_server() -> Result<()> {
     let mut db_dir = temp_dir();
     db_dir.push("dbil");
 
-    let tree = Rc::new(UnsafeCell::new(LSMTree::open_or_create(db_dir).await?));
+    let tree = Rc::new(LSMTreeMut::new(LSMTree::open_or_create(db_dir).await?));
 
     spawn_local(enclose!((tree.clone() => tree) async move {
-        run_compaction_loop(tree).await;
+        run_compaction_loop(&tree).await;
     }))
     .detach();
 
