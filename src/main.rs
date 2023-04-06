@@ -1,7 +1,4 @@
-use dbil::{
-    lsm_tree::{LSMTree, TOMBSTONE},
-    lsm_tree_mut::LSMTreeMut,
-};
+use dbil::lsm_tree::{LSMTree, TOMBSTONE};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
@@ -19,11 +16,10 @@ use std::{env::temp_dir, io::Result};
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 8;
 
-async fn run_compaction_loop(tree: &LSMTreeMut) {
+async fn run_compaction_loop(tree: Rc<LSMTree>) {
     loop {
-        let indices = tree.sstable_indices();
         let (even, mut odd): (Vec<usize>, Vec<usize>) =
-            indices.into_iter().partition(|i| *i % 2 == 0);
+            tree.sstable_indices().iter().partition(|i| *i % 2 == 0);
 
         if even.len() >= COMPACTION_FACTOR {
             let new_index = even[even.len() - 1] + 1;
@@ -75,7 +71,7 @@ async fn read_exactly(
 }
 
 async fn write_to_tree(
-    tree: Rc<LSMTreeMut>,
+    tree: Rc<LSMTree>,
     key: Vec<u8>,
     value: Vec<u8>,
 ) -> std::io::Result<()> {
@@ -101,7 +97,7 @@ async fn write_to_tree(
 }
 
 async fn handle_request(
-    tree: Rc<LSMTreeMut>,
+    tree: Rc<LSMTree>,
     client: &mut TcpStream,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let size_buf = read_exactly(client, 2).await?;
@@ -196,7 +192,7 @@ async fn handle_request(
     Ok(None)
 }
 
-async fn handle_client(tree: Rc<LSMTreeMut>, client: &mut TcpStream) {
+async fn handle_client(tree: Rc<LSMTree>, client: &mut TcpStream) {
     match handle_request(tree, client).await {
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
@@ -225,10 +221,10 @@ async fn run_server() -> Result<()> {
     let mut db_dir = temp_dir();
     db_dir.push("dbil");
 
-    let tree = Rc::new(LSMTreeMut::new(LSMTree::open_or_create(db_dir).await?));
+    let tree = Rc::new(LSMTree::open_or_create(db_dir).await?);
 
     spawn_local(enclose!((tree.clone() => tree) async move {
-        run_compaction_loop(&tree).await;
+        run_compaction_loop(tree).await;
     }))
     .detach();
 

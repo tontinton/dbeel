@@ -1,6 +1,12 @@
 use std::{
-    cmp::Ordering, collections::BinaryHeap, fs::DirEntry, marker::PhantomData,
-    os::unix::prelude::MetadataExt, path::PathBuf, rc::Rc,
+    cell::{Cell, Ref, RefCell},
+    cmp::Ordering,
+    collections::BinaryHeap,
+    fs::DirEntry,
+    marker::PhantomData,
+    os::unix::prelude::MetadataExt,
+    path::PathBuf,
+    rc::Rc,
 };
 
 use bincode::{
@@ -159,26 +165,26 @@ async fn binary_search(
 pub struct LSMTree {
     dir: PathBuf,
     // The memtable that is currently being written to.
-    active_memtable: RedBlackTree<Vec<u8>, Vec<u8>>,
+    active_memtable: RefCell<RedBlackTree<Vec<u8>, Vec<u8>>>,
     // The memtable that is currently being flushed to disk.
-    flush_memtable: Option<RedBlackTree<Vec<u8>, Vec<u8>>>,
+    flush_memtable: RefCell<Option<RedBlackTree<Vec<u8>, Vec<u8>>>>,
     // The next sstable index that is going to be written.
-    write_sstable_index: usize,
+    write_sstable_index: Cell<usize>,
     // The sstable indices to query from.
-    read_sstable_indices: Vec<usize>,
+    read_sstable_indices: RefCell<Vec<usize>>,
     // Track the number of sstable file reads are happening.
     // The reason for tracking is that when ending a compaction, there are
     // sstable files that should be removed / replaced, but there could be
     // reads to the same files concurrently, so the compaction process will
     // wait for the number of reads to reach 0.
-    number_of_sstable_reads: Rc<PhantomData<usize>>,
+    number_of_sstable_reads: RefCell<Rc<PhantomData<usize>>>,
     // The next memtable index.
-    memtable_index: usize,
+    memtable_index: Cell<usize>,
     // The memtable WAL for durability in case the process crashes without
     // flushing the memtable to disk.
-    wal_file: BufferedFile,
+    wal_file: RefCell<Rc<BufferedFile>>,
     // The current end offset of the wal file.
-    wal_offset: u64,
+    wal_offset: Cell<u64>,
     // The filesystem block size of where our data is written to.
     block_size: u64,
 }
@@ -289,14 +295,16 @@ impl LSMTree {
 
         Ok(Self {
             dir,
-            active_memtable,
-            flush_memtable: None,
-            write_sstable_index: write_file_index,
-            read_sstable_indices: data_file_indices,
-            number_of_sstable_reads: Rc::new(PhantomData::<usize>),
-            memtable_index: wal_file_index,
-            wal_file,
-            wal_offset,
+            active_memtable: RefCell::new(active_memtable),
+            flush_memtable: RefCell::new(None),
+            write_sstable_index: Cell::new(write_file_index),
+            read_sstable_indices: RefCell::new(data_file_indices),
+            number_of_sstable_reads: RefCell::new(Rc::new(
+                PhantomData::<usize>,
+            )),
+            memtable_index: Cell::new(wal_file_index),
+            wal_file: RefCell::new(Rc::new(wal_file)),
+            wal_offset: Cell::new(wal_offset),
             block_size,
         })
     }
@@ -373,12 +381,13 @@ impl LSMTree {
         (data_filename, index_filename)
     }
 
-    pub fn sstable_indices(&self) -> &Vec<usize> {
-        &self.read_sstable_indices
+    pub fn sstable_indices(&self) -> Ref<Vec<usize>> {
+        self.read_sstable_indices.borrow()
     }
 
     pub fn memtable_full(&self) -> bool {
-        self.active_memtable.capacity() == self.active_memtable.len()
+        self.active_memtable.borrow().capacity()
+            == self.active_memtable.borrow().len()
     }
 
     pub async fn get(
@@ -386,26 +395,32 @@ impl LSMTree {
         key: &Vec<u8>,
     ) -> glommio::Result<Option<Vec<u8>>, ()> {
         // Query the active tree first.
-        let result = self.active_memtable.get(key);
-        if result.is_some() {
-            return Ok(result.map(|s| s.clone()));
+        if let Some(result) = self.active_memtable.borrow().get(key) {
+            return Ok(Some(result.clone()));
         }
 
         // Key not found in active tree, query the flushed tree.
-        if let Some(tree) = &self.flush_memtable {
-            let result = tree.get(key);
-            if result.is_some() {
-                return Ok(result.map(|s| s.clone()));
+        if let Some(tree) = self.flush_memtable.borrow().as_ref() {
+            if let Some(result) = tree.get(key) {
+                return Ok(Some(result.clone()));
             }
         }
 
         // Key not found in memory, query all files from the newest to the
         // oldest.
-        let _counter = self.number_of_sstable_reads.clone();
+        let _counter = self.number_of_sstable_reads.borrow().clone();
 
-        for i in self.read_sstable_indices.iter().rev() {
+        // Collect the indices, as compaction mutates read_sstable_indices.
+        let indices: Vec<usize> = self
+            .read_sstable_indices
+            .borrow()
+            .iter()
+            .rev()
+            .map(|i| *i)
+            .collect();
+        for i in indices {
             let (data_filename, index_filename) =
-                Self::get_data_file_paths(self.dir.clone(), *i);
+                Self::get_data_file_paths(self.dir.clone(), i);
 
             let data_file = BufferedFile::open(&data_filename).await?;
             let index_file = BufferedFile::open(&index_filename).await?;
@@ -421,13 +436,14 @@ impl LSMTree {
     }
 
     pub async fn set(
-        &mut self,
+        &self,
         key: Vec<u8>,
         value: Vec<u8>,
     ) -> glommio::Result<Option<Vec<u8>>, ()> {
         // Write to memtable in memory.
         let result = self
             .active_memtable
+            .borrow_mut()
             .set(key.clone(), value.clone())
             .unwrap();
 
@@ -438,74 +454,82 @@ impl LSMTree {
     }
 
     pub async fn delete(
-        &mut self,
+        &self,
         key: Vec<u8>,
     ) -> glommio::Result<Option<Vec<u8>>, ()> {
         self.set(key, TOMBSTONE).await
     }
 
-    async fn write_to_wal(&mut self, entry: &Entry) -> glommio::Result<(), ()> {
+    async fn write_to_wal(&self, entry: &Entry) -> glommio::Result<(), ()> {
         let buf = bincode_options().serialize(entry).unwrap();
         let size = buf.len() as u64;
 
         let size_padded = size + self.block_size - size % self.block_size;
-        let offset = self.wal_offset;
-        self.wal_offset += size_padded;
+        let offset = self.wal_offset.get();
+        self.wal_offset.set(offset + size_padded);
 
-        self.wal_file.write_at(buf, offset).await?;
+        let file = self.wal_file.borrow().clone();
+        file.write_at(buf, offset).await?;
         // TODO: fdatasync to ensure durability
 
         Ok(())
     }
 
-    pub async fn flush(&mut self) -> glommio::Result<(), ()> {
+    pub async fn flush(&self) -> glommio::Result<(), ()> {
         // Wait until the previous flush is finished.
-        while self.flush_memtable.is_some() {
+        while self.flush_memtable.borrow().is_some() {
             futures_lite::future::yield_now().await;
         }
 
-        if self.active_memtable.len() == 0 {
+        if self.active_memtable.borrow().len() == 0 {
             return Ok(());
         }
 
-        let mut memtable_to_flush =
-            RedBlackTree::with_capacity(self.active_memtable.capacity());
-        std::mem::swap(&mut memtable_to_flush, &mut self.active_memtable);
-        self.flush_memtable = Some(memtable_to_flush);
+        let memtable_to_flush = RedBlackTree::with_capacity(
+            self.active_memtable.borrow().capacity(),
+        );
+        self.flush_memtable
+            .replace(Some(self.active_memtable.replace(memtable_to_flush)));
 
         let mut flush_wal_path = self.dir.clone();
         flush_wal_path.push(format!(
             "{:01$}.memtable",
-            self.memtable_index, INDEX_PADDING
+            self.memtable_index.get(),
+            INDEX_PADDING
         ));
 
-        self.memtable_index += 2;
+        self.memtable_index.set(self.memtable_index.get() + 2);
 
         let mut next_wal_path = self.dir.clone();
         next_wal_path.push(format!(
             "{:01$}.memtable",
-            self.memtable_index, INDEX_PADDING
+            self.memtable_index.get(),
+            INDEX_PADDING
         ));
-        self.wal_file = BufferedFile::create(&next_wal_path).await?;
-        self.wal_offset = 0;
+        self.wal_file
+            .replace(Rc::new(BufferedFile::create(&next_wal_path).await?));
+        self.wal_offset.set(0);
 
         let (data_filename, index_filename) = Self::get_data_file_paths(
             self.dir.clone(),
-            self.write_sstable_index,
+            self.write_sstable_index.get(),
         );
         let data_file = DmaFile::create(&data_filename).await?;
         let index_file = DmaFile::create(&index_filename).await?;
 
         Self::flush_memtable_to_disk(
-            self.flush_memtable.as_ref().unwrap(),
+            self.flush_memtable.borrow().as_ref().unwrap(),
             data_file,
             index_file,
         )
         .await?;
 
-        self.flush_memtable = None;
-        self.read_sstable_indices.push(self.write_sstable_index);
-        self.write_sstable_index += 2;
+        self.flush_memtable.replace(None);
+        self.read_sstable_indices
+            .borrow_mut()
+            .push(self.write_sstable_index.get());
+        self.write_sstable_index
+            .set(self.write_sstable_index.get() + 2);
 
         std::fs::remove_file(&flush_wal_path)?;
 
@@ -571,7 +595,7 @@ impl LSMTree {
     // Compact all sstables in the given list of sstable files, write the result
     // to the output file given.
     pub async fn compact(
-        &mut self,
+        &self,
         indices_to_compact: Vec<usize>,
         output_index: usize,
         remove_tombstones: bool,
@@ -692,13 +716,16 @@ impl LSMTree {
         compact_action_writer.write_all(&action_encoded).await?;
         compact_action_writer.close().await?;
 
-        let counter = self.number_of_sstable_reads.clone();
-        self.number_of_sstable_reads = Rc::new(PhantomData::<usize>);
+        let counter = self.number_of_sstable_reads.borrow().clone();
+        self.number_of_sstable_reads
+            .replace(Rc::new(PhantomData::<usize>));
 
-        self.read_sstable_indices
-            .retain(|x| !indices_to_compact.contains(x));
-        self.read_sstable_indices.push(output_index);
-        self.read_sstable_indices.sort();
+        {
+            let mut indices = self.read_sstable_indices.borrow_mut();
+            indices.retain(|x| !indices_to_compact.contains(x));
+            indices.push(output_index);
+            indices.sort();
+        }
 
         for (source_path, destination_path) in &action.renames {
             std::fs::rename(source_path, destination_path)?;
@@ -778,7 +805,7 @@ mod tests {
     async fn _set_and_get_memtable(dir: PathBuf) -> std::io::Result<()> {
         // New tree.
         {
-            let mut tree = LSMTree::open_or_create(dir.clone()).await?;
+            let tree = LSMTree::open_or_create(dir.clone()).await?;
             tree.set(vec![100], vec![200]).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
             assert_eq!(tree.get(&vec![0]).await?, None);
@@ -802,8 +829,8 @@ mod tests {
     async fn _set_and_get_sstable(dir: PathBuf) -> std::io::Result<()> {
         // New tree.
         {
-            let mut tree = LSMTree::open_or_create(dir.clone()).await?;
-            assert_eq!(tree.write_sstable_index, 0);
+            let tree = LSMTree::open_or_create(dir.clone()).await?;
+            assert_eq!(tree.write_sstable_index.get(), 0);
 
             let values: Vec<Vec<u8>> = (0..TREE_CAPACITY as u16)
                 .map(|n| n.to_le_bytes().to_vec())
@@ -814,8 +841,8 @@ mod tests {
             }
             tree.flush().await?;
 
-            assert_eq!(tree.active_memtable.len(), 0);
-            assert_eq!(tree.write_sstable_index, 2);
+            assert_eq!(tree.active_memtable.borrow().len(), 0);
+            assert_eq!(tree.write_sstable_index.get(), 2);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
             assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
@@ -824,8 +851,8 @@ mod tests {
         // Reopening the tree.
         {
             let tree = LSMTree::open_or_create(dir).await?;
-            assert_eq!(tree.active_memtable.len(), 0);
-            assert_eq!(tree.write_sstable_index, 2);
+            assert_eq!(tree.active_memtable.borrow().len(), 0);
+            assert_eq!(tree.write_sstable_index.get(), 2);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
             assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
@@ -842,9 +869,9 @@ mod tests {
     async fn _get_after_compaction(dir: PathBuf) -> std::io::Result<()> {
         // New tree.
         {
-            let mut tree = LSMTree::open_or_create(dir.clone()).await?;
-            assert_eq!(tree.write_sstable_index, 0);
-            assert_eq!(tree.sstable_indices(), &vec![]);
+            let tree = LSMTree::open_or_create(dir.clone()).await?;
+            assert_eq!(tree.write_sstable_index.get(), 0);
+            assert_eq!(*tree.sstable_indices(), vec![]);
 
             let values: Vec<Vec<u8>> = (0..((TREE_CAPACITY as u16) * 3) - 2)
                 .map(|n| n.to_le_bytes().to_vec())
@@ -860,12 +887,12 @@ mod tests {
             tree.delete(vec![100, 2]).await?;
             tree.flush().await?;
 
-            assert_eq!(tree.sstable_indices(), &vec![0, 2, 4]);
+            assert_eq!(*tree.sstable_indices(), vec![0, 2, 4]);
 
             tree.compact(vec![0, 2, 4], 5, true).await?;
 
-            assert_eq!(tree.sstable_indices(), &vec![5]);
-            assert_eq!(tree.write_sstable_index, 6);
+            assert_eq!(*tree.sstable_indices(), vec![5]);
+            assert_eq!(tree.write_sstable_index.get(), 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
             assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
@@ -876,8 +903,8 @@ mod tests {
         // Reopening the tree.
         {
             let tree = LSMTree::open_or_create(dir).await?;
-            assert_eq!(tree.sstable_indices(), &vec![5]);
-            assert_eq!(tree.write_sstable_index, 6);
+            assert_eq!(*tree.sstable_indices(), vec![5]);
+            assert_eq!(tree.write_sstable_index.get(), 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
             assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
