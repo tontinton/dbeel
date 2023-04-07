@@ -94,6 +94,22 @@ where
     Ok(())
 }
 
+fn extract_field(map: &Value, field_name: &str) -> Result<Vec<u8>> {
+    let field = &map[field_name];
+
+    if field.is_nil() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("field '{}' is missing", field_name),
+        ));
+    }
+
+    let mut field_encoded: Vec<u8> = Vec::new();
+    write_value(&mut field_encoded, field).unwrap();
+
+    Ok(field_encoded)
+}
+
 async fn handle_request(
     tree: Rc<LSMTree>,
     client: &mut TcpStream,
@@ -114,64 +130,25 @@ async fn handle_request(
         let map = Value::Map(map_vec.to_vec());
         match map["type"].as_str() {
             Some("set") => {
-                let key = &map["key"];
-                let value = &map["value"];
+                let key = extract_field(&map, "key")?;
+                let value = extract_field(&map, "value")?;
 
-                if key.is_nil() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "field 'key' is missing",
-                    ));
-                }
-                if value.is_nil() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "field 'value' is missing",
-                    ));
-                }
-
-                let mut key_encoded: Vec<u8> = Vec::new();
-                write_value(&mut key_encoded, key).unwrap();
-                let mut value_encoded: Vec<u8> = Vec::new();
-                write_value(&mut value_encoded, value).unwrap();
-
-                with_write(tree.clone(), async move {
-                    tree.set(key_encoded, value_encoded).await
-                })
+                with_write(
+                    tree.clone(),
+                    async move { tree.set(key, value).await },
+                )
                 .await?;
             }
             Some("delete") => {
-                let key = &map["key"];
+                let key = extract_field(&map, "key")?;
 
-                if key.is_nil() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "field 'key' is missing",
-                    ));
-                }
-
-                let mut key_encoded: Vec<u8> = Vec::new();
-                write_value(&mut key_encoded, key).unwrap();
-
-                with_write(tree.clone(), async move {
-                    tree.delete(key_encoded).await
-                })
-                .await?;
+                with_write(tree.clone(), async move { tree.delete(key).await })
+                    .await?;
             }
             Some("get") => {
-                let key = &map["key"];
+                let key = extract_field(&map, "key")?;
 
-                if key.is_nil() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "field 'key' is missing",
-                    ));
-                }
-
-                let mut key_encoded: Vec<u8> = Vec::new();
-                write_value(&mut key_encoded, key).unwrap();
-
-                return match tree.get(&key_encoded).await? {
+                return match tree.get(&key).await? {
                     Some(value) if value != TOMBSTONE => Ok(Some(value)),
                     _ => Err(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
