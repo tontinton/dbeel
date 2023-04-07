@@ -44,8 +44,10 @@ struct Args {
     requests: usize,
 }
 
+const COLLECTION_NAME: &str = "dbil";
+
 async fn run_benchmark(
-    address: (String, u16),
+    address: &(String, u16),
     num_clients: usize,
     num_requests: usize,
     set: bool,
@@ -65,6 +67,7 @@ async fn run_benchmark(
             .name(format!("client-{}", client_index).as_str())
             .spawn(move || async move {
                 let mut stats = Vec::new();
+                let request_type = if set { "set" } else { "get" };
 
                 let mut indices: Vec<usize> = (0..num_requests).collect();
                 indices.shuffle(&mut thread_rng());
@@ -73,33 +76,27 @@ async fn run_benchmark(
                     let mut data_encoded: Vec<u8> = Vec::new();
                     let key = format!("{}_{}", client_index, request_index);
                     let key_str = key.as_str();
-                    let map = if set {
-                        Value::Map(vec![
-                            (
-                                Value::String("type".into()),
-                                Value::String("set".into()),
-                            ),
-                            (
-                                Value::String("key".into()),
-                                Value::String(key_str.into()),
-                            ),
-                            (
-                                Value::String("value".into()),
-                                Value::String(key_str.into()),
-                            ),
-                        ])
-                    } else {
-                        Value::Map(vec![
-                            (
-                                Value::String("type".into()),
-                                Value::String("get".into()),
-                            ),
-                            (
-                                Value::String("key".into()),
-                                Value::String(key_str.into()),
-                            ),
-                        ])
+                    let mut parameters = vec![
+                        (
+                            Value::String("type".into()),
+                            Value::String(request_type.into()),
+                        ),
+                        (
+                            Value::String("collection".into()),
+                            Value::String(COLLECTION_NAME.into()),
+                        ),
+                        (
+                            Value::String("key".into()),
+                            Value::String(key_str.into()),
+                        ),
+                    ];
+                    if set {
+                        parameters.push((
+                            Value::String("value".into()),
+                            Value::String(key_str.into()),
+                        ));
                     };
+                    let map = Value::Map(parameters);
                     write_value(&mut data_encoded, &map).unwrap();
 
                     let start_time = Instant::now();
@@ -154,6 +151,51 @@ async fn run_benchmark(
         .collect()
 }
 
+async fn send_collection_request(
+    address: &(String, u16),
+    request_type: &str,
+) -> std::io::Result<()> {
+    let map = Value::Map(vec![
+        (
+            Value::String("type".into()),
+            Value::String(request_type.into()),
+        ),
+        (
+            Value::String("name".into()),
+            Value::String(COLLECTION_NAME.into()),
+        ),
+    ]);
+    let mut data_encoded: Vec<u8> = Vec::new();
+    write_value(&mut data_encoded, &map).unwrap();
+
+    let mut stream = TcpStream::connect(address).await.unwrap();
+
+    let size_buffer = (data_encoded.len() as u16).to_le_bytes();
+    stream.write_all(&size_buffer).await?;
+    stream.write_all(&data_encoded).await?;
+
+    let mut response_buffer = Vec::new();
+    stream.read_to_end(&mut response_buffer).await?;
+
+    let response = read_value_ref(&mut &response_buffer[..]).unwrap();
+    if response != ValueRef::String("OK".into()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Response not OK: {}", response),
+        ));
+    }
+
+    Ok(())
+}
+
+async fn create_collection(address: &(String, u16)) -> std::io::Result<()> {
+    send_collection_request(address, "create_collection").await
+}
+
+async fn drop_collection(address: &(String, u16)) -> std::io::Result<()> {
+    send_collection_request(address, "drop_collection").await
+}
+
 fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
     let mut stats: Vec<Duration> = client_stats
         .into_iter()
@@ -184,21 +226,20 @@ fn main() {
     let handle = builder
         .name("bb-bench")
         .spawn(move || async move {
-            let set_results = run_benchmark(
-                (args.hostname.clone(), args.port),
-                args.clients,
-                args.requests,
-                true,
-            )
-            .await;
+            let address = (args.hostname.clone(), args.port);
+            create_collection(&address).await.unwrap();
 
-            let get_results = run_benchmark(
-                (args.hostname, args.port),
-                args.clients,
-                args.requests,
-                false,
-            )
-            .await;
+            let set_results =
+                run_benchmark(&address, args.clients, args.requests, true)
+                    .await;
+
+            let get_results =
+                run_benchmark(&address, args.clients, args.requests, false)
+                    .await;
+
+            if let Err(e) = drop_collection(&address).await {
+                eprintln!("Failed to drop collection: {}", e);
+            }
 
             (set_results, get_results)
         })

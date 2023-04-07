@@ -9,37 +9,61 @@ use glommio::{
 };
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
-use std::rc::Rc;
-use std::time::Duration;
+use std::{cell::RefCell, time::Duration};
+use std::{collections::HashMap, rc::Rc};
 use std::{env::temp_dir, io::Result};
 
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 8;
 
-async fn run_compaction_loop(tree: Rc<LSMTree>) {
-    loop {
-        let (even, mut odd): (Vec<usize>, Vec<usize>) =
-            tree.sstable_indices().iter().partition(|i| *i % 2 == 0);
+// Satet shared between all coroutines that run on the same core.
+struct PerCoreState {
+    trees: HashMap<String, Rc<LSMTree>>,
+}
 
-        if even.len() >= COMPACTION_FACTOR {
-            let new_index = even[even.len() - 1] + 1;
-            if let Err(e) = tree.compact(even, new_index, odd.is_empty()).await
-            {
-                eprintln!("Failed to compact files: {}", e);
-            }
-            continue;
+impl PerCoreState {
+    fn new() -> Self {
+        Self {
+            trees: HashMap::new(),
         }
+    }
+}
 
-        if odd.len() >= COMPACTION_FACTOR && even.len() >= 1 {
-            debug_assert!(even[0] > odd[odd.len() - 1]);
+type SharedPerCoreState = Rc<RefCell<PerCoreState>>;
 
-            odd.push(even[0]);
+async fn run_compaction_loop(state: SharedPerCoreState) {
+    loop {
+        let trees: Vec<Rc<LSMTree>> =
+            state.borrow().trees.values().map(|t| t.clone()).collect();
+        for tree in trees {
+            'current_tree_compaction: loop {
+                let (even, mut odd): (Vec<usize>, Vec<usize>) =
+                    tree.sstable_indices().iter().partition(|i| *i % 2 == 0);
 
-            let new_index = even[0] + 1;
-            if let Err(e) = tree.compact(odd, new_index, true).await {
-                eprintln!("Failed to compact files: {}", e);
+                if even.len() >= COMPACTION_FACTOR {
+                    let new_index = even[even.len() - 1] + 1;
+                    if let Err(e) =
+                        tree.compact(even, new_index, odd.is_empty()).await
+                    {
+                        eprintln!("Failed to compact files: {}", e);
+                    }
+                    continue 'current_tree_compaction;
+                }
+
+                if odd.len() >= COMPACTION_FACTOR && even.len() >= 1 {
+                    debug_assert!(even[0] > odd[odd.len() - 1]);
+
+                    odd.push(even[0]);
+
+                    let new_index = even[0] + 1;
+                    if let Err(e) = tree.compact(odd, new_index, true).await {
+                        eprintln!("Failed to compact files: {}", e);
+                    }
+                    continue 'current_tree_compaction;
+                }
+
+                break 'current_tree_compaction;
             }
-            continue;
         }
 
         sleep(Duration::from_millis(10)).await;
@@ -94,7 +118,7 @@ where
     Ok(())
 }
 
-fn extract_field(map: &Value, field_name: &str) -> Result<Vec<u8>> {
+fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
     let field = &map[field_name];
 
     if field.is_nil() {
@@ -104,14 +128,41 @@ fn extract_field(map: &Value, field_name: &str) -> Result<Vec<u8>> {
         ));
     }
 
+    Ok(field)
+}
+
+fn extract_field_as_str(map: &Value, field_name: &str) -> Result<String> {
+    Ok(extract_field(map, field_name)?
+        .as_str()
+        .ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unsupported request",
+        ))?
+        .to_string())
+}
+
+fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
+    let field = extract_field(map, field_name)?;
+
     let mut field_encoded: Vec<u8> = Vec::new();
     write_value(&mut field_encoded, field).unwrap();
 
     Ok(field_encoded)
 }
 
+fn get_collection(state: &PerCoreState, name: &String) -> Result<Rc<LSMTree>> {
+    state
+        .trees
+        .get(name)
+        .ok_or(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("collection '{}' not found", name),
+        ))
+        .map(|t| t.clone())
+}
+
 async fn handle_request(
-    tree: Rc<LSMTree>,
+    state: SharedPerCoreState,
     client: &mut TcpStream,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let size_buf = read_exactly(client, 2).await?;
@@ -129,9 +180,37 @@ async fn handle_request(
     if let Some(map_vec) = msgpack_request.as_map() {
         let map = Value::Map(map_vec.to_vec());
         match map["type"].as_str() {
+            Some("create_collection") => {
+                let name = extract_field_as_str(&map, "name")?;
+
+                if state.borrow().trees.contains_key(&name) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!("collection '{}' already exists", name),
+                    ));
+                }
+
+                let mut dir = temp_dir();
+                dir.push(&name);
+                let tree = Rc::new(LSMTree::open_or_create(dir).await?);
+                state.borrow_mut().trees.insert(name, tree);
+            }
+            Some("drop_collection") => {
+                let name = extract_field_as_str(&map, "name")?;
+
+                state.borrow_mut().trees.remove(&name).ok_or(
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("collection '{}' not found", name),
+                    ),
+                )?;
+            }
             Some("set") => {
-                let key = extract_field(&map, "key")?;
-                let value = extract_field(&map, "value")?;
+                let collection = extract_field_as_str(&map, "collection")?;
+                let key = extract_field_encoded(&map, "key")?;
+                let value = extract_field_encoded(&map, "value")?;
+
+                let tree = get_collection(&state.borrow(), &collection)?;
 
                 with_write(
                     tree.clone(),
@@ -140,13 +219,19 @@ async fn handle_request(
                 .await?;
             }
             Some("delete") => {
-                let key = extract_field(&map, "key")?;
+                let collection = extract_field_as_str(&map, "collection")?;
+                let key = extract_field_encoded(&map, "key")?;
+
+                let tree = get_collection(&state.borrow(), &collection)?;
 
                 with_write(tree.clone(), async move { tree.delete(key).await })
                     .await?;
             }
             Some("get") => {
-                let key = extract_field(&map, "key")?;
+                let collection = extract_field_as_str(&map, "collection")?;
+                let key = extract_field_encoded(&map, "key")?;
+
+                let tree = get_collection(&state.borrow(), &collection)?;
 
                 return match tree.get(&key).await? {
                     Some(value) if value != TOMBSTONE => Ok(Some(value)),
@@ -173,8 +258,8 @@ async fn handle_request(
     Ok(None)
 }
 
-async fn handle_client(tree: Rc<LSMTree>, client: &mut TcpStream) {
-    match handle_request(tree, client).await {
+async fn handle_client(state: SharedPerCoreState, client: &mut TcpStream) {
+    match handle_request(state, client).await {
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(&mut buf, &ValueRef::String("OK".into())).unwrap();
@@ -199,13 +284,10 @@ async fn handle_client(tree: Rc<LSMTree>, client: &mut TcpStream) {
 }
 
 async fn run_server() -> Result<()> {
-    let mut db_dir = temp_dir();
-    db_dir.push("dbil");
+    let state = Rc::new(RefCell::new(PerCoreState::new()));
 
-    let tree = Rc::new(LSMTree::open_or_create(db_dir).await?);
-
-    spawn_local(enclose!((tree.clone() => tree) async move {
-        run_compaction_loop(tree).await;
+    spawn_local(enclose!((state.clone() => state) async move {
+        run_compaction_loop(state).await;
     }))
     .detach();
 
@@ -213,8 +295,8 @@ async fn run_server() -> Result<()> {
     loop {
         match server.accept().await {
             Ok(mut client) => {
-                spawn_local(enclose!((tree.clone() => tree) async move {
-                    handle_client(tree, &mut client).await;
+                spawn_local(enclose!((state.clone() => state) async move {
+                    handle_client(state, &mut client).await;
                 }))
                 .detach();
             }
