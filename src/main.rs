@@ -1,5 +1,5 @@
 use dbil::lsm_tree::{LSMTree, TOMBSTONE};
-use futures_lite::{AsyncReadExt, AsyncWriteExt};
+use futures_lite::{AsyncReadExt, AsyncWriteExt, Future};
 use glommio::{
     enclose,
     net::{TcpListener, TcpStream},
@@ -70,26 +70,24 @@ async fn read_exactly(
     Ok(buf)
 }
 
-async fn write_to_tree(
-    tree: Rc<LSMTree>,
-    key: Vec<u8>,
-    value: Vec<u8>,
-) -> std::io::Result<()> {
+async fn with_write<F>(tree: Rc<LSMTree>, write_fn: F) -> std::io::Result<()>
+where
+    F: Future<Output = glommio::Result<Option<Vec<u8>>, ()>> + 'static,
+{
     // Wait for flush.
     while tree.memtable_full() {
         futures_lite::future::yield_now().await;
     }
 
-    tree.set(key, value).await?;
+    write_fn.await?;
 
     if tree.memtable_full() {
         // Capacity is full, flush memtable to disk.
-        spawn_local(enclose!((tree.clone() => tree) async move {
-            if let Err(e) = tree.flush().await
-            {
+        spawn_local(async move {
+            if let Err(e) = tree.flush().await {
                 eprintln!("Failed to flush memtable: {}", e);
             }
-        }))
+        })
         .detach();
     }
 
@@ -137,7 +135,10 @@ async fn handle_request(
                 let mut value_encoded: Vec<u8> = Vec::new();
                 write_value(&mut value_encoded, value).unwrap();
 
-                write_to_tree(tree, key_encoded, value_encoded).await?;
+                with_write(tree.clone(), async move {
+                    tree.set(key_encoded, value_encoded).await
+                })
+                .await?;
             }
             Some("delete") => {
                 let key = &map["key"];
@@ -152,7 +153,10 @@ async fn handle_request(
                 let mut key_encoded: Vec<u8> = Vec::new();
                 write_value(&mut key_encoded, key).unwrap();
 
-                write_to_tree(tree, key_encoded, TOMBSTONE).await?;
+                with_write(tree.clone(), async move {
+                    tree.delete(key_encoded).await
+                })
+                .await?;
             }
             Some("get") => {
                 let key = &map["key"];
