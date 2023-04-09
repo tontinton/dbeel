@@ -1,14 +1,4 @@
-use std::{
-    cell::{Cell, Ref, RefCell},
-    cmp::Ordering,
-    collections::BinaryHeap,
-    fs::DirEntry,
-    marker::PhantomData,
-    os::unix::prelude::MetadataExt,
-    path::PathBuf,
-    rc::Rc,
-};
-
+use crate::error::{Error, Result};
 use bincode::{
     config::{
         FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
@@ -23,6 +13,16 @@ use glommio::io::{
 use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::{
+    cell::{Cell, Ref, RefCell},
+    cmp::Ordering,
+    collections::BinaryHeap,
+    fs::DirEntry,
+    marker::PhantomData,
+    os::unix::prelude::MetadataExt,
+    path::PathBuf,
+    rc::Rc,
+};
 
 pub const TOMBSTONE: Vec<u8> = vec![];
 
@@ -110,32 +110,27 @@ async fn binary_search(
     data_file: &BufferedFile,
     index_file: &BufferedFile,
     key: &Vec<u8>,
-) -> glommio::Result<Option<Entry>, ()> {
-    let item_size = bincode_options()
-        .serialized_size(&EntryOffset::default())
-        .unwrap();
+) -> Result<Option<Entry>> {
+    let item_size =
+        bincode_options().serialized_size(&EntryOffset::default())?;
     let length = index_file.file_size().await? / item_size;
 
     let mut half = length / 2;
     let mut hind = length - 1;
     let mut lind = 0;
 
-    let mut current: EntryOffset = bincode_options()
-        .deserialize(
-            &index_file
-                .read_at(half * item_size, item_size as usize)
-                .await?,
-        )
-        .unwrap();
+    let mut current: EntryOffset = bincode_options().deserialize(
+        &index_file
+            .read_at(half * item_size, item_size as usize)
+            .await?,
+    )?;
 
     while lind <= hind {
-        let value: Entry = bincode_options()
-            .deserialize(
-                &data_file
-                    .read_at(current.entry_offset as u64, current.entry_size)
-                    .await?,
-            )
-            .unwrap();
+        let value: Entry = bincode_options().deserialize(
+            &data_file
+                .read_at(current.entry_offset as u64, current.entry_size)
+                .await?,
+        )?;
 
         match value.key.cmp(&key) {
             std::cmp::Ordering::Equal => {
@@ -150,16 +145,19 @@ async fn binary_search(
         }
 
         half = (hind + lind) / 2;
-        current = bincode_options()
-            .deserialize(
-                &index_file
-                    .read_at(half * item_size, item_size as usize)
-                    .await?,
-            )
-            .unwrap();
+        current = bincode_options().deserialize(
+            &index_file
+                .read_at(half * item_size, item_size as usize)
+                .await?,
+        )?;
     }
 
     Ok(None)
+}
+
+fn create_regex(pattern: &'static str) -> Result<Regex> {
+    Regex::new(pattern)
+        .map_err(|source| Error::RegexCreationError { source, pattern })
 }
 
 pub struct LSMTree {
@@ -190,14 +188,14 @@ pub struct LSMTree {
 }
 
 impl LSMTree {
-    pub async fn open_or_create(dir: PathBuf) -> std::io::Result<Self> {
+    pub async fn open_or_create(dir: PathBuf) -> Result<Self> {
         if !dir.is_dir() {
             std::fs::create_dir_all(&dir)?;
         }
 
-        let pattern = Regex::new(r#"^(\d+)\.compact_action"#).unwrap();
+        let pattern = create_regex(r#"^(\d+)\.compact_action"#)?;
         let compact_action_paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
-            .filter_map(Result::ok)
+            .filter_map(std::result::Result::ok)
             .filter(|entry| Self::get_first_capture(&pattern, &entry).is_some())
             .map(|entry| entry.path())
             .collect();
@@ -217,10 +215,10 @@ impl LSMTree {
             Self::remove_file_log_on_err(compact_action_path);
         }
 
-        let pattern = Regex::new(r#"^(\d+)\.data"#).unwrap();
+        let pattern = create_regex(r#"^(\d+)\.data"#)?;
         let data_file_indices = {
             let mut vec: Vec<usize> = std::fs::read_dir(&dir)?
-                .filter_map(Result::ok)
+                .filter_map(std::result::Result::ok)
                 .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
                 .collect();
             vec.sort();
@@ -233,10 +231,10 @@ impl LSMTree {
             .map(|i| (*i + 2 - (*i & 1)))
             .unwrap_or(0);
 
-        let pattern = Regex::new(r#"^(\d+)\.memtable"#).unwrap();
+        let pattern = create_regex(r#"^(\d+)\.memtable"#)?;
         let wal_indices: Vec<usize> = {
             let mut vec: Vec<usize> = std::fs::read_dir(&dir)?
-                .filter_map(Result::ok)
+                .filter_map(std::result::Result::ok)
                 .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
                 .collect();
             vec.sort();
@@ -323,7 +321,7 @@ impl LSMTree {
     async fn read_memtable_from_wal_file(
         wal_path: &PathBuf,
         block_size: u64,
-    ) -> std::io::Result<RedBlackTree<Vec<u8>, Vec<u8>>> {
+    ) -> Result<RedBlackTree<Vec<u8>, Vec<u8>>> {
         let mut memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
         let wal_file = BufferedFile::open(&wal_path).await?;
         let mut reader = StreamReaderBuilder::new(wal_file).build();
@@ -335,7 +333,7 @@ impl LSMTree {
             if let Ok(entry) =
                 bincode_options().deserialize_from::<_, Entry>(&mut cursor)
             {
-                memtable.set(entry.key, entry.value).unwrap();
+                memtable.set(entry.key, entry.value)?;
             }
             let pos = cursor.position();
             cursor.set_position(pos + block_size - pos % block_size);
@@ -344,7 +342,7 @@ impl LSMTree {
         Ok(memtable)
     }
 
-    fn run_compaction_action(action: &CompactionAction) -> std::io::Result<()> {
+    fn run_compaction_action(action: &CompactionAction) -> Result<()> {
         for path_to_delete in &action.deletes {
             if path_to_delete.exists() {
                 Self::remove_file_log_on_err(path_to_delete);
@@ -390,10 +388,7 @@ impl LSMTree {
             == self.active_memtable.borrow().len()
     }
 
-    pub async fn get(
-        &self,
-        key: &Vec<u8>,
-    ) -> glommio::Result<Option<Vec<u8>>, ()> {
+    pub async fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
         // Query the active tree first.
         if let Some(result) = self.active_memtable.borrow().get(key) {
             return Ok(Some(result.clone()));
@@ -439,13 +434,12 @@ impl LSMTree {
         &self,
         key: Vec<u8>,
         value: Vec<u8>,
-    ) -> glommio::Result<Option<Vec<u8>>, ()> {
+    ) -> Result<Option<Vec<u8>>> {
         // Write to memtable in memory.
         let result = self
             .active_memtable
             .borrow_mut()
-            .set(key.clone(), value.clone())
-            .unwrap();
+            .set(key.clone(), value.clone())?;
 
         // Write to WAL for persistance.
         self.write_to_wal(&Entry { key, value }).await?;
@@ -453,15 +447,12 @@ impl LSMTree {
         Ok(result)
     }
 
-    pub async fn delete(
-        &self,
-        key: Vec<u8>,
-    ) -> glommio::Result<Option<Vec<u8>>, ()> {
+    pub async fn delete(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         self.set(key, TOMBSTONE).await
     }
 
-    async fn write_to_wal(&self, entry: &Entry) -> glommio::Result<(), ()> {
-        let buf = bincode_options().serialize(entry).unwrap();
+    async fn write_to_wal(&self, entry: &Entry) -> Result<()> {
+        let buf = bincode_options().serialize(entry)?;
         let size = buf.len() as u64;
 
         let size_padded = size + self.block_size - size % self.block_size;
@@ -475,7 +466,7 @@ impl LSMTree {
         Ok(())
     }
 
-    pub async fn flush(&self) -> glommio::Result<(), ()> {
+    pub async fn flush(&self) -> Result<()> {
         // Wait until the previous flush is finished.
         while self.flush_memtable.borrow().is_some() {
             futures_lite::future::yield_now().await;
@@ -541,17 +532,14 @@ impl LSMTree {
         offset: u64,
         data_writer: &mut (impl AsyncWriteExt + std::marker::Unpin),
         index_writer: &mut (impl AsyncWriteExt + std::marker::Unpin),
-    ) -> std::io::Result<usize> {
-        let data_encoded = bincode_options().serialize(&entry).unwrap();
-        if data_encoded == [2, 0, 0, 0, 0, 0, 0, 0, 70, 8, 2, 0] {
-            panic!("{:?}: {:?}", entry.key, entry.value);
-        }
+    ) -> Result<usize> {
+        let data_encoded = bincode_options().serialize(&entry)?;
         let entry_size = data_encoded.len();
         let entry_index = EntryOffset {
             entry_offset: offset,
             entry_size,
         };
-        let index_encoded = bincode_options().serialize(&entry_index).unwrap();
+        let index_encoded = bincode_options().serialize(&entry_index)?;
 
         data_writer.write_all(&data_encoded).await?;
         index_writer.write_all(&index_encoded).await?;
@@ -562,7 +550,7 @@ impl LSMTree {
         memtable: &RedBlackTree<Vec<u8>, Vec<u8>>,
         data_file: DmaFile,
         index_file: DmaFile,
-    ) -> glommio::Result<(), ()> {
+    ) -> Result<()> {
         let mut data_write_stream = DmaStreamWriterBuilder::new(data_file)
             .with_write_behind(10)
             .with_buffer_size(512)
@@ -599,7 +587,7 @@ impl LSMTree {
         indices_to_compact: Vec<usize>,
         output_index: usize,
         remove_tombstones: bool,
-    ) -> std::io::Result<()> {
+    ) -> Result<()> {
         let sstable_paths: Vec<(PathBuf, PathBuf)> = indices_to_compact
             .iter()
             .map(|i| Self::get_data_file_paths(self.dir.clone(), *i))
@@ -627,9 +615,8 @@ impl LSMTree {
         let mut compact_index_writer =
             StreamWriterBuilder::new(compact_index_file).build();
 
-        let item_size = bincode_options()
-            .serialized_size(&EntryOffset::default())
-            .unwrap();
+        let item_size =
+            bincode_options().serialized_size(&EntryOffset::default())?;
 
         let mut offset_bytes = vec![0; item_size as usize];
         let mut heap = BinaryHeap::new();
@@ -702,7 +689,7 @@ impl LSMTree {
             ],
             deletes: files_to_delete,
         };
-        let action_encoded = bincode_options().serialize(&action).unwrap();
+        let action_encoded = bincode_options().serialize(&action)?;
 
         let mut compact_action_path = self.dir.clone();
         compact_action_path.push(format!(
@@ -752,13 +739,13 @@ impl LSMTree {
         data_reader: &mut StreamReader,
         index_reader: &mut StreamReader,
         offset_bytes: &mut Vec<u8>,
-    ) -> std::io::Result<Entry> {
+    ) -> Result<Entry> {
         index_reader.read_exact(offset_bytes).await?;
         let entry_offset: EntryOffset =
-            bincode_options().deserialize(&offset_bytes).unwrap();
+            bincode_options().deserialize(&offset_bytes)?;
         let mut data_bytes = vec![0; entry_offset.entry_size];
         data_reader.read_exact(&mut data_bytes).await?;
-        let entry: Entry = bincode_options().deserialize(&data_bytes).unwrap();
+        let entry: Entry = bincode_options().deserialize(&data_bytes)?;
         Ok(entry)
     }
 
@@ -784,7 +771,7 @@ mod tests {
 
     use super::*;
 
-    fn run_with_glommio<G, F, T>(fut_gen: G) -> std::io::Result<()>
+    fn run_with_glommio<G, F, T>(fut_gen: G) -> Result<()>
     where
         G: FnOnce(PathBuf) -> F + Send + 'static,
         F: Future<Output = T> + 'static,
@@ -802,7 +789,7 @@ mod tests {
         Ok(())
     }
 
-    async fn _set_and_get_memtable(dir: PathBuf) -> std::io::Result<()> {
+    async fn _set_and_get_memtable(dir: PathBuf) -> Result<()> {
         // New tree.
         {
             let tree = LSMTree::open_or_create(dir.clone()).await?;
@@ -822,11 +809,11 @@ mod tests {
     }
 
     #[test]
-    fn set_and_get_memtable() -> std::io::Result<()> {
+    fn set_and_get_memtable() -> Result<()> {
         run_with_glommio(_set_and_get_memtable)
     }
 
-    async fn _set_and_get_sstable(dir: PathBuf) -> std::io::Result<()> {
+    async fn _set_and_get_sstable(dir: PathBuf) -> Result<()> {
         // New tree.
         {
             let tree = LSMTree::open_or_create(dir.clone()).await?;
@@ -862,11 +849,11 @@ mod tests {
     }
 
     #[test]
-    fn set_and_get_sstable() -> std::io::Result<()> {
+    fn set_and_get_sstable() -> Result<()> {
         run_with_glommio(_set_and_get_sstable)
     }
 
-    async fn _get_after_compaction(dir: PathBuf) -> std::io::Result<()> {
+    async fn _get_after_compaction(dir: PathBuf) -> Result<()> {
         // New tree.
         {
             let tree = LSMTree::open_or_create(dir.clone()).await?;
@@ -916,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn get_after_compaction() -> std::io::Result<()> {
+    fn get_after_compaction() -> Result<()> {
         run_with_glommio(_get_after_compaction)
     }
 }

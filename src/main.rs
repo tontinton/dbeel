@@ -1,4 +1,7 @@
-use dbil::lsm_tree::{LSMTree, TOMBSTONE};
+use dbil::{
+    error::{Error, Result},
+    lsm_tree::{LSMTree, TOMBSTONE},
+};
 use futures_lite::{AsyncReadExt, AsyncWriteExt, Future};
 use glommio::{
     enclose,
@@ -9,9 +12,9 @@ use glommio::{
 };
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
+use std::env::temp_dir;
 use std::{cell::RefCell, time::Duration};
 use std::{collections::HashMap, rc::Rc};
-use std::{env::temp_dir, io::Result};
 
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 8;
@@ -94,9 +97,9 @@ async fn read_exactly(
     Ok(buf)
 }
 
-async fn with_write<F>(tree: Rc<LSMTree>, write_fn: F) -> std::io::Result<()>
+async fn with_write<F>(tree: Rc<LSMTree>, write_fn: F) -> Result<()>
 where
-    F: Future<Output = glommio::Result<Option<Vec<u8>>, ()>> + 'static,
+    F: Future<Output = Result<Option<Vec<u8>>>> + 'static,
 {
     // Wait for flush.
     while tree.memtable_full() {
@@ -122,10 +125,7 @@ fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
     let field = &map[field_name];
 
     if field.is_nil() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("field '{}' is missing", field_name),
-        ));
+        return Err(Error::MissingField(field_name.to_string()));
     }
 
     Ok(field)
@@ -134,10 +134,7 @@ fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
 fn extract_field_as_str(map: &Value, field_name: &str) -> Result<String> {
     Ok(extract_field(map, field_name)?
         .as_str()
-        .ok_or(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "unsupported request",
-        ))?
+        .ok_or(Error::MissingField(field_name.to_string()))?
         .to_string())
 }
 
@@ -145,7 +142,7 @@ fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
     let field = extract_field(map, field_name)?;
 
     let mut field_encoded: Vec<u8> = Vec::new();
-    write_value(&mut field_encoded, field).unwrap();
+    write_value(&mut field_encoded, field)?;
 
     Ok(field_encoded)
 }
@@ -154,29 +151,19 @@ fn get_collection(state: &PerCoreState, name: &String) -> Result<Rc<LSMTree>> {
     state
         .trees
         .get(name)
-        .ok_or(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("collection '{}' not found", name),
-        ))
+        .ok_or(Error::CollectionNotFound(name.to_string()))
         .map(|t| t.clone())
 }
 
 async fn handle_request(
     state: SharedPerCoreState,
     client: &mut TcpStream,
-) -> std::io::Result<Option<Vec<u8>>> {
+) -> Result<Option<Vec<u8>>> {
     let size_buf = read_exactly(client, 2).await?;
     let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
     let request_buf = read_exactly(client, size.into()).await?;
 
-    let msgpack_request = read_value_ref(&mut &request_buf[..])
-        .map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "could not parse msgpack",
-            )
-        })?
-        .to_owned();
+    let msgpack_request = read_value_ref(&mut &request_buf[..])?.to_owned();
     if let Some(map_vec) = msgpack_request.as_map() {
         let map = Value::Map(map_vec.to_vec());
         match map["type"].as_str() {
@@ -184,10 +171,7 @@ async fn handle_request(
                 let name = extract_field_as_str(&map, "name")?;
 
                 if state.borrow().trees.contains_key(&name) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
-                        format!("collection '{}' already exists", name),
-                    ));
+                    return Err(Error::CollectionAlreadyExists(name));
                 }
 
                 let mut dir = temp_dir();
@@ -198,12 +182,11 @@ async fn handle_request(
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
 
-                state.borrow_mut().trees.remove(&name).ok_or(
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("collection '{}' not found", name),
-                    ),
-                )?;
+                state
+                    .borrow_mut()
+                    .trees
+                    .remove(&name)
+                    .ok_or(Error::CollectionNotFound(name))?;
             }
             Some("set") => {
                 let collection = extract_field_as_str(&map, "collection")?;
@@ -235,38 +218,35 @@ async fn handle_request(
 
                 return match tree.get(&key).await? {
                     Some(value) if value != TOMBSTONE => Ok(Some(value)),
-                    _ => Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "key not found",
-                    )),
+                    _ => Err(Error::KeyNotFound),
                 };
             }
+            Some(name) => {
+                return Err(Error::UnsupportedField(name.to_string()));
+            }
             _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "unsupported request",
-                ));
+                return Err(Error::BadFieldType("type".to_string()));
             }
         }
     } else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "request should be a map",
-        ));
+        return Err(Error::BadFieldType("document".to_string()));
     }
 
     Ok(None)
 }
 
-async fn handle_client(state: SharedPerCoreState, client: &mut TcpStream) {
+async fn handle_client(
+    state: SharedPerCoreState,
+    client: &mut TcpStream,
+) -> Result<()> {
     match handle_request(state, client).await {
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
-            write_value_ref(&mut buf, &ValueRef::String("OK".into())).unwrap();
-            client.write_all(&buf).await.unwrap();
+            write_value_ref(&mut buf, &ValueRef::String("OK".into()))?;
+            client.write_all(&buf).await?;
         }
         Ok(Some(buf)) => {
-            client.write_all(&buf).await.unwrap();
+            client.write_all(&buf).await?;
         }
         Err(e) => {
             let error_string = format!("Error: {}", e);
@@ -276,11 +256,12 @@ async fn handle_client(state: SharedPerCoreState, client: &mut TcpStream) {
             write_value_ref(
                 &mut buf,
                 &ValueRef::String(error_string.as_str().into()),
-            )
-            .unwrap();
-            client.write_all(&buf).await.unwrap();
+            )?;
+            client.write_all(&buf).await?;
         }
     }
+
+    Ok(())
 }
 
 async fn run_server() -> Result<()> {
@@ -296,7 +277,7 @@ async fn run_server() -> Result<()> {
         match server.accept().await {
             Ok(mut client) => {
                 spawn_local(enclose!((state.clone() => state) async move {
-                    handle_client(state, &mut client).await;
+                    handle_client(state, &mut client).await.unwrap();
                 }))
                 .detach();
             }
