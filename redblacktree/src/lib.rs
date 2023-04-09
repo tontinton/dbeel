@@ -2,6 +2,13 @@ use core::fmt::Debug;
 use std::{
     alloc::Layout, cmp::Ordering, collections::VecDeque, marker, ops::Index,
 };
+use thiserror::Error;
+
+#[derive(Error, Debug, PartialEq)]
+pub enum Error {
+    #[error("cannot insert, reached capacity limit of: {0}")]
+    ReachedCapacity(usize),
+}
 
 #[derive(Debug, PartialEq)]
 enum Color {
@@ -517,13 +524,13 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         self.arena.capacity()
     }
 
-    fn alloc_node(&mut self, node: Node<K, V>) -> Option<NodePtr<K, V>> {
+    fn alloc_node(&mut self, node: Node<K, V>) -> Result<NodePtr<K, V>, Error> {
         if self.capacity() == self.len() {
-            return None;
+            return Err(Error::ReachedCapacity(self.capacity()));
         }
         self.arena.push(node);
         unsafe {
-            Some(NodePtr(self.arena.as_mut_ptr().add(self.arena.len() - 1)))
+            Ok(NodePtr(self.arena.as_mut_ptr().add(self.arena.len() - 1)))
         }
     }
 
@@ -556,25 +563,11 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         !node_ptr.is_null()
     }
 
-    fn capacity_limit_string(&self) -> String {
-        format!(
-            "cannot insert, reached capacity limit of: {}",
-            self.capacity()
-        )
-    }
-
-    pub fn set(&mut self, key: K, value: V) -> Result<Option<V>, String> {
+    pub fn set(&mut self, key: K, value: V) -> Result<Option<V>, Error> {
         let mut node_ptr = self.root;
         if node_ptr.is_null() {
-            let allocated =
-                self.alloc_node(Node::new(key, value, Color::Black));
-            return match allocated {
-                Some(root) => {
-                    self.root = root;
-                    Ok(None)
-                }
-                None => Err(self.capacity_limit_string()),
-            };
+            self.root = self.alloc_node(Node::new(key, value, Color::Black))?;
+            return Ok(None);
         }
 
         loop {
@@ -588,16 +581,12 @@ impl<K: Ord, V> RedBlackTree<K, V> {
             };
 
             if next_ptr.is_null() {
-                let allocated = self.alloc_node(Node::new_with_parent(
+                let new_node_ptr = self.alloc_node(Node::new_with_parent(
                     key,
                     value,
                     Color::Red,
                     node_ptr,
-                ));
-                if allocated.is_none() {
-                    return Err(self.capacity_limit_string());
-                }
-                let new_node_ptr = allocated.unwrap();
+                ))?;
 
                 if left {
                     node.left = new_node_ptr;
