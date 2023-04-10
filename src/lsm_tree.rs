@@ -106,55 +106,6 @@ fn bincode_options() -> WithOtherIntEncoding<
         .with_fixint_encoding();
 }
 
-async fn binary_search(
-    data_file: &BufferedFile,
-    index_file: &BufferedFile,
-    key: &Vec<u8>,
-) -> Result<Option<Entry>> {
-    let item_size =
-        bincode_options().serialized_size(&EntryOffset::default())?;
-    let length = index_file.file_size().await? / item_size;
-
-    let mut half = length / 2;
-    let mut hind = length - 1;
-    let mut lind = 0;
-
-    let mut current: EntryOffset = bincode_options().deserialize(
-        &index_file
-            .read_at(half * item_size, item_size as usize)
-            .await?,
-    )?;
-
-    while lind <= hind {
-        let value: Entry = bincode_options().deserialize(
-            &data_file
-                .read_at(current.entry_offset as u64, current.entry_size)
-                .await?,
-        )?;
-
-        match value.key.cmp(&key) {
-            std::cmp::Ordering::Equal => {
-                return Ok(Some(value));
-            }
-            std::cmp::Ordering::Less => lind = half + 1,
-            std::cmp::Ordering::Greater => hind = half - 1,
-        }
-
-        if half == 0 || half == length {
-            break;
-        }
-
-        half = (hind + lind) / 2;
-        current = bincode_options().deserialize(
-            &index_file
-                .read_at(half * item_size, item_size as usize)
-                .await?,
-        )?;
-    }
-
-    Ok(None)
-}
-
 fn create_regex(pattern: &'static str) -> Result<Regex> {
     Regex::new(pattern)
         .map_err(|source| Error::RegexCreationError { source, pattern })
@@ -392,6 +343,55 @@ impl LSMTree {
             == self.active_memtable.borrow().len()
     }
 
+    async fn binary_search(
+        data_file: &BufferedFile,
+        index_file: &BufferedFile,
+        key: &Vec<u8>,
+    ) -> Result<Option<Entry>> {
+        let item_size =
+            bincode_options().serialized_size(&EntryOffset::default())?;
+        let length = index_file.file_size().await? / item_size;
+
+        let mut half = length / 2;
+        let mut hind = length - 1;
+        let mut lind = 0;
+
+        let mut current: EntryOffset = bincode_options().deserialize(
+            &index_file
+                .read_at(half * item_size, item_size as usize)
+                .await?,
+        )?;
+
+        while lind <= hind {
+            let value: Entry = bincode_options().deserialize(
+                &data_file
+                    .read_at(current.entry_offset as u64, current.entry_size)
+                    .await?,
+            )?;
+
+            match value.key.cmp(&key) {
+                std::cmp::Ordering::Equal => {
+                    return Ok(Some(value));
+                }
+                std::cmp::Ordering::Less => lind = half + 1,
+                std::cmp::Ordering::Greater => hind = half - 1,
+            }
+
+            if half == 0 || half == length {
+                break;
+            }
+
+            half = (hind + lind) / 2;
+            current = bincode_options().deserialize(
+                &index_file
+                    .read_at(half * item_size, item_size as usize)
+                    .await?,
+            )?;
+        }
+
+        Ok(None)
+    }
+
     pub async fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
         // Query the active tree first.
         if let Some(result) = self.active_memtable.borrow().get(key) {
@@ -425,7 +425,7 @@ impl LSMTree {
             let index_file = BufferedFile::open(&index_filename).await?;
 
             if let Some(result) =
-                binary_search(&data_file, &index_file, key).await?
+                Self::binary_search(&data_file, &index_file, key).await?
             {
                 return Ok(Some(result.value));
             }
