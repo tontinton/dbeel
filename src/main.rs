@@ -182,11 +182,12 @@ async fn handle_request(
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
 
-                state
+                let tree = state
                     .borrow_mut()
                     .trees
                     .remove(&name)
                     .ok_or(Error::CollectionNotFound(name))?;
+                tree.purge()?;
             }
             Some("set") => {
                 let collection = extract_field_as_str(&map, "collection")?;

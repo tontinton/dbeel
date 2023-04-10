@@ -307,6 +307,10 @@ impl LSMTree {
         })
     }
 
+    pub fn purge(&self) -> Result<()> {
+        Ok(std::fs::remove_dir_all(&self.dir)?)
+    }
+
     fn get_first_capture(pattern: &Regex, entry: &DirEntry) -> Option<usize> {
         let file_name = entry.file_name();
         file_name.to_str().and_then(|file_str| {
