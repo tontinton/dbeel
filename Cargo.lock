@@ -306,6 +306,7 @@ dependencies = [
  "bincode",
  "futures-lite",
  "glommio",
+ "once_cell",
  "redblacktree",
  "regex",
  "rmp",

@@ -10,6 +10,7 @@ use glommio::io::{
     BufferedFile, DmaFile, DmaStreamWriterBuilder, OpenOptions, StreamReader,
     StreamReaderBuilder, StreamWriterBuilder,
 };
+use once_cell::sync::Lazy;
 use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -69,6 +70,12 @@ impl Default for EntryOffset {
         }
     }
 }
+
+static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
+    bincode_options()
+        .serialized_size(&EntryOffset::default())
+        .unwrap()
+});
 
 #[derive(Eq, PartialEq)]
 struct CompactionItem {
@@ -344,21 +351,23 @@ impl LSMTree {
     }
 
     async fn binary_search(
+        key: &Vec<u8>,
         data_file: &BufferedFile,
         index_file: &BufferedFile,
-        key: &Vec<u8>,
+        index_offset_start: u64,
+        index_offset_end: u64,
     ) -> Result<Option<Entry>> {
-        let item_size =
-            bincode_options().serialized_size(&EntryOffset::default())?;
-        let length = index_file.file_size().await? / item_size;
-
+        let length = index_offset_end - index_offset_start;
         let mut half = length / 2;
         let mut hind = length - 1;
         let mut lind = 0;
 
         let mut current: EntryOffset = bincode_options().deserialize(
             &index_file
-                .read_at(half * item_size, item_size as usize)
+                .read_at(
+                    index_offset_start + half * *INDEX_ENTRY_SIZE,
+                    *INDEX_ENTRY_SIZE as usize,
+                )
                 .await?,
         )?;
 
@@ -384,7 +393,10 @@ impl LSMTree {
             half = (hind + lind) / 2;
             current = bincode_options().deserialize(
                 &index_file
-                    .read_at(half * item_size, item_size as usize)
+                    .read_at(
+                        index_offset_start + half * *INDEX_ENTRY_SIZE,
+                        *INDEX_ENTRY_SIZE as usize,
+                    )
                     .await?,
             )?;
         }
@@ -424,8 +436,11 @@ impl LSMTree {
             let data_file = BufferedFile::open(&data_filename).await?;
             let index_file = BufferedFile::open(&index_filename).await?;
 
+            let length = index_file.file_size().await? / *INDEX_ENTRY_SIZE;
+
             if let Some(result) =
-                Self::binary_search(&data_file, &index_file, key).await?
+                Self::binary_search(key, &data_file, &index_file, 0, length)
+                    .await?
             {
                 return Ok(Some(result.value));
             }
@@ -619,10 +634,7 @@ impl LSMTree {
         let mut compact_index_writer =
             StreamWriterBuilder::new(compact_index_file).build();
 
-        let item_size =
-            bincode_options().serialized_size(&EntryOffset::default())?;
-
-        let mut offset_bytes = vec![0; item_size as usize];
+        let mut offset_bytes = vec![0; *INDEX_ENTRY_SIZE as usize];
         let mut heap = BinaryHeap::new();
 
         for (index, (data_reader, index_reader)) in

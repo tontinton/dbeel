@@ -12,6 +12,7 @@ edition = "2021"
 bincode = "1.3.3"
 futures-lite = "1.12.0"
 glommio = "0.8.0"
+once_cell = "1.17.1"
 redblacktree = { path = "redblacktree" }
 regex = "1.7.1"
 rmp = "0.8.11"
