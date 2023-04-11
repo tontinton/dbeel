@@ -279,6 +279,9 @@ impl LSMTree {
             .create(true)
             .dma_open(&wal_path)
             .await?;
+        wal_file
+            .hint_extent_size((block_size as usize) * TREE_CAPACITY)
+            .await?;
         let wal_offset = wal_file.file_size().await?;
 
         let active_memtable = if wal_path.exists() {
@@ -611,6 +614,9 @@ impl LSMTree {
             .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
             .with_buffer_size(block_size)
             .build();
+        index_file
+            .hint_extent_size((*INDEX_ENTRY_SIZE as usize) * memtable.len())
+            .await?;
         let mut index_write_stream = DmaStreamWriterBuilder::new(index_file)
             .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
             .with_buffer_size(block_size)
