@@ -15,11 +15,10 @@ use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::{Cell, Ref, RefCell},
+    cell::{Cell, RefCell},
     cmp::Ordering,
     collections::BinaryHeap,
     fs::DirEntry,
-    marker::PhantomData,
     os::unix::prelude::MetadataExt,
     path::PathBuf,
     rc::Rc,
@@ -104,6 +103,12 @@ struct CompactionAction {
     deletes: Vec<PathBuf>,
 }
 
+#[derive(Clone)]
+struct SSTable {
+    index: usize,
+    size: u64,
+}
+
 fn bincode_options() -> WithOtherIntEncoding<
     WithOtherTrailing<DefaultOptions, RejectTrailing>,
     FixintEncoding,
@@ -120,27 +125,34 @@ fn create_regex(pattern: &'static str) -> Result<Regex> {
 
 pub struct LSMTree {
     dir: PathBuf,
+
     // The memtable that is currently being written to.
     active_memtable: RefCell<RedBlackTree<Vec<u8>, Vec<u8>>>,
+
     // The memtable that is currently being flushed to disk.
     flush_memtable: RefCell<Option<RedBlackTree<Vec<u8>, Vec<u8>>>>,
+
     // The next sstable index that is going to be written.
     write_sstable_index: Cell<usize>,
-    // The sstable indices to query from.
-    read_sstable_indices: RefCell<Vec<usize>>,
-    // Track the number of sstable file reads are happening.
+
+    // The sstables to query from.
+    // Rc tracks the number of sstable file reads are happening.
     // The reason for tracking is that when ending a compaction, there are
     // sstable files that should be removed / replaced, but there could be
     // reads to the same files concurrently, so the compaction process will
     // wait for the number of reads to reach 0.
-    number_of_sstable_reads: RefCell<Rc<PhantomData<usize>>>,
+    sstables: RefCell<Rc<Vec<SSTable>>>,
+
     // The next memtable index.
     memtable_index: Cell<usize>,
+
     // The memtable WAL for durability in case the process crashes without
     // flushing the memtable to disk.
     wal_file: RefCell<Rc<BufferedFile>>,
+
     // The current end offset of the wal file.
     wal_offset: Cell<u64>,
+
     // The filesystem block size of where our data is written to.
     block_size: u64,
 }
@@ -174,19 +186,29 @@ impl LSMTree {
         }
 
         let pattern = create_regex(r#"^(\d+)\.data"#)?;
-        let data_file_indices = {
-            let mut vec: Vec<usize> = std::fs::read_dir(&dir)?
+        let sstables: Vec<SSTable> = {
+            let mut indices: Vec<usize> = std::fs::read_dir(&dir)?
                 .filter_map(std::result::Result::ok)
                 .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
                 .collect();
-            vec.sort();
-            vec
+            indices.sort();
+
+            let mut sstables = Vec::with_capacity(indices.len());
+            for index in indices {
+                let mut index_path = dir.clone();
+                index_path.push(format!("{:01$}.index", index, INDEX_PADDING));
+                let size =
+                    std::fs::metadata(index_path)?.len() / *INDEX_ENTRY_SIZE;
+                sstables.push(SSTable { index, size });
+            }
+            sstables
         };
 
-        let write_file_index = data_file_indices
+        let write_file_index = sstables
             .iter()
+            .map(|t| t.index)
             .max()
-            .map(|i| (*i + 2 - (*i & 1)))
+            .map(|i| (i + 2 - (i & 1)))
             .unwrap_or(0);
 
         let pattern = create_regex(r#"^(\d+)\.memtable"#)?;
@@ -254,10 +276,7 @@ impl LSMTree {
             active_memtable: RefCell::new(active_memtable),
             flush_memtable: RefCell::new(None),
             write_sstable_index: Cell::new(write_file_index),
-            read_sstable_indices: RefCell::new(data_file_indices),
-            number_of_sstable_reads: RefCell::new(Rc::new(
-                PhantomData::<usize>,
-            )),
+            sstables: RefCell::new(Rc::new(sstables)),
             memtable_index: Cell::new(wal_file_index),
             wal_file: RefCell::new(Rc::new(wal_file)),
             wal_offset: Cell::new(wal_offset),
@@ -341,8 +360,8 @@ impl LSMTree {
         (data_filename, index_filename)
     }
 
-    pub fn sstable_indices(&self) -> Ref<Vec<usize>> {
-        self.read_sstable_indices.borrow()
+    pub fn sstable_indices(&self) -> Vec<usize> {
+        self.sstables.borrow().iter().map(|t| t.index).collect()
     }
 
     pub fn memtable_full(&self) -> bool {
@@ -355,11 +374,10 @@ impl LSMTree {
         data_file: &BufferedFile,
         index_file: &BufferedFile,
         index_offset_start: u64,
-        index_offset_end: u64,
+        index_offset_length: u64,
     ) -> Result<Option<Entry>> {
-        let length = index_offset_end - index_offset_start;
-        let mut half = length / 2;
-        let mut hind = length - 1;
+        let mut half = index_offset_length / 2;
+        let mut hind = index_offset_length - 1;
         let mut lind = 0;
 
         let mut current: EntryOffset = bincode_options().deserialize(
@@ -386,7 +404,7 @@ impl LSMTree {
                 std::cmp::Ordering::Greater => hind = half - 1,
             }
 
-            if half == 0 || half == length {
+            if half == 0 || half == index_offset_length {
                 break;
             }
 
@@ -419,28 +437,22 @@ impl LSMTree {
 
         // Key not found in memory, query all files from the newest to the
         // oldest.
-        let _counter = self.number_of_sstable_reads.borrow().clone();
-
-        // Collect the indices, as compaction mutates read_sstable_indices.
-        let indices: Vec<usize> = self
-            .read_sstable_indices
-            .borrow()
-            .iter()
-            .rev()
-            .map(|i| *i)
-            .collect();
-        for i in indices {
+        let sstables = self.sstables.borrow().clone();
+        for sstable in sstables.iter().rev() {
             let (data_filename, index_filename) =
-                Self::get_data_file_paths(self.dir.clone(), i);
+                Self::get_data_file_paths(self.dir.clone(), sstable.index);
 
             let data_file = BufferedFile::open(&data_filename).await?;
             let index_file = BufferedFile::open(&index_filename).await?;
 
-            let length = index_file.file_size().await? / *INDEX_ENTRY_SIZE;
-
-            if let Some(result) =
-                Self::binary_search(key, &data_file, &index_file, 0, length)
-                    .await?
+            if let Some(result) = Self::binary_search(
+                key,
+                &data_file,
+                &index_file,
+                0,
+                sstable.size,
+            )
+            .await?
             {
                 return Ok(Some(result.value));
             }
@@ -527,7 +539,7 @@ impl LSMTree {
         let data_file = DmaFile::create(&data_filename).await?;
         let index_file = DmaFile::create(&index_filename).await?;
 
-        Self::flush_memtable_to_disk(
+        let items_written = Self::flush_memtable_to_disk(
             self.flush_memtable.borrow().as_ref().unwrap(),
             data_file,
             index_file,
@@ -535,9 +547,17 @@ impl LSMTree {
         .await?;
 
         self.flush_memtable.replace(None);
-        self.read_sstable_indices
-            .borrow_mut()
-            .push(self.write_sstable_index.get());
+
+        // Replace sstables with new list containing the flushed sstable.
+        {
+            let mut sstables: Vec<SSTable> =
+                self.sstables.borrow().iter().map(|t| t.clone()).collect();
+            sstables.push(SSTable {
+                index: self.write_sstable_index.get(),
+                size: items_written as u64,
+            });
+            self.sstables.replace(Rc::new(sstables));
+        }
         self.write_sstable_index
             .set(self.write_sstable_index.get() + 2);
 
@@ -569,7 +589,7 @@ impl LSMTree {
         memtable: &RedBlackTree<Vec<u8>, Vec<u8>>,
         data_file: DmaFile,
         index_file: DmaFile,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let mut data_write_stream = DmaStreamWriterBuilder::new(data_file)
             .with_write_behind(10)
             .with_buffer_size(512)
@@ -579,6 +599,7 @@ impl LSMTree {
             .with_buffer_size(512)
             .build();
 
+        let mut written = 0;
         for (key, value) in memtable.iter() {
             let entry_offset = data_write_stream.current_pos();
             let entry = Entry {
@@ -592,11 +613,12 @@ impl LSMTree {
                 &mut index_write_stream,
             )
             .await?;
+            written += 1;
         }
         data_write_stream.close().await?;
         index_write_stream.close().await?;
 
-        Ok(())
+        Ok(written)
     }
 
     // Compact all sstables in the given list of sstable files, write the result
@@ -652,6 +674,7 @@ impl LSMTree {
         }
 
         let mut entry_offset = 0u64;
+        let mut items_written = 0;
 
         while let Some(current) = heap.pop() {
             let index = current.index;
@@ -672,6 +695,7 @@ impl LSMTree {
                 )
                 .await?;
                 entry_offset += written as u64;
+                items_written += 1;
             }
 
             let (data_reader, index_reader) = &mut sstable_readers[index];
@@ -719,15 +743,18 @@ impl LSMTree {
         compact_action_writer.write_all(&action_encoded).await?;
         compact_action_writer.close().await?;
 
-        let counter = self.number_of_sstable_reads.borrow().clone();
-        self.number_of_sstable_reads
-            .replace(Rc::new(PhantomData::<usize>));
+        let old_sstables = self.sstables.borrow().clone();
 
         {
-            let mut indices = self.read_sstable_indices.borrow_mut();
-            indices.retain(|x| !indices_to_compact.contains(x));
-            indices.push(output_index);
-            indices.sort();
+            let mut sstables: Vec<SSTable> =
+                old_sstables.iter().map(|t| t.clone()).collect();
+            sstables.retain(|x| !indices_to_compact.contains(&x.index));
+            sstables.push(SSTable {
+                index: output_index,
+                size: items_written,
+            });
+            sstables.sort_unstable_by_key(|t| t.index);
+            self.sstables.replace(Rc::new(sstables));
         }
 
         for (source_path, destination_path) in &action.renames {
@@ -736,7 +763,7 @@ impl LSMTree {
 
         // Block the current execution task until all currently running read
         // tasks finish, to make sure we don't delete files that are being read.
-        while Rc::strong_count(&counter) > 1 {
+        while Rc::strong_count(&old_sstables) > 1 {
             futures_lite::future::yield_now().await;
         }
 
