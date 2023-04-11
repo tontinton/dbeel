@@ -5,7 +5,7 @@ pub enum Error {
     #[error("creating the '{pattern}' regex failed")]
     RegexCreationError {
         source: regex::Error,
-        pattern: &'static str,
+        pattern: String,
     },
 
     #[error(transparent)]
