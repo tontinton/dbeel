@@ -7,8 +7,8 @@ use bincode::{
 };
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::{
-    BufferedFile, DmaFile, DmaStreamWriterBuilder, OpenOptions, StreamReader,
-    StreamReaderBuilder, StreamWriterBuilder,
+    BufferedFile, DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder,
+    OpenOptions,
 };
 use once_cell::sync::Lazy;
 use redblacktree::RedBlackTree;
@@ -28,6 +28,7 @@ pub const TOMBSTONE: Vec<u8> = vec![];
 
 const TREE_CAPACITY: usize = 1024;
 const INDEX_PADDING: usize = 20; // Number of integers in max u64.
+const DMA_STREAM_NUMBER_OF_BUFFERS: usize = 16;
 
 const MEMTABLE_FILE_EXT: &str = "memtable";
 const DATA_FILE_EXT: &str = "data";
@@ -162,7 +163,7 @@ pub struct LSMTree {
 
     // The memtable WAL for durability in case the process crashes without
     // flushing the memtable to disk.
-    wal_file: RefCell<Rc<BufferedFile>>,
+    wal_file: RefCell<Rc<DmaFile>>,
 
     // The current end offset of the wal file.
     wal_offset: Cell<u64>,
@@ -177,6 +178,8 @@ impl LSMTree {
             std::fs::create_dir_all(&dir)?;
         }
 
+        let block_size = std::fs::metadata(dir.clone())?.blksize();
+
         let pattern = create_file_path_regex(COMPACT_ACTION_FILE_EXT)?;
         let compact_action_paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
             .filter_map(std::result::Result::ok)
@@ -184,8 +187,11 @@ impl LSMTree {
             .map(|entry| entry.path())
             .collect();
         for compact_action_path in &compact_action_paths {
-            let file = BufferedFile::open(compact_action_path).await?;
-            let mut reader = StreamReaderBuilder::new(file).build();
+            let file = DmaFile::open(compact_action_path).await?;
+            let mut reader = DmaStreamReaderBuilder::new(file)
+                .with_buffer_size(block_size as usize)
+                .with_read_ahead(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .build();
 
             let mut buf = Vec::new();
             reader.read_to_end(&mut buf).await?;
@@ -233,8 +239,6 @@ impl LSMTree {
             vec
         };
 
-        let block_size = std::fs::metadata(dir.clone())?.blksize();
-
         let wal_file_index = match wal_indices.len() {
             0 => 0,
             1 => wal_indices[0],
@@ -256,8 +260,13 @@ impl LSMTree {
                 .await?;
                 let data_file = DmaFile::open(&data_file_path).await?;
                 let index_file = DmaFile::open(&index_file_path).await?;
-                Self::flush_memtable_to_disk(&memtable, data_file, index_file)
-                    .await?;
+                Self::flush_memtable_to_disk(
+                    &memtable,
+                    data_file,
+                    index_file,
+                    block_size as usize,
+                )
+                .await?;
                 std::fs::remove_file(&unflashed_file_path)?;
                 wal_file_index
             }
@@ -268,7 +277,7 @@ impl LSMTree {
         let wal_file = OpenOptions::new()
             .write(true)
             .create(true)
-            .buffered_open(&wal_path)
+            .dma_open(&wal_path)
             .await?;
         let wal_offset = wal_file.file_size().await?;
 
@@ -311,8 +320,11 @@ impl LSMTree {
         block_size: u64,
     ) -> Result<RedBlackTree<Vec<u8>, Vec<u8>>> {
         let mut memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
-        let wal_file = BufferedFile::open(&wal_path).await?;
-        let mut reader = StreamReaderBuilder::new(wal_file).build();
+        let wal_file = DmaFile::open(wal_path).await?;
+        let mut reader = DmaStreamReaderBuilder::new(wal_file)
+            .with_buffer_size(block_size as usize)
+            .with_read_ahead(DMA_STREAM_NUMBER_OF_BUFFERS)
+            .build();
 
         let mut wal_buf = Vec::new();
         reader.read_to_end(&mut wal_buf).await?;
@@ -484,14 +496,18 @@ impl LSMTree {
     }
 
     async fn write_to_wal(&self, entry: &Entry) -> Result<()> {
-        let buf = bincode_options().serialize(entry)?;
-        let size = buf.len() as u64;
+        let file = self.wal_file.borrow().clone();
 
-        let size_padded = size + self.block_size - size % self.block_size;
+        let entry_size = bincode_options().serialized_size(entry)?;
+        let size_padded =
+            entry_size + self.block_size - entry_size % self.block_size;
+        let mut buf = file.alloc_dma_buffer(size_padded as usize);
+
+        bincode_options().serialize_into(buf.as_bytes_mut(), entry)?;
+
         let offset = self.wal_offset.get();
         self.wal_offset.set(offset + size_padded);
 
-        let file = self.wal_file.borrow().clone();
         file.write_at(buf, offset).await?;
         // TODO: fdatasync to ensure durability
 
@@ -528,7 +544,7 @@ impl LSMTree {
             MEMTABLE_FILE_EXT,
         );
         self.wal_file
-            .replace(Rc::new(BufferedFile::create(&next_wal_path).await?));
+            .replace(Rc::new(DmaFile::create(&next_wal_path).await?));
         self.wal_offset.set(0);
 
         let (data_filename, index_filename) = Self::get_data_file_paths(
@@ -542,6 +558,7 @@ impl LSMTree {
             self.flush_memtable.borrow().as_ref().unwrap(),
             data_file,
             index_file,
+            self.block_size as usize,
         )
         .await?;
 
@@ -588,14 +605,15 @@ impl LSMTree {
         memtable: &RedBlackTree<Vec<u8>, Vec<u8>>,
         data_file: DmaFile,
         index_file: DmaFile,
+        block_size: usize,
     ) -> Result<usize> {
         let mut data_write_stream = DmaStreamWriterBuilder::new(data_file)
-            .with_write_behind(10)
-            .with_buffer_size(512)
+            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+            .with_buffer_size(block_size)
             .build();
         let mut index_write_stream = DmaStreamWriterBuilder::new(index_file)
-            .with_write_behind(10)
-            .with_buffer_size(512)
+            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+            .with_buffer_size(block_size)
             .build();
 
         let mut written = 0;
@@ -637,23 +655,33 @@ impl LSMTree {
         // If there was, itertools::kmerge would probably solve it all.
         let mut sstable_readers = Vec::with_capacity(sstable_paths.len());
         for (data_path, index_path) in &sstable_paths {
-            let data_file = BufferedFile::open(data_path).await?;
-            let index_file = BufferedFile::open(index_path).await?;
-            let data_reader = StreamReaderBuilder::new(data_file).build();
-            let index_reader = StreamReaderBuilder::new(index_file).build();
+            let data_file = DmaFile::open(data_path).await?;
+            let index_file = DmaFile::open(index_path).await?;
+            let data_reader = DmaStreamReaderBuilder::new(data_file)
+                .with_buffer_size(self.block_size as usize)
+                .with_read_ahead(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .build();
+            let index_reader = DmaStreamReaderBuilder::new(index_file)
+                .with_buffer_size(self.block_size as usize)
+                .with_read_ahead(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .build();
             sstable_readers.push((data_reader, index_reader));
         }
 
         let (compact_data_path, compact_index_path) =
             Self::get_compaction_file_paths(&self.dir, output_index);
-        let compact_data_file =
-            BufferedFile::create(&compact_data_path).await?;
-        let compact_index_file =
-            BufferedFile::create(&compact_index_path).await?;
+        let compact_data_file = DmaFile::create(&compact_data_path).await?;
+        let compact_index_file = DmaFile::create(&compact_index_path).await?;
         let mut compact_data_writer =
-            StreamWriterBuilder::new(compact_data_file).build();
+            DmaStreamWriterBuilder::new(compact_data_file)
+                .with_buffer_size(self.block_size as usize)
+                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .build();
         let mut compact_index_writer =
-            StreamWriterBuilder::new(compact_index_file).build();
+            DmaStreamWriterBuilder::new(compact_index_file)
+                .with_buffer_size(self.block_size as usize)
+                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .build();
 
         let mut offset_bytes = vec![0; *INDEX_ENTRY_SIZE as usize];
         let mut heap = BinaryHeap::new();
@@ -732,10 +760,12 @@ impl LSMTree {
 
         let compact_action_path =
             get_file_path(&self.dir, output_index, COMPACT_ACTION_FILE_EXT);
-        let compact_action_file =
-            BufferedFile::create(&compact_action_path).await?;
+        let compact_action_file = DmaFile::create(&compact_action_path).await?;
         let mut compact_action_writer =
-            StreamWriterBuilder::new(compact_action_file).build();
+            DmaStreamWriterBuilder::new(compact_action_file)
+                .with_buffer_size(self.block_size as usize)
+                .with_buffer_size(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .build();
         compact_action_writer.write_all(&action_encoded).await?;
         compact_action_writer.close().await?;
 
@@ -775,8 +805,8 @@ impl LSMTree {
     }
 
     async fn read_next_entry(
-        data_reader: &mut StreamReader,
-        index_reader: &mut StreamReader,
+        data_reader: &mut (impl AsyncReadExt + std::marker::Unpin),
+        index_reader: &mut (impl AsyncReadExt + std::marker::Unpin),
         offset_bytes: &mut Vec<u8>,
     ) -> Result<Entry> {
         index_reader.read_exact(offset_bytes).await?;
