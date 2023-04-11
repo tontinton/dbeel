@@ -129,11 +129,9 @@ async fn run_benchmark(
                             eprintln!("Response not OK: {}", response);
                             continue;
                         }
-                    } else {
-                        if response != ValueRef::String(key_str.into()) {
-                            eprintln!("Response not OK: {}", response);
-                            continue;
-                        }
+                    } else if response != ValueRef::String(key_str.into()) {
+                        eprintln!("Response not OK: {}", response);
+                        continue;
                     }
 
                     stats.push(Instant::now().duration_since(start_time));
@@ -199,8 +197,7 @@ async fn drop_collection(address: &(String, u16)) -> std::io::Result<()> {
 fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
     let mut stats: Vec<Duration> = client_stats
         .into_iter()
-        .map(|(_, stats)| stats)
-        .flatten()
+        .flat_map(|(_, stats)| stats)
         .collect();
     stats.sort();
 
@@ -249,7 +246,7 @@ fn main() {
     println!("Set:");
     print_stats(set_stats);
 
-    println!("");
+    println!();
 
     println!("Get:");
     print_stats(get_stats);
