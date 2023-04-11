@@ -17,7 +17,7 @@ use std::{cell::RefCell, time::Duration};
 use std::{collections::HashMap, rc::Rc};
 
 // How much files to compact.
-const COMPACTION_FACTOR: usize = 8;
+const COMPACTION_FACTOR: usize = 2;
 
 // Satet shared between all coroutines that run on the same core.
 struct PerCoreState {
@@ -69,7 +69,7 @@ async fn run_compaction_loop(state: SharedPerCoreState) {
             }
         }
 
-        sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(1)).await;
     }
 }
 
