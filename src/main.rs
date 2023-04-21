@@ -1,6 +1,8 @@
 use dbil::{
     error::{Error, Result},
+    cached_file_reader::FileId,
     lsm_tree::{LSMTree, TOMBSTONE},
+    page_cache::{PageCache, PartitionPageCache},
 };
 use futures_lite::{AsyncReadExt, AsyncWriteExt, Future};
 use glommio::{
@@ -19,15 +21,23 @@ use std::{collections::HashMap, rc::Rc};
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 2;
 
+const PAGE_CACHE_SIZE: usize = 1024 * 1024 * 256;
+const PAGE_CACHE_SAMPLES: usize = 1024 * 1024 * 16;
+
 // State shared between all coroutines that run on the same core.
 struct PerCoreState {
     trees: HashMap<String, Rc<LSMTree>>,
+    cache: Rc<RefCell<PageCache<FileId>>>,
 }
 
 impl PerCoreState {
-    fn new() -> Self {
+    fn new(
+        trees: HashMap<String, Rc<LSMTree>>,
+        cache: PageCache<FileId>,
+    ) -> Self {
         Self {
-            trees: HashMap::new(),
+            trees,
+            cache: Rc::new(RefCell::new(cache)),
         }
     }
 }
@@ -176,7 +186,15 @@ async fn handle_request(
 
                 let mut dir = temp_dir();
                 dir.push(&name);
-                let tree = Rc::new(LSMTree::open_or_create(dir).await?);
+                let global_cache = state.borrow().cache.clone();
+
+                let tree = Rc::new(
+                    LSMTree::open_or_create(
+                        dir,
+                        PartitionPageCache::new(name.clone(), global_cache),
+                    )
+                    .await?,
+                );
                 state.borrow_mut().trees.insert(name, tree);
             }
             Some("drop_collection") => {
@@ -266,7 +284,9 @@ async fn handle_client(
 }
 
 async fn run_server() -> Result<()> {
-    let state = Rc::new(RefCell::new(PerCoreState::new()));
+    let cache = PageCache::new(PAGE_CACHE_SIZE, PAGE_CACHE_SAMPLES)
+        .map_err(|e| Error::CacheCreationError(e.to_string()))?;
+    let state = Rc::new(RefCell::new(PerCoreState::new(HashMap::new(), cache)));
 
     spawn_local(enclose!((state.clone() => state) async move {
         run_compaction_loop(state).await;
