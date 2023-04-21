@@ -33,6 +33,8 @@ pub enum Error {
     MsgpackDecodeError(#[from] rmpv::decode::Error),
     #[error("msgpack encode failed")]
     MsgpackEncodeError(#[from] rmpv::encode::Error),
+    #[error("failed to create cache: {0}")]
+    CacheCreationError(String),
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;

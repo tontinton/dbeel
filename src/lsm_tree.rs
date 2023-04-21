@@ -1,4 +1,8 @@
-use crate::error::{Error, Result};
+use crate::{
+    cached_file_reader::{CachedFileReader, FileId},
+    error::{Error, Result},
+    page_cache::PartitionPageCache,
+};
 use bincode::{
     config::{
         FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
@@ -7,8 +11,7 @@ use bincode::{
 };
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::{
-    BufferedFile, DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder,
-    OpenOptions,
+    DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
 };
 use once_cell::sync::Lazy;
 use redblacktree::RedBlackTree;
@@ -144,6 +147,10 @@ fn create_file_path_regex(file_ext: &'static str) -> Result<Regex> {
 pub struct LSMTree {
     dir: PathBuf,
 
+    // The page cache to ensure skipping kernel code when reading / writing to
+    // disk.
+    page_cache: Rc<PartitionPageCache<FileId>>,
+
     // The memtable that is currently being written to.
     active_memtable: RefCell<RedBlackTree<Vec<u8>, Vec<u8>>>,
 
@@ -176,7 +183,10 @@ pub struct LSMTree {
 }
 
 impl LSMTree {
-    pub async fn open_or_create(dir: PathBuf) -> Result<Self> {
+    pub async fn open_or_create(
+        dir: PathBuf,
+        page_cache: PartitionPageCache<FileId>,
+    ) -> Result<Self> {
         if !dir.is_dir() {
             std::fs::create_dir_all(&dir)?;
         }
@@ -295,6 +305,7 @@ impl LSMTree {
 
         Ok(Self {
             dir,
+            page_cache: Rc::new(page_cache),
             active_memtable: RefCell::new(active_memtable),
             flush_memtable: RefCell::new(None),
             write_sstable_index: Cell::new(write_file_index),
@@ -390,8 +401,8 @@ impl LSMTree {
 
     async fn binary_search(
         key: &Vec<u8>,
-        data_file: &BufferedFile,
-        index_file: &BufferedFile,
+        data_file: &CachedFileReader,
+        index_file: &CachedFileReader,
         index_offset_start: u64,
         index_offset_length: u64,
     ) -> Result<Option<Entry>> {
@@ -461,8 +472,16 @@ impl LSMTree {
             let (data_filename, index_filename) =
                 Self::get_data_file_paths(&self.dir, sstable.index);
 
-            let data_file = BufferedFile::open(&data_filename).await?;
-            let index_file = BufferedFile::open(&index_filename).await?;
+            let data_file = CachedFileReader::new(
+                (DATA_FILE_EXT, sstable.index),
+                DmaFile::open(&data_filename).await?,
+                self.page_cache.clone(),
+            );
+            let index_file = CachedFileReader::new(
+                (INDEX_FILE_EXT, sstable.index),
+                DmaFile::open(&index_filename).await?,
+                self.page_cache.clone(),
+            );
 
             if let Some(result) = Self::binary_search(
                 key,
@@ -849,11 +868,15 @@ mod tests {
     use glommio::{LocalExecutorBuilder, Placement};
     use tempfile::tempdir;
 
+    use crate::page_cache::PageCache;
+
     use super::*;
+
+    type GlobalCache = Rc<RefCell<PageCache<FileId>>>;
 
     fn run_with_glommio<G, F, T>(fut_gen: G) -> Result<()>
     where
-        G: FnOnce(PathBuf) -> F + Send + 'static,
+        G: FnOnce(PathBuf, GlobalCache) -> F + Send + 'static,
         F: Future<Output = T> + 'static,
         T: Send + 'static,
     {
@@ -861,7 +884,9 @@ mod tests {
             .spin_before_park(Duration::from_millis(10));
         let handle = builder.name("test").spawn(|| async move {
             let dir = tempdir().unwrap().into_path();
-            let result = fut_gen(dir.clone()).await;
+            let cache =
+                Rc::new(RefCell::new(PageCache::new(1024, 1024).unwrap()));
+            let result = fut_gen(dir.clone(), cache).await;
             std::fs::remove_dir_all(dir).unwrap();
             result
         })?;
@@ -869,10 +894,19 @@ mod tests {
         Ok(())
     }
 
-    async fn _set_and_get_memtable(dir: PathBuf) -> Result<()> {
+    fn partitioned_cache(cache: &GlobalCache) -> PartitionPageCache<FileId> {
+        PartitionPageCache::new("test".to_string(), cache.clone())
+    }
+
+    async fn _set_and_get_memtable(
+        dir: PathBuf,
+        cache: GlobalCache,
+    ) -> Result<()> {
         // New tree.
         {
-            let tree = LSMTree::open_or_create(dir.clone()).await?;
+            let tree =
+                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
+                    .await?;
             tree.set(vec![100], vec![200]).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
             assert_eq!(tree.get(&vec![0]).await?, None);
@@ -880,7 +914,8 @@ mod tests {
 
         // Reopening the tree.
         {
-            let tree = LSMTree::open_or_create(dir).await?;
+            let tree =
+                LSMTree::open_or_create(dir, partitioned_cache(&cache)).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
             assert_eq!(tree.get(&vec![0]).await?, None);
         }
@@ -893,10 +928,15 @@ mod tests {
         run_with_glommio(_set_and_get_memtable)
     }
 
-    async fn _set_and_get_sstable(dir: PathBuf) -> Result<()> {
+    async fn _set_and_get_sstable(
+        dir: PathBuf,
+        cache: GlobalCache,
+    ) -> Result<()> {
         // New tree.
         {
-            let tree = LSMTree::open_or_create(dir.clone()).await?;
+            let tree =
+                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
+                    .await?;
             assert_eq!(tree.write_sstable_index.get(), 0);
 
             let values: Vec<Vec<u8>> = (0..TREE_CAPACITY as u16)
@@ -917,7 +957,9 @@ mod tests {
 
         // Reopening the tree.
         {
-            let tree = LSMTree::open_or_create(dir).await?;
+            let tree =
+                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
+                    .await?;
             assert_eq!(tree.active_memtable.borrow().len(), 0);
             assert_eq!(tree.write_sstable_index.get(), 2);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
@@ -933,10 +975,15 @@ mod tests {
         run_with_glommio(_set_and_get_sstable)
     }
 
-    async fn _get_after_compaction(dir: PathBuf) -> Result<()> {
+    async fn _get_after_compaction(
+        dir: PathBuf,
+        cache: GlobalCache,
+    ) -> Result<()> {
         // New tree.
         {
-            let tree = LSMTree::open_or_create(dir.clone()).await?;
+            let tree =
+                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
+                    .await?;
             assert_eq!(tree.write_sstable_index.get(), 0);
             assert_eq!(*tree.sstable_indices(), vec![]);
 
@@ -969,7 +1016,9 @@ mod tests {
 
         // Reopening the tree.
         {
-            let tree = LSMTree::open_or_create(dir).await?;
+            let tree =
+                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
+                    .await?;
             assert_eq!(*tree.sstable_indices(), vec![5]);
             assert_eq!(tree.write_sstable_index.get(), 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
