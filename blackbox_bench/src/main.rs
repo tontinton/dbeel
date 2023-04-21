@@ -210,7 +210,7 @@ fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
     let p99 = stats[last_index * 99 / 100];
     let p999 = stats[last_index * 999 / 1000];
     println!(
-        "total: {:?}, min: {:?}, p50: {:?}, p90: {:?}, p99: {:?}, p999: {:?} max: {:?}",
+        "total: {:?}, min: {:?}, p50: {:?}, p90: {:?}, p99: {:?}, p999: {:?}, max: {:?}",
         total, min, p50, p90, p99, p999, max
     );
 }
