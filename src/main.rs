@@ -19,7 +19,7 @@ use std::{collections::HashMap, rc::Rc};
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 2;
 
-// Satet shared between all coroutines that run on the same core.
+// State shared between all coroutines that run on the same core.
 struct PerCoreState {
     trees: HashMap<String, Rc<LSMTree>>,
 }
