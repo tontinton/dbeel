@@ -218,8 +218,7 @@ fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
 fn main() {
     let args = Args::parse();
 
-    let builder = LocalExecutorBuilder::new(Placement::Unbound)
-        .spin_before_park(Duration::from_millis(10));
+    let builder = LocalExecutorBuilder::new(Placement::Unbound);
     let handle = builder
         .name("bb-bench")
         .spawn(move || async move {

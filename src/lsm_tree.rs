@@ -845,13 +845,10 @@ impl LSMTree {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
+    use crate::page_cache::PageCache;
     use futures_lite::Future;
     use glommio::{LocalExecutorBuilder, Placement};
     use tempfile::tempdir;
-
-    use crate::page_cache::PageCache;
 
     use super::*;
 
@@ -863,8 +860,7 @@ mod tests {
         F: Future<Output = T> + 'static,
         T: Send + 'static,
     {
-        let builder = LocalExecutorBuilder::new(Placement::Fixed(1))
-            .spin_before_park(Duration::from_millis(10));
+        let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
         let handle = builder.name("test").spawn(|| async move {
             let dir = tempdir().unwrap().into_path();
             let cache =

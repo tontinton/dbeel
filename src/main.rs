@@ -1,6 +1,6 @@
 use dbil::{
-    error::{Error, Result},
     cached_file_reader::FileId,
+    error::{Error, Result},
     lsm_tree::{LSMTree, TOMBSTONE},
     page_cache::{PageCache, PartitionPageCache},
 };
@@ -310,8 +310,7 @@ async fn run_server() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let builder = LocalExecutorBuilder::new(Placement::Fixed(1))
-        .spin_before_park(Duration::from_millis(10));
+    let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
     let handle = builder.name("dbil").spawn(run_server)?;
     handle.join()?
 }
