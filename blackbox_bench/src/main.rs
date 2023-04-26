@@ -14,10 +14,10 @@ struct Args {
     #[clap(
         short,
         long,
-        help = "Server hostname (default %v)",
+        help = "Server hostname / ip (default %v)",
         default_value = "127.0.0.1"
     )]
-    hostname: String,
+    ip: String,
 
     #[clap(
         short,
@@ -222,7 +222,7 @@ fn main() {
     let handle = builder
         .name("bb-bench")
         .spawn(move || async move {
-            let address = (args.hostname.clone(), args.port);
+            let address = (args.ip.clone(), args.port);
             create_collection(&address).await.unwrap();
 
             let set_results =
