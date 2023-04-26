@@ -13,6 +13,7 @@ use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::{
     DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
 };
+use log::{error, trace};
 use once_cell::sync::Lazy;
 use redblacktree::RedBlackTree;
 use regex::Regex;
@@ -184,7 +185,10 @@ impl LSMTree {
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<Self> {
         if !dir.is_dir() {
+            trace!("Creating new tree from: {:?}", dir);
             std::fs::create_dir_all(&dir)?;
+        } else {
+            trace!("Opening existing tree from: {:?}", dir);
         }
 
         let pattern = create_file_path_regex(COMPACT_ACTION_FILE_EXT)?;
@@ -833,7 +837,7 @@ impl LSMTree {
 
     fn remove_file_log_on_err(file_path: &PathBuf) {
         if let Err(e) = std::fs::remove_file(file_path) {
-            eprintln!(
+            error!(
                 "Failed to remove file '{}', that is irrelevant after \
                  compaction: {}",
                 file_path.display(),

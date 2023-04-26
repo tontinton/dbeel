@@ -6,17 +6,22 @@ use dbil::{
 };
 use futures_lite::{AsyncReadExt, AsyncWriteExt, Future};
 use glommio::{
-    enclose,
+    enclose, executor,
     net::{TcpListener, TcpStream},
     spawn_local,
     timer::sleep,
     LocalExecutorBuilder, Placement,
 };
+use pretty_env_logger::formatted_timed_builder;
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
 use std::env::temp_dir;
 use std::{cell::RefCell, time::Duration};
 use std::{collections::HashMap, rc::Rc};
+
+extern crate pretty_env_logger;
+#[macro_use]
+extern crate log;
 
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 2;
@@ -58,7 +63,7 @@ async fn run_compaction_loop(state: SharedPerCoreState) {
                     if let Err(e) =
                         tree.compact(even, new_index, odd.is_empty()).await
                     {
-                        eprintln!("Failed to compact files: {}", e);
+                        error!("Failed to compact files: {}", e);
                     }
                     continue 'current_tree_compaction;
                 }
@@ -70,7 +75,7 @@ async fn run_compaction_loop(state: SharedPerCoreState) {
 
                     let new_index = even[0] + 1;
                     if let Err(e) = tree.compact(odd, new_index, true).await {
-                        eprintln!("Failed to compact files: {}", e);
+                        error!("Failed to compact files: {}", e);
                     }
                     continue 'current_tree_compaction;
                 }
@@ -122,7 +127,7 @@ where
         // Capacity is full, flush memtable to disk.
         spawn_local(async move {
             if let Err(e) = tree.flush().await {
-                eprintln!("Failed to flush memtable: {}", e);
+                error!("Failed to flush memtable: {}", e);
             }
         })
         .detach();
@@ -269,7 +274,7 @@ async fn handle_client(
         }
         Err(e) => {
             let error_string = format!("Error: {}", e);
-            eprintln!("{}", error_string);
+            error!("{}", error_string);
 
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(
@@ -283,7 +288,10 @@ async fn handle_client(
     Ok(())
 }
 
-async fn run_server() -> Result<()> {
+async fn run_shard() -> Result<()> {
+    let id = executor().id();
+    info!("Starting shard of id: {}", id);
+
     let cache = PageCache::new(PAGE_CACHE_SIZE, PAGE_CACHE_SAMPLES)
         .map_err(|e| Error::CacheCreationError(e.to_string()))?;
     let state = Rc::new(RefCell::new(PerCoreState::new(HashMap::new(), cache)));
@@ -303,14 +311,21 @@ async fn run_server() -> Result<()> {
                 .detach();
             }
             Err(e) => {
-                eprintln!("Failed to accept client: {}", e);
+                error!("Failed to accept client: {}", e);
             }
         }
     }
 }
 
 fn main() -> Result<()> {
+    let mut log_builder = formatted_timed_builder();
+    log_builder.parse_filters(
+        &std::env::var("RUST_LOG")
+            .or::<String>(Ok("dbil=trace".to_string()))
+            .unwrap(),
+    );
+    log_builder.try_init().unwrap();
     let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
-    let handle = builder.name("dbil").spawn(run_server)?;
+    let handle = builder.name("dbil").spawn(run_shard)?;
     handle.join()?
 }
