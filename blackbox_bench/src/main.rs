@@ -1,8 +1,10 @@
 use clap::Parser;
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
-    net::TcpStream, CpuLocation, CpuSet, LocalExecutorBuilder, Placement,
+    net::TcpStream, timer::sleep, CpuLocation, CpuSet, LocalExecutorBuilder,
+    Placement,
 };
+use murmur3::murmur3_32;
 use rand::{seq::SliceRandom, thread_rng};
 use rmpv::{decode::read_value_ref, encode::write_value, Value, ValueRef};
 use std::time::{Duration, Instant};
@@ -47,7 +49,8 @@ struct Args {
 const COLLECTION_NAME: &str = "dbil";
 
 async fn run_benchmark(
-    address: &(String, u16),
+    ip: String,
+    base_port: u16,
     num_clients: usize,
     num_requests: usize,
     set: bool,
@@ -56,13 +59,14 @@ async fn run_benchmark(
 
     let cpus: Vec<CpuLocation> =
         CpuSet::online().unwrap().into_iter().collect();
+    let half_cpus = cpus.len() / 2;
 
     for client_index in 0..num_clients {
         let executor = LocalExecutorBuilder::new(Placement::Fixed(
-            cpus[client_index % cpus.len()].cpu,
+            half_cpus + client_index % half_cpus,
         ));
 
-        let address = address.clone();
+        let ip = ip.clone();
         let handle = executor
             .name(format!("client-{}", client_index).as_str())
             .spawn(move || async move {
@@ -76,6 +80,12 @@ async fn run_benchmark(
                     let mut data_encoded: Vec<u8> = Vec::new();
                     let key = format!("{}_{}", client_index, request_index);
                     let key_str = key.as_str();
+
+                    let hash =
+                        murmur3_32(&mut std::io::Cursor::new(key_str), 0)
+                            .unwrap();
+                    let port = base_port + (hash % (half_cpus as u32)) as u16;
+
                     let mut parameters = vec![
                         (
                             Value::String("type".into()),
@@ -101,7 +111,7 @@ async fn run_benchmark(
 
                     let start_time = Instant::now();
                     let mut stream =
-                        TcpStream::connect(&address).await.unwrap();
+                        TcpStream::connect((ip.as_str(), port)).await.unwrap();
 
                     let size_buffer = (data_encoded.len() as u16).to_le_bytes();
                     if let Err(e) = stream.write_all(&size_buffer).await {
@@ -225,13 +235,26 @@ fn main() {
             let address = (args.ip.clone(), args.port);
             create_collection(&address).await.unwrap();
 
-            let set_results =
-                run_benchmark(&address, args.clients, args.requests, true)
-                    .await;
+            // Wait for creation of collection to get through all shards.
+            sleep(Duration::from_millis(100)).await;
 
-            let get_results =
-                run_benchmark(&address, args.clients, args.requests, false)
-                    .await;
+            let set_results = run_benchmark(
+                address.0.clone(),
+                address.1,
+                args.clients,
+                args.requests,
+                true,
+            )
+            .await;
+
+            let get_results = run_benchmark(
+                address.0.clone(),
+                address.1,
+                args.clients,
+                args.requests,
+                false,
+            )
+            .await;
 
             if let Err(e) = drop_collection(&address).await {
                 eprintln!("Failed to drop collection: {}", e);

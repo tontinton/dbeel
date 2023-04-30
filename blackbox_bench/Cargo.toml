@@ -9,5 +9,6 @@ edition = "2021"
 clap = { version = "4.1.13", features = ["derive"] }
 futures-lite = "1.12.0"
 glommio = "0.8.0"
+murmur3 = "0.5.2"
 rand = "0.8.5"
 rmpv = "1.0.0"

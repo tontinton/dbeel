@@ -87,6 +87,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-channel"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf46fee83e5ccffc220104713af3292ff9bc7c64c7de289f66dae8e38d826833"
+dependencies = [
+ "concurrent-queue 2.2.0",
+ "event-listener",
+ "futures-core",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -146,6 +157,7 @@ dependencies = [
  "clap",
  "futures-lite",
  "glommio",
+ "murmur3",
  "rand",
  "rmpv",
 ]
@@ -288,6 +300,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "concurrent-queue"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62ec6771ecfa0762d24683ee5a32ad78487a3d3afdc0fb8cae19d2c5deb50b7c"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "core-foundation-sys"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -408,11 +429,13 @@ dependencies = [
 name = "dbil"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "bincode",
  "caches",
  "futures-lite",
  "glommio",
  "log",
+ "murmur3",
  "once_cell",
  "pretty_env_logger",
  "redblacktree",
@@ -463,6 +486,12 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[package]]
+name = "event-listener"
+version = "2.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "fastrand"
@@ -550,7 +579,7 @@ dependencies = [
  "bitmaps",
  "buddy-alloc",
  "cc",
- "concurrent-queue",
+ "concurrent-queue 1.2.4",
  "crossbeam",
  "enclose",
  "flume",
@@ -764,6 +793,12 @@ checksum = "b275950c28b37e794e8c55d88aeb5e139d0ce23fdbbeda68f8d7174abdf9e8fa"
 dependencies = [
  "adler",
 ]
+
+[[package]]
+name = "murmur3"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 
 [[package]]
 name = "nanorand"

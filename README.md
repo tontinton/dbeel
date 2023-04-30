@@ -24,15 +24,22 @@ cd blackbox_bench
 cargo build --release
 ```
 
+To run the benchmarks:
+
+``` sh
+BENCHMARK=1 ./target/release/dbil   # On first terminal
+./target/release/blackbox_bench     # On second terminal
+```
+
 ## Performance
 Running the benchmark results in the following output:
 
 ```
 Set:
-total: 49.739198791s, min: 258.539µs, p50: 1.587444ms, p90: 2.481965ms, p99: 14.063627ms, p999: 103.281282ms, max: 104.122006ms
+total: 39.637963212s, min: 312.495µs, p50: 981.203µs, p90: 2.837719ms, p99: 8.379054ms, p999: 101.891049ms, max: 103.660656ms
 
 Get:
-total: 56.231811984s, min: 213.972µs, p50: 2.837968ms, p90: 3.723611ms, p99: 4.608398ms, p999: 23.587334ms, max: 27.51648ms
+total: 33.889400913s, min: 212.567µs, p50: 1.263362ms, p90: 3.128171ms, p99: 7.633867ms, p999: 9.755045ms, max: 17.755394ms
 ```
 
 Meaning median write is 1.58ms and median read is 2.83ms.
