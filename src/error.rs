@@ -1,3 +1,4 @@
+use async_channel::RecvError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -16,6 +17,9 @@ pub enum Error {
     BincodeSerdeError(#[from] bincode::Error),
     #[error(transparent)]
     RedBlackTreeError(#[from] redblacktree::Error),
+
+    #[error(transparent)]
+    ShardReceiverError(#[from] RecvError),
 
     #[error("field '{0}' is missing")]
     MissingField(String),

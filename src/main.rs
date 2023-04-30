@@ -1,17 +1,20 @@
+use async_channel::{Receiver, Sender};
+use caches::Cache;
 use dbil::{
     cached_file_reader::FileId,
     error::{Error, Result},
     lsm_tree::{LSMTree, TOMBSTONE},
-    page_cache::{PageCache, PartitionPageCache},
+    page_cache::{PageCache, PartitionPageCache, PAGE_SIZE},
 };
 use futures_lite::{AsyncReadExt, AsyncWriteExt, Future};
 use glommio::{
-    enclose, executor,
+    enclose,
     net::{TcpListener, TcpStream},
     spawn_local,
     timer::sleep,
-    LocalExecutorBuilder, Placement,
+    CpuSet, LocalExecutorBuilder, Placement,
 };
+use murmur3::murmur3_32;
 use pretty_env_logger::formatted_timed_builder;
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
@@ -23,33 +26,123 @@ extern crate pretty_env_logger;
 #[macro_use]
 extern crate log;
 
+// Each shard has a different port calculated by <port_base> + <cpu_id>
+const LISTEN_PORT_BASE: usize = 10000;
+const LISTEN_IP: &str = "127.0.0.1";
+
+#[cfg(debug_assertions)]
+const DEFAULT_LOG_LEVEL: &str = "dbil=trace";
+#[cfg(not(debug_assertions))]
+const DEFAULT_LOG_LEVEL: &str = "dbil=info";
+
 // How much files to compact.
 const COMPACTION_FACTOR: usize = 2;
 
-const PAGE_CACHE_SIZE: usize = 1024 * 1024 * 256;
-const PAGE_CACHE_SAMPLES: usize = 1024 * 1024 * 16;
+const PAGE_CACHE_SIZE: usize = 1024 * 1024 * 1024 / PAGE_SIZE; // 1 GB
+const PAGE_CACHE_SAMPLES: usize = PAGE_CACHE_SIZE / 16;
 
-// State shared between all coroutines that run on the same core.
-struct PerCoreState {
+#[derive(Clone)]
+enum ShardMessage {
+    CreateCollection(String),
+    DropCollection(String),
+}
+
+// A packet that is sent between shards, holds a cpu id and a message.
+type ShardPacket = (usize, ShardMessage);
+
+#[derive(Debug, Clone)]
+enum PartitionConnection {
+    Local {
+        cpu: usize,
+        sender: Sender<ShardPacket>,
+        receiver: Receiver<ShardPacket>,
+    },
+    Remote(String, u16), // ip:port
+}
+
+impl PartitionConnection {
+    fn name(&self) -> String {
+        match self {
+            Self::Local {
+                cpu,
+                sender: _,
+                receiver: _,
+            } => format!("local-{}", cpu),
+            Self::Remote(ip, port) => format!("{}:{}", ip, port),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Partition {
+    hash: u32,
+    connection: PartitionConnection,
+}
+
+// State shared between all coroutines that run on the same shard.
+struct PerShardState {
+    id: usize,
+    partitions: Vec<Partition>,
     trees: HashMap<String, Rc<LSMTree>>,
     cache: Rc<RefCell<PageCache<FileId>>>,
 }
 
-impl PerCoreState {
+impl PerShardState {
     fn new(
-        trees: HashMap<String, Rc<LSMTree>>,
+        id: usize,
+        partitions: Vec<Partition>,
         cache: PageCache<FileId>,
     ) -> Self {
         Self {
-            trees,
+            id,
+            partitions,
+            trees: HashMap::new(),
             cache: Rc::new(RefCell::new(cache)),
         }
     }
 }
 
-type SharedPerCoreState = Rc<RefCell<PerCoreState>>;
+type SharedPerShardState = Rc<RefCell<PerShardState>>;
 
-async fn run_compaction_loop(state: SharedPerCoreState) {
+fn hash_string(s: &String) -> std::io::Result<u32> {
+    murmur3_32(&mut std::io::Cursor::new(s), 0)
+}
+
+async fn run_shard_messages_receiver(state: SharedPerShardState) -> Result<()> {
+    let receivers = state
+        .borrow()
+        .partitions
+        .iter()
+        .flat_map(|p| match &p.connection {
+            PartitionConnection::Local {
+                cpu,
+                sender: _,
+                receiver,
+            } if cpu == &state.borrow().id => Some(receiver.clone()),
+            _ => None,
+        })
+        .collect::<Vec<Receiver<ShardPacket>>>();
+    assert_eq!(receivers.len(), 1);
+    let receiver = &receivers[0];
+
+    loop {
+        let (id, msg) = receiver.recv().await?;
+        if id == state.borrow().id {
+            continue;
+        }
+
+        match msg {
+            ShardMessage::CreateCollection(name) => {
+                create_collection_for_shard(state.clone(), name).await?;
+            }
+            ShardMessage::DropCollection(name) => {
+                drop_collection_for_shard(state.clone(), name)?;
+            }
+        };
+    }
+}
+
+async fn run_compaction_loop(state: SharedPerShardState) {
     loop {
         let trees: Vec<Rc<LSMTree>> =
             state.borrow().trees.values().map(|t| t.clone()).collect();
@@ -162,7 +255,7 @@ fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
     Ok(field_encoded)
 }
 
-fn get_collection(state: &PerCoreState, name: &String) -> Result<Rc<LSMTree>> {
+fn get_collection(state: &PerShardState, name: &String) -> Result<Rc<LSMTree>> {
     state
         .trees
         .get(name)
@@ -170,15 +263,76 @@ fn get_collection(state: &PerCoreState, name: &String) -> Result<Rc<LSMTree>> {
         .map(|t| t.clone())
 }
 
-async fn handle_request(
-    state: SharedPerCoreState,
-    client: &mut TcpStream,
-) -> Result<Option<Vec<u8>>> {
-    let size_buf = read_exactly(client, 2).await?;
-    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
-    let request_buf = read_exactly(client, size.into()).await?;
+async fn create_collection_for_shard(
+    state: SharedPerShardState,
+    name: String,
+) -> Result<()> {
+    let mut dir = temp_dir();
+    dir.push(format!("{}-{}", name, state.borrow().id));
+    let cache = state.borrow().cache.clone();
+    let tree = Rc::new(
+        LSMTree::open_or_create(
+            dir,
+            PartitionPageCache::new(name.clone(), cache),
+        )
+        .await?,
+    );
+    state.borrow_mut().trees.insert(name, tree);
+    Ok(())
+}
 
-    let msgpack_request = read_value_ref(&mut &request_buf[..])?.to_owned();
+fn drop_collection_for_shard(
+    state: SharedPerShardState,
+    name: String,
+) -> Result<()> {
+    {
+        let tree = state
+            .borrow_mut()
+            .trees
+            .remove(&name)
+            .ok_or(Error::CollectionNotFound(name))?;
+        tree.purge()?;
+    }
+
+    // TODO: clear cache only for current collection, not all.
+    state.borrow_mut().cache.borrow_mut().purge();
+
+    Ok(())
+}
+
+async fn send_message_to_all_shards(
+    state: SharedPerShardState,
+    message: ShardMessage,
+) -> Result<()> {
+    let senders = state
+        .borrow()
+        .partitions
+        .iter()
+        .flat_map(|p| match &p.connection {
+            PartitionConnection::Local {
+                cpu: _,
+                sender,
+                receiver: _,
+            } => Some(sender.clone()),
+            _ => None,
+        })
+        .collect::<Vec<Sender<ShardPacket>>>();
+
+    let id = state.borrow().id;
+
+    // TODO: remove unwrap.
+    for sender in senders {
+        sender.send((id, message.clone())).await.unwrap();
+    }
+
+    Ok(())
+}
+
+async fn handle_request(
+    state: SharedPerShardState,
+    buffer: Vec<u8>,
+) -> Result<Option<Vec<u8>>> {
+    let msgpack_request = read_value_ref(&mut &buffer[..])?.to_owned();
     if let Some(map_vec) = msgpack_request.as_map() {
         let map = Value::Map(map_vec.to_vec());
         match map["type"].as_str() {
@@ -189,28 +343,24 @@ async fn handle_request(
                     return Err(Error::CollectionAlreadyExists(name));
                 }
 
-                let mut dir = temp_dir();
-                dir.push(&name);
-                let global_cache = state.borrow().cache.clone();
+                create_collection_for_shard(state.clone(), name.clone())
+                    .await?;
 
-                let tree = Rc::new(
-                    LSMTree::open_or_create(
-                        dir,
-                        PartitionPageCache::new(name.clone(), global_cache),
-                    )
-                    .await?,
-                );
-                state.borrow_mut().trees.insert(name, tree);
+                send_message_to_all_shards(
+                    state.clone(),
+                    ShardMessage::CreateCollection(name),
+                )
+                .await?;
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
+                drop_collection_for_shard(state.clone(), name.clone())?;
 
-                let tree = state
-                    .borrow_mut()
-                    .trees
-                    .remove(&name)
-                    .ok_or(Error::CollectionNotFound(name))?;
-                tree.purge()?;
+                send_message_to_all_shards(
+                    state.clone(),
+                    ShardMessage::DropCollection(name),
+                )
+                .await?;
             }
             Some("set") => {
                 let collection = extract_field_as_str(&map, "collection")?;
@@ -260,10 +410,14 @@ async fn handle_request(
 }
 
 async fn handle_client(
-    state: SharedPerCoreState,
+    state: SharedPerShardState,
     client: &mut TcpStream,
 ) -> Result<()> {
-    match handle_request(state, client).await {
+    let size_buf = read_exactly(client, 2).await?;
+    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
+    let request_buf = read_exactly(client, size.into()).await?;
+
+    match handle_request(state, request_buf).await {
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(&mut buf, &ValueRef::String("OK".into()))?;
@@ -288,20 +442,34 @@ async fn handle_client(
     Ok(())
 }
 
-async fn run_shard() -> Result<()> {
-    let id = executor().id();
+async fn run_shard(id: usize, partitions: Vec<Partition>) -> Result<()> {
     info!("Starting shard of id: {}", id);
 
-    let cache = PageCache::new(PAGE_CACHE_SIZE, PAGE_CACHE_SAMPLES)
-        .map_err(|e| Error::CacheCreationError(e.to_string()))?;
-    let state = Rc::new(RefCell::new(PerCoreState::new(HashMap::new(), cache)));
+    let cache = PageCache::new(
+        PAGE_CACHE_SIZE / partitions.len(),
+        PAGE_CACHE_SAMPLES / partitions.len(),
+    )
+    .map_err(|e| Error::CacheCreationError(e.to_string()))?;
+
+    let address = format!("{}:{}", LISTEN_IP, LISTEN_PORT_BASE + id);
+    let server = TcpListener::bind(address.as_str())?;
+    trace!("Listening on: {}", address);
+
+    let state =
+        Rc::new(RefCell::new(PerShardState::new(id, partitions, cache)));
+
+    spawn_local(enclose!((state.clone() => state) async move {
+        if let Err(e) = run_shard_messages_receiver(state).await {
+            error!("Error running shard messages receiver: {}", e);
+        }
+    }))
+    .detach();
 
     spawn_local(enclose!((state.clone() => state) async move {
         run_compaction_loop(state).await;
     }))
     .detach();
 
-    let server = TcpListener::bind("127.0.0.1:10000")?;
     loop {
         match server.accept().await {
             Ok(mut client) => {
@@ -321,11 +489,78 @@ fn main() -> Result<()> {
     let mut log_builder = formatted_timed_builder();
     log_builder.parse_filters(
         &std::env::var("RUST_LOG")
-            .or::<String>(Ok("dbil=trace".to_string()))
+            .or::<String>(Ok(DEFAULT_LOG_LEVEL.to_string()))
             .unwrap(),
     );
     log_builder.try_init().unwrap();
-    let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
-    let handle = builder.name("dbil").spawn(run_shard)?;
-    handle.join()?
+
+    let benchmark = std::env::var("BENCHMARK")
+        .or::<String>(Ok("false".to_string()))
+        .unwrap()
+        .to_lowercase();
+    let skip_half_cpus = benchmark == "true" || benchmark == "1";
+
+    let cpu_set = CpuSet::online()?;
+    assert!(!cpu_set.is_empty());
+
+    let channels = (0..cpu_set.len())
+        .map(|_| async_channel::unbounded())
+        .collect::<Vec<(Sender<ShardPacket>, Receiver<ShardPacket>)>>();
+
+    let partitions = cpu_set
+        .into_iter()
+        .map(|x| x.cpu)
+        .zip(channels)
+        .map(|(cpu, (sender, receiver))| {
+            let connection = PartitionConnection::Local {
+                cpu,
+                sender,
+                receiver,
+            };
+
+            // TODO: remove unwrap.
+            let hash = hash_string(&connection.name()).unwrap();
+
+            Partition { hash, connection }
+        })
+        .collect::<Vec<Partition>>();
+
+    let mut handles = Vec::with_capacity(partitions.len());
+    let cpus = partitions
+        .iter()
+        .flat_map(|p| match &p.connection {
+            PartitionConnection::Local {
+                cpu,
+                sender: _,
+                receiver: _,
+            } => Some(cpu),
+            _ => None,
+        })
+        .map(|x| *x);
+
+    for cpu in cpus {
+        if skip_half_cpus && cpu >= partitions.len() / 2 {
+            continue;
+        }
+
+        handles.push(
+            LocalExecutorBuilder::new(Placement::Fixed(cpu))
+                .name(format!("dbil({})", cpu).as_str())
+                .spawn(enclose!((partitions.clone() => partitions) move ||
+                async move {
+                    run_shard(cpu, partitions).await
+                }))?,
+        );
+    }
+
+    let shard_results =
+        handles.into_iter().map(|h| h.join()).collect::<Vec<_>>();
+
+    for result in shard_results {
+        if result.is_err() {
+            error!("Shard returned error: {}", result.unwrap_err());
+        }
+    }
+
+    Ok(())
 }
