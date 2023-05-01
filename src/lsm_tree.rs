@@ -420,7 +420,9 @@ impl LSMTree {
                     return Ok(Some(value));
                 }
                 std::cmp::Ordering::Less => lind = half + 1,
-                std::cmp::Ordering::Greater => hind = half - 1,
+                std::cmp::Ordering::Greater => {
+                    hind = std::cmp::max(half, 1) - 1
+                }
             }
 
             if half == 0 || half == index_offset_length {
