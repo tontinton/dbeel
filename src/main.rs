@@ -528,7 +528,9 @@ async fn run_shard(
         match server.accept().await {
             Ok(mut client) => {
                 spawn_local(enclose!((state.clone() => state) async move {
-                    handle_client(state, &mut client).await.unwrap();
+                    if let Err(e) = handle_client(state, &mut client).await {
+                        error!("Failed to handle client: {}", e);
+                    }
                 }))
                 .detach();
             }
