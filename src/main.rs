@@ -490,18 +490,12 @@ fn main() -> Result<()> {
     );
     log_builder.try_init().unwrap();
 
-    let benchmark = std::env::var("BENCHMARK")
-        .or::<String>(Ok("false".to_string()))
-        .unwrap()
-        .to_lowercase();
-    let skip_half_cpus = benchmark == "true" || benchmark == "1";
-
     let cpu_set = CpuSet::online()?;
     assert!(!cpu_set.is_empty());
 
     let channels = (0..cpu_set.len())
         .map(|_| async_channel::unbounded())
-        .collect::<Vec<(Sender<ShardPacket>, Receiver<ShardPacket>)>>();
+        .collect::<Vec<_>>();
 
     let shards = cpu_set
         .into_iter()
@@ -518,45 +512,32 @@ fn main() -> Result<()> {
 
             Shard { hash, connection }
         })
-        .collect::<Vec<Shard>>();
+        .collect::<Vec<_>>();
 
-    let mut handles = Vec::with_capacity(shards.len());
-    let cpus = shards
+    let handles = shards
         .iter()
         .flat_map(|p| match &p.connection {
             ShardConnection::Local {
                 cpu,
                 sender: _,
                 receiver: _,
-            } => Some(cpu),
+            } => Some(*cpu),
             _ => None,
         })
-        .map(|x| *x);
-
-    for cpu in cpus {
-        if skip_half_cpus && cpu >= shards.len() / 2 {
-            continue;
-        }
-
-        handles.push(
+        .map(|cpu| {
             LocalExecutorBuilder::new(Placement::Fixed(cpu))
                 .name(format!("dbil({})", cpu).as_str())
-                .spawn(
-                    enclose!((shards.clone() => shards) move || async move {
-                        run_shard(cpu, shards).await
-                    }),
-                )?,
-        );
-    }
+                .spawn(enclose!((shards.clone() => shards) move || async move {
+                    run_shard(cpu, shards).await
+                }))
+                .map_err(|e| Error::GlommioError(e))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let shard_results =
-        handles.into_iter().map(|h| h.join()).collect::<Vec<_>>();
-
-    for result in shard_results {
-        if result.is_err() {
-            error!("Shard returned error: {}", result.unwrap_err());
-        }
-    }
+    handles
+        .into_iter()
+        .map(|h| h.join().map_err(|e| Error::GlommioError(e)))
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(())
 }
