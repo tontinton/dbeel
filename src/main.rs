@@ -18,7 +18,7 @@ use murmur3::murmur3_32;
 use pretty_env_logger::formatted_timed_builder;
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
-use std::env::temp_dir;
+use std::{any::Any, env::temp_dir};
 use std::{cell::RefCell, time::Duration};
 use std::{collections::HashMap, rc::Rc};
 
@@ -133,6 +133,33 @@ impl PerShardState {
 
 type SharedPerShardState = Rc<RefCell<PerShardState>>;
 
+async fn handle_shard_message(
+    state: SharedPerShardState,
+    msg: ShardMessage,
+) -> Result<()> {
+    // All messages should be idempotent.
+    match msg {
+        ShardMessage::CreateCollection(name) => {
+            if let Err(e) =
+                create_collection_for_shard(state, name).await
+            {
+                if e.type_id() != Error::CollectionAlreadyExists.type_id() {
+                    return Err(e);
+                }
+            }
+        }
+        ShardMessage::DropCollection(name) => {
+            if let Err(e) = drop_collection_for_shard(state, name) {
+                if e.type_id() != Error::CollectionNotFound.type_id() {
+                    return Err(e);
+                }
+            }
+        }
+    };
+
+    Ok(())
+}
+
 async fn run_shard_messages_receiver(
     state: SharedPerShardState,
     receiver: Receiver<ShardPacket>,
@@ -143,14 +170,7 @@ async fn run_shard_messages_receiver(
             continue;
         }
 
-        match msg {
-            ShardMessage::CreateCollection(name) => {
-                create_collection_for_shard(state.clone(), name).await?;
-            }
-            ShardMessage::DropCollection(name) => {
-                drop_collection_for_shard(state.clone(), name)?;
-            }
-        };
+        handle_shard_message(state.clone(), msg).await?;
     }
 }
 
@@ -279,6 +299,10 @@ async fn create_collection_for_shard(
     state: SharedPerShardState,
     name: String,
 ) -> Result<()> {
+    if state.borrow().trees.contains_key(&name) {
+        return Err(Error::CollectionAlreadyExists(name));
+    }
+
     let mut dir = temp_dir();
     dir.push(format!("{}-{}", name, state.borrow().id));
     let cache = state.borrow().cache.clone();
