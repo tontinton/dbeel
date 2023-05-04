@@ -1,4 +1,10 @@
 use async_channel::{Receiver, Sender};
+use bincode::{
+    config::{
+        FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
+    },
+    DefaultOptions, Options,
+};
 use caches::Cache;
 use dbil::{
     cached_file_reader::FileId,
@@ -18,6 +24,7 @@ use murmur3::murmur3_32;
 use pretty_env_logger::formatted_timed_builder;
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
+use serde::{Deserialize, Serialize};
 use std::{any::Any, env::temp_dir};
 use std::{cell::RefCell, time::Duration};
 use std::{collections::HashMap, rc::Rc};
@@ -26,9 +33,15 @@ extern crate pretty_env_logger;
 #[macro_use]
 extern crate log;
 
-// Each shard has a different port calculated by <port_base> + <cpu_id>
-const LISTEN_PORT_BASE: usize = 10000;
 const LISTEN_IP: &str = "127.0.0.1";
+
+// Each shard has a different port calculated by <port_base> + <cpu_id>.
+// This port is for listening on client requests.
+const LISTEN_PORT_BASE: usize = 10000;
+
+// This port is for listening for distributed messages from remote shards.
+const DISTRIBUTED_LISTEN_PORT_BASE: usize = 20000;
+const DISTRIBUTED_SERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(debug_assertions)]
 const DEFAULT_LOG_LEVEL: &str = "dbil=trace";
@@ -41,10 +54,19 @@ const COMPACTION_FACTOR: usize = 2;
 const PAGE_CACHE_SIZE: usize = 1024 * 1024 * 1024 / PAGE_SIZE; // 1 GB
 const PAGE_CACHE_SAMPLES: usize = PAGE_CACHE_SIZE / 16;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum ShardMessage {
     CreateCollection(String),
     DropCollection(String),
+}
+
+fn bincode_options() -> WithOtherIntEncoding<
+    WithOtherTrailing<DefaultOptions, RejectTrailing>,
+    FixintEncoding,
+> {
+    return DefaultOptions::new()
+        .reject_trailing_bytes()
+        .with_fixint_encoding();
 }
 
 // A packet that is sent between shards, holds a cpu id and a message.
@@ -69,20 +91,25 @@ impl LocalShardConnection {
 }
 
 #[derive(Debug)]
+struct RemoteShardConnection {
+    // The address to use to connect to the remote shard.
+    address: String,
+}
+
+impl RemoteShardConnection {
+    fn new(address: String) -> Self {
+        Self { address }
+    }
+}
+
+#[derive(Debug)]
 enum ShardConnection {
     Local(LocalShardConnection),
-    Remote {
-        sender: TcpStream,
-        receiver: TcpStream,
-    },
+    Remote(RemoteShardConnection),
 }
 
 #[derive(Debug)]
 struct Shard {
-    // The address other nodes use to connect to this shard.
-    // Has to be unique across all nodes and shards.
-    address: String,
-
     // The hash of the unique address, used for consistent hashing.
     hash: u32,
 
@@ -95,13 +122,8 @@ fn hash_string(s: &String) -> std::io::Result<u32> {
 }
 
 impl Shard {
-    fn new(address: String, connection: ShardConnection) -> Self {
-        let hash = hash_string(&address).unwrap();
-        Self {
-            address,
-            hash,
-            connection,
-        }
+    fn new(hash: u32, connection: ShardConnection) -> Self {
+        Self { hash, connection }
     }
 }
 
@@ -140,9 +162,7 @@ async fn handle_shard_message(
     // All messages should be idempotent.
     match msg {
         ShardMessage::CreateCollection(name) => {
-            if let Err(e) =
-                create_collection_for_shard(state, name).await
-            {
+            if let Err(e) = create_collection_for_shard(state, name).await {
                 if e.type_id() != Error::CollectionAlreadyExists.type_id() {
                     return Err(e);
                 }
@@ -158,6 +178,43 @@ async fn handle_shard_message(
     };
 
     Ok(())
+}
+
+async fn handle_distributed_client(
+    state: SharedPerShardState,
+    mut client: TcpStream,
+) -> Result<()> {
+    let size_buf = read_exactly(&mut client, 2).await?;
+    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
+    let request_buf = read_exactly(&mut client, size.into()).await?;
+
+    let mut cursor = std::io::Cursor::new(&request_buf[..]);
+    let msg =
+        bincode_options().deserialize_from::<_, ShardMessage>(&mut cursor)?;
+
+    handle_shard_message(state.clone(), msg).await
+}
+
+async fn run_distributed_messages_server(
+    state: SharedPerShardState,
+    server: TcpListener,
+) -> Result<()> {
+    loop {
+        match server.accept().await {
+            Ok(client) => {
+                spawn_local(enclose!((state.clone() => state) async move {
+                    let result = handle_distributed_client(state, client).await;
+                    if let Err(e) = result {
+                        error!("Failed to handle distributed client: {}", e);
+                    }
+                }))
+                .detach();
+            }
+            Err(e) => {
+                error!("Failed to accept client: {}", e);
+            }
+        }
+    }
 }
 
 async fn run_shard_messages_receiver(
@@ -337,6 +394,55 @@ fn drop_collection_for_shard(
     Ok(())
 }
 
+async fn broadcast_message_to_remote_shards(
+    state: SharedPerShardState,
+    message: &ShardMessage,
+) -> Result<()> {
+    let addresses = state
+        .borrow()
+        .shards
+        .iter()
+        .flat_map(|p| match &p.connection {
+            ShardConnection::Remote(c) => Some(c.address.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let msg_buf = bincode_options().serialize(message)?;
+    let size_buf = (msg_buf.len() as u16).to_le_bytes();
+
+    for address in addresses {
+        let connect_result = TcpStream::connect_timeout(
+            &address,
+            DISTRIBUTED_SERVER_CONNECT_TIMEOUT,
+        )
+        .await;
+
+        let mut stream = match connect_result {
+            Ok(s) => s,
+            Err(e) => {
+                error!(
+                    "Error connecting to distributed client ({}): {}",
+                    address, e
+                );
+                continue;
+            }
+        };
+
+        if let Err(e) = stream.write_all(&size_buf).await {
+            eprintln!("Failed to send size to ({}): {}", address, e);
+            continue;
+        }
+
+        if let Err(e) = stream.write_all(&msg_buf).await {
+            eprintln!("Failed to send data to ({}): {}", address, e);
+            continue;
+        }
+    }
+
+    Ok(())
+}
+
 async fn broadcast_message_to_local_shards(
     state: SharedPerShardState,
     message: ShardMessage,
@@ -361,6 +467,27 @@ async fn broadcast_message_to_local_shards(
     Ok(())
 }
 
+async fn broadcast_message(
+    state: SharedPerShardState,
+    message: ShardMessage,
+) -> Result<()> {
+    broadcast_message_to_local_shards(state.clone(), message.clone()).await?;
+    broadcast_message_to_remote_shards(state, &message).await?;
+    Ok(())
+}
+
+fn broadcast_message_in_background(
+    state: SharedPerShardState,
+    message: ShardMessage,
+) {
+    spawn_local(enclose!((state.clone() => state) async move {
+        if let Err(e) = broadcast_message(state, message).await {
+            error!("Failed to broadcast message: {}", e);
+        }
+    }))
+    .detach();
+}
+
 async fn handle_request(
     state: SharedPerShardState,
     buffer: Vec<u8>,
@@ -379,21 +506,19 @@ async fn handle_request(
                 create_collection_for_shard(state.clone(), name.clone())
                     .await?;
 
-                broadcast_message_to_local_shards(
-                    state.clone(),
+                broadcast_message_in_background(
+                    state,
                     ShardMessage::CreateCollection(name),
-                )
-                .await?;
+                );
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
                 drop_collection_for_shard(state.clone(), name.clone())?;
 
-                broadcast_message_to_local_shards(
-                    state.clone(),
+                broadcast_message_in_background(
+                    state,
                     ShardMessage::DropCollection(name),
-                )
-                .await?;
+                );
             }
             Some("set") => {
                 let collection = extract_field_as_str(&map, "collection")?;
@@ -490,15 +615,27 @@ async fn run_shard(
         .unwrap();
 
     let port = LISTEN_PORT_BASE + id;
-    let shards = local_connections
+    let mut shards = local_connections
         .into_iter()
         .map(|c| {
             Shard::new(
-                format!("{}:{}", hostname, port),
+                hash_string(&format!("{}:{}", hostname, port)).unwrap(),
                 ShardConnection::Local(c),
             )
         })
         .collect::<Vec<_>>();
+
+    // TODO: Add remote shards.
+    // for i in 12345..12345 + 12 {
+    //     let address = format!("localhost:{}", i);
+    //     shards.push(Shard::new(
+    //         hash_string(&address).unwrap(),
+    //         ShardConnection::Remote(RemoteShardConnection::new(address)),
+    //     ));
+    // }
+
+    // Sort by hash to make it a consistant hashing ring.
+    shards.sort_unstable_by_key(|x| x.hash);
 
     let cache = PageCache::new(
         PAGE_CACHE_SIZE / shards.len(),
@@ -508,7 +645,7 @@ async fn run_shard(
 
     let address = format!("{}:{}", LISTEN_IP, port);
     let server = TcpListener::bind(address.as_str())?;
-    trace!("Listening on: {}", address);
+    trace!("Listening for clients on: {}", address);
 
     let state = Rc::new(RefCell::new(PerShardState::new(id, shards, cache)));
 
@@ -521,6 +658,27 @@ async fn run_shard(
 
     spawn_local(enclose!((state.clone() => state) async move {
         run_compaction_loop(state).await;
+    }))
+    .detach();
+
+    spawn_local(enclose!((state.clone() => state) async move {
+        let address = format!(
+            "{}:{}",
+            LISTEN_IP,
+            DISTRIBUTED_LISTEN_PORT_BASE + state.borrow().id
+        );
+        let server = match TcpListener::bind(address.as_str()) {
+            Ok(server) => server,
+            Err(e) => {
+                error!("Error starting remote messages server: {}", e);
+                return;
+            }
+        };
+        trace!("Listening for distributed messages on: {}", address);
+
+        if let Err(e) = run_distributed_messages_server(state, server).await {
+            error!("Error running remote messages server: {}", e);
+        }
     }))
     .detach();
 
