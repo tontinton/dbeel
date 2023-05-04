@@ -51,39 +51,72 @@ enum ShardMessage {
 type ShardPacket = (usize, ShardMessage);
 
 #[derive(Debug, Clone)]
-enum ShardConnection {
-    Local {
-        cpu: usize,
-        sender: Sender<ShardPacket>,
-        receiver: Receiver<ShardPacket>,
-    },
-    Remote(String, u16), // ip:port
+struct LocalShardConnection {
+    cpu: usize,
+    sender: Sender<ShardPacket>,
+    receiver: Receiver<ShardPacket>,
 }
 
-impl ShardConnection {
-    fn name(&self) -> String {
-        match self {
-            Self::Local {
-                cpu,
-                sender: _,
-                receiver: _,
-            } => format!("local-{}", cpu),
-            Self::Remote(ip, port) => format!("{}:{}", ip, port),
+impl LocalShardConnection {
+    fn new(cpu: usize) -> Self {
+        let (sender, receiver) = async_channel::unbounded();
+        Self {
+            cpu,
+            sender,
+            receiver,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+enum ShardConnection {
+    Local(LocalShardConnection),
+    Remote {
+        sender: TcpStream,
+        receiver: TcpStream,
+    },
+}
+
+#[derive(Debug)]
 struct Shard {
+    // The address other nodes use to connect to this shard.
+    // Has to be unique across all nodes and shards.
+    address: String,
+
+    // The hash of the unique address, used for consistent hashing.
     hash: u32,
+
+    // Communicate with a shard by abstracting away if it's remote or local.
     connection: ShardConnection,
+}
+
+fn hash_string(s: &String) -> std::io::Result<u32> {
+    murmur3_32(&mut std::io::Cursor::new(s), 0)
+}
+
+impl Shard {
+    fn new(address: String, connection: ShardConnection) -> Self {
+        let hash = hash_string(&address).unwrap();
+        Self {
+            address,
+            hash,
+            connection,
+        }
+    }
 }
 
 // State shared between all coroutines that run on the same shard.
 struct PerShardState {
+    // Current shard's cpu id.
     id: usize,
+
+    // The consistent hash ring (shards sorted by hash).
     shards: Vec<Shard>,
+
+    // Collections to the lsm tree on disk.
     trees: HashMap<String, Rc<LSMTree>>,
+
+    // The shard's page cache.
     cache: Rc<RefCell<PageCache<FileId>>>,
 }
 
@@ -100,27 +133,10 @@ impl PerShardState {
 
 type SharedPerShardState = Rc<RefCell<PerShardState>>;
 
-fn hash_string(s: &String) -> std::io::Result<u32> {
-    murmur3_32(&mut std::io::Cursor::new(s), 0)
-}
-
-async fn run_shard_messages_receiver(state: SharedPerShardState) -> Result<()> {
-    let receivers = state
-        .borrow()
-        .shards
-        .iter()
-        .flat_map(|p| match &p.connection {
-            ShardConnection::Local {
-                cpu,
-                sender: _,
-                receiver,
-            } if cpu == &state.borrow().id => Some(receiver.clone()),
-            _ => None,
-        })
-        .collect::<Vec<Receiver<ShardPacket>>>();
-    assert_eq!(receivers.len(), 1);
-    let receiver = &receivers[0];
-
+async fn run_shard_messages_receiver(
+    state: SharedPerShardState,
+    receiver: Receiver<ShardPacket>,
+) -> Result<()> {
     loop {
         let (id, msg) = receiver.recv().await?;
         if id == state.borrow().id {
@@ -306,14 +322,10 @@ async fn broadcast_message_to_local_shards(
         .shards
         .iter()
         .flat_map(|p| match &p.connection {
-            ShardConnection::Local {
-                cpu: _,
-                sender,
-                receiver: _,
-            } => Some(sender.clone()),
+            ShardConnection::Local(c) => Some(c.sender.clone()),
             _ => None,
         })
-        .collect::<Vec<Sender<ShardPacket>>>();
+        .collect::<Vec<_>>();
 
     let id = state.borrow().id;
 
@@ -424,7 +436,7 @@ async fn handle_client(
             client.write_all(&buf).await?;
         }
         Err(e) => {
-            let error_string = format!("Error: {}", e);
+            let error_string = format!("Error while handling request: {}", e);
             error!("{}", error_string);
 
             let mut buf: Vec<u8> = Vec::new();
@@ -439,8 +451,30 @@ async fn handle_client(
     Ok(())
 }
 
-async fn run_shard(id: usize, shards: Vec<Shard>) -> Result<()> {
+async fn run_shard(
+    hostname: String,
+    id: usize,
+    local_connections: Vec<LocalShardConnection>,
+) -> Result<()> {
     info!("Starting shard of id: {}", id);
+
+    let receiver = local_connections
+        .iter()
+        .filter(|c| c.cpu == id)
+        .map(|c| c.receiver.clone())
+        .next()
+        .unwrap();
+
+    let port = LISTEN_PORT_BASE + id;
+    let shards = local_connections
+        .into_iter()
+        .map(|c| {
+            Shard::new(
+                format!("{}:{}", hostname, port),
+                ShardConnection::Local(c),
+            )
+        })
+        .collect::<Vec<_>>();
 
     let cache = PageCache::new(
         PAGE_CACHE_SIZE / shards.len(),
@@ -448,14 +482,14 @@ async fn run_shard(id: usize, shards: Vec<Shard>) -> Result<()> {
     )
     .map_err(|e| Error::CacheCreationError(e.to_string()))?;
 
-    let address = format!("{}:{}", LISTEN_IP, LISTEN_PORT_BASE + id);
+    let address = format!("{}:{}", LISTEN_IP, port);
     let server = TcpListener::bind(address.as_str())?;
     trace!("Listening on: {}", address);
 
     let state = Rc::new(RefCell::new(PerShardState::new(id, shards, cache)));
 
     spawn_local(enclose!((state.clone() => state) async move {
-        if let Err(e) = run_shard_messages_receiver(state).await {
+        if let Err(e) = run_shard_messages_receiver(state, receiver).await {
             error!("Error running shard messages receiver: {}", e);
         }
     }))
@@ -490,45 +524,28 @@ fn main() -> Result<()> {
     );
     log_builder.try_init().unwrap();
 
+    let hostname = "127.0.0.1".to_string();
+
     let cpu_set = CpuSet::online()?;
     assert!(!cpu_set.is_empty());
 
-    let channels = (0..cpu_set.len())
-        .map(|_| async_channel::unbounded())
+    let local_connections = cpu_set
+        .iter()
+        .map(|x| x.cpu)
+        .map(|cpu| LocalShardConnection::new(cpu))
         .collect::<Vec<_>>();
 
-    let shards = cpu_set
+    let handles = cpu_set
         .into_iter()
         .map(|x| x.cpu)
-        .zip(channels)
-        .map(|(cpu, (sender, receiver))| {
-            let connection = ShardConnection::Local {
-                cpu,
-                sender,
-                receiver,
-            };
-
-            let hash = hash_string(&connection.name()).unwrap();
-
-            Shard { hash, connection }
-        })
-        .collect::<Vec<_>>();
-
-    let handles = shards
-        .iter()
-        .flat_map(|p| match &p.connection {
-            ShardConnection::Local {
-                cpu,
-                sender: _,
-                receiver: _,
-            } => Some(*cpu),
-            _ => None,
-        })
         .map(|cpu| {
             LocalExecutorBuilder::new(Placement::Fixed(cpu))
                 .name(format!("dbil({})", cpu).as_str())
-                .spawn(enclose!((shards.clone() => shards) move || async move {
-                    run_shard(cpu, shards).await
+                .spawn(enclose!(
+                (local_connections.clone() => connections,
+                 hostname.clone() => hostname)
+                move || async move {
+                    run_shard(hostname, cpu, connections).await
                 }))
                 .map_err(|e| Error::GlommioError(e))
         })
