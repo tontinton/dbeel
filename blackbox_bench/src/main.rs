@@ -16,23 +16,18 @@ struct Args {
     #[clap(
         short,
         long,
-        help = "Server hostname / ip (default %v)",
+        help = "Server hostname / ip.",
         default_value = "127.0.0.1"
     )]
     ip: String,
 
-    #[clap(
-        short,
-        long,
-        help = "Server port (default %v)",
-        default_value = "10000"
-    )]
+    #[clap(short, long, help = "Server port.", default_value = "10000")]
     port: u16,
 
     #[clap(
         short,
         long,
-        help = "Number of parallel connections (default %v)",
+        help = "Number of parallel connections.",
         default_value = "20"
     )]
     clients: usize,
@@ -40,7 +35,7 @@ struct Args {
     #[clap(
         short = 'n',
         long,
-        help = "Total number of requests each client sends (default %v)",
+        help = "Total number of requests each client sends.",
         default_value = "1000"
     )]
     requests: usize,
