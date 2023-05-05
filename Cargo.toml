@@ -5,6 +5,7 @@ members = ["blackbox_bench"]
 name = "dbil"
 version = "0.1.0"
 edition = "2021"
+authors = ["Tony Solomonik"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,6 +13,7 @@ edition = "2021"
 async-channel = "1.8.0"
 bincode = "1.3.3"
 caches = "0.2.3"
+clap = { version = "4.2.7", features = ["derive"] }
 futures-lite = "1.12.0"
 glommio = "0.8.0"
 log = "0.4.17"

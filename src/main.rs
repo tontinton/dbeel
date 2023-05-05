@@ -6,6 +6,7 @@ use bincode::{
     DefaultOptions, Options,
 };
 use caches::Cache;
+use clap::Parser;
 use dbil::{
     cached_file_reader::FileId,
     error::{Error, Result},
@@ -33,26 +34,74 @@ extern crate pretty_env_logger;
 #[macro_use]
 extern crate log;
 
-const LISTEN_IP: &str = "127.0.0.1";
-
-// Each shard has a different port calculated by <port_base> + <cpu_id>.
-// This port is for listening on client requests.
-const LISTEN_PORT_BASE: usize = 10000;
-
-// This port is for listening for distributed messages from remote shards.
-const DISTRIBUTED_LISTEN_PORT_BASE: usize = 20000;
-const DISTRIBUTED_SERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
 #[cfg(debug_assertions)]
 const DEFAULT_LOG_LEVEL: &str = "dbil=trace";
 #[cfg(not(debug_assertions))]
 const DEFAULT_LOG_LEVEL: &str = "dbil=info";
 
-// How much files to compact.
-const COMPACTION_FACTOR: usize = 2;
+#[derive(Parser, Debug, Clone)]
+#[command(author, version, about, long_about = None)]
+/// A stupid database, by Tony Solomonik.
+struct Args {
+    #[clap(
+        short,
+        long,
+        help = "Unique node name, used to differentiate between nodes for \
+                distribution of load.",
+        default_value = "dbil"
+    )]
+    name: String,
 
-const PAGE_CACHE_SIZE: usize = 1024 * 1024 * 1024 / PAGE_SIZE; // 1 GB
-const PAGE_CACHE_SAMPLES: usize = PAGE_CACHE_SIZE / 16;
+    #[clap(
+        short,
+        long,
+        help = "Listen hostname / ip.",
+        default_value = "127.0.0.1"
+    )]
+    ip: String,
+
+    #[clap(
+        short,
+        long,
+        help = "Server port base.
+                Each shard has a different port calculated by <port_base> + \
+                <cpu_id>.
+                This port is for listening on client requests.",
+        default_value = "10000"
+    )]
+    port: u16,
+
+    #[clap(
+        long,
+        help = "Remote shard port base.
+                This port is for listening for distributed messages from \
+                remote shards.",
+        default_value = "20000"
+    )]
+    remote_shard_port: u16,
+
+    #[clap(
+        long,
+        help = "Remote shard connect timeout in milliseconds.",
+        default_value = "5000"
+    )]
+    remote_shard_connect_timeout: u64,
+
+    #[clap(
+        short,
+        long,
+        help = "How much files to compact each time.",
+        default_value = "2"
+    )]
+    compaction_factor: usize,
+
+    #[clap(
+        long,
+        help = "Page cache size in bytes.",
+        default_value = "1073741824"
+    )]
+    page_cache_size: usize,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 enum ShardMessage {
@@ -129,6 +178,9 @@ impl Shard {
 
 // State shared between all coroutines that run on the same shard.
 struct PerShardState {
+    // Input config from the user.
+    args: Args,
+
     // Current shard's cpu id.
     id: usize,
 
@@ -143,8 +195,14 @@ struct PerShardState {
 }
 
 impl PerShardState {
-    fn new(id: usize, shards: Vec<Shard>, cache: PageCache<FileId>) -> Self {
+    fn new(
+        args: Args,
+        id: usize,
+        shards: Vec<Shard>,
+        cache: PageCache<FileId>,
+    ) -> Self {
         Self {
+            args,
             id,
             shards,
             trees: HashMap::new(),
@@ -232,6 +290,8 @@ async fn run_shard_messages_receiver(
 }
 
 async fn run_compaction_loop(state: SharedPerShardState) {
+    let compaction_factor = state.borrow().args.compaction_factor;
+
     loop {
         let trees: Vec<Rc<LSMTree>> =
             state.borrow().trees.values().map(|t| t.clone()).collect();
@@ -240,7 +300,7 @@ async fn run_compaction_loop(state: SharedPerShardState) {
                 let (even, mut odd): (Vec<usize>, Vec<usize>) =
                     tree.sstable_indices().iter().partition(|i| *i % 2 == 0);
 
-                if even.len() >= COMPACTION_FACTOR {
+                if even.len() >= compaction_factor {
                     let new_index = even[even.len() - 1] + 1;
                     if let Err(e) =
                         tree.compact(even, new_index, odd.is_empty()).await
@@ -250,7 +310,7 @@ async fn run_compaction_loop(state: SharedPerShardState) {
                     continue 'current_tree_compaction;
                 }
 
-                if odd.len() >= COMPACTION_FACTOR && even.len() >= 1 {
+                if odd.len() >= compaction_factor && even.len() >= 1 {
                     debug_assert!(even[0] > odd[odd.len() - 1]);
 
                     odd.push(even[0]);
@@ -410,24 +470,21 @@ async fn broadcast_message_to_remote_shards(
 
     let msg_buf = bincode_options().serialize(message)?;
     let size_buf = (msg_buf.len() as u16).to_le_bytes();
+    let timeout =
+        Duration::from_millis(state.borrow().args.remote_shard_connect_timeout);
 
     for address in addresses {
-        let connect_result = TcpStream::connect_timeout(
-            &address,
-            DISTRIBUTED_SERVER_CONNECT_TIMEOUT,
-        )
-        .await;
-
-        let mut stream = match connect_result {
-            Ok(s) => s,
-            Err(e) => {
-                error!(
-                    "Error connecting to distributed client ({}): {}",
-                    address, e
-                );
-                continue;
-            }
-        };
+        let mut stream =
+            match TcpStream::connect_timeout(&address, timeout).await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(
+                        "Error connecting to distributed client ({}): {}",
+                        address, e
+                    );
+                    continue;
+                }
+            };
 
         if let Err(e) = stream.write_all(&size_buf).await {
             eprintln!("Failed to send size to ({}): {}", address, e);
@@ -601,7 +658,7 @@ async fn handle_client(
 }
 
 async fn run_shard(
-    hostname: String,
+    args: Args,
     id: usize,
     local_connections: Vec<LocalShardConnection>,
 ) -> Result<()> {
@@ -614,12 +671,14 @@ async fn run_shard(
         .next()
         .unwrap();
 
-    let port = LISTEN_PORT_BASE + id;
+    let shard_name = format!("{}-{}", args.name, id);
+
+    let port = args.port + id as u16;
     let mut shards = local_connections
         .into_iter()
         .map(|c| {
             Shard::new(
-                hash_string(&format!("{}:{}", hostname, port)).unwrap(),
+                hash_string(&shard_name).unwrap(),
                 ShardConnection::Local(c),
             )
         })
@@ -637,17 +696,16 @@ async fn run_shard(
     // Sort by hash to make it a consistant hashing ring.
     shards.sort_unstable_by_key(|x| x.hash);
 
-    let cache = PageCache::new(
-        PAGE_CACHE_SIZE / shards.len(),
-        PAGE_CACHE_SAMPLES / shards.len(),
-    )
-    .map_err(|e| Error::CacheCreationError(e.to_string()))?;
+    let cache_len = args.page_cache_size / PAGE_SIZE / shards.len();
+    let cache = PageCache::new(cache_len, cache_len / 16)
+        .map_err(|e| Error::CacheCreationError(e.to_string()))?;
 
-    let address = format!("{}:{}", LISTEN_IP, port);
+    let address = format!("{}:{}", args.ip, port);
     let server = TcpListener::bind(address.as_str())?;
     trace!("Listening for clients on: {}", address);
 
-    let state = Rc::new(RefCell::new(PerShardState::new(id, shards, cache)));
+    let state =
+        Rc::new(RefCell::new(PerShardState::new(args, id, shards, cache)));
 
     spawn_local(enclose!((state.clone() => state) async move {
         if let Err(e) = run_shard_messages_receiver(state, receiver).await {
@@ -664,8 +722,8 @@ async fn run_shard(
     spawn_local(enclose!((state.clone() => state) async move {
         let address = format!(
             "{}:{}",
-            LISTEN_IP,
-            DISTRIBUTED_LISTEN_PORT_BASE + state.borrow().id
+            state.borrow().args.ip,
+            state.borrow().args.remote_shard_port + state.borrow().id as u16
         );
         let server = match TcpListener::bind(address.as_str()) {
             Ok(server) => server,
@@ -708,7 +766,7 @@ fn main() -> Result<()> {
     );
     log_builder.try_init().unwrap();
 
-    let hostname = "127.0.0.1".to_string();
+    let args = Args::parse();
 
     let cpu_set = CpuSet::online()?;
     assert!(!cpu_set.is_empty());
@@ -727,9 +785,9 @@ fn main() -> Result<()> {
                 .name(format!("dbil({})", cpu).as_str())
                 .spawn(enclose!(
                 (local_connections.clone() => connections,
-                 hostname.clone() => hostname)
+                 args.clone() => args)
                 move || async move {
-                    run_shard(hostname, cpu, connections).await
+                    run_shard(args, cpu, connections).await
                 }))
                 .map_err(|e| Error::GlommioError(e))
         })
