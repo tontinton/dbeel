@@ -31,6 +31,23 @@ To run the benchmarks:
 ./target/release/blackbox_bench      # On second terminal
 ```
 
+I have also written a mini client that you can run inside of IPython:
+
+``` sh
+ipython -i dbeel.py
+```
+
+Then once inside IPython, you can interact with the db using the DB class:
+
+``` python
+DB.create("test")
+DB.set("test", "key", "value")
+assert DB.get("test", "key") == "value"
+DB.delete("test", "key")
+assert "key not found" in DB.get("test", "key")
+DB.drop("test")
+```
+
 ## Performance
 Running the benchmark with no fdatasync results in the following output:
 
