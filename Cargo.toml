@@ -2,7 +2,7 @@
 members = ["blackbox_bench"]
 
 [package]
-name = "dbil"
+name = "dbeel"
 version = "0.1.0"
 edition = "2021"
 authors = ["Tony Solomonik"]

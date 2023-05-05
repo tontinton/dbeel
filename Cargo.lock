@@ -426,7 +426,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dbil"
+name = "dbeel"
 version = "0.1.0"
 dependencies = [
  "async-channel",

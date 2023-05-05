@@ -41,7 +41,7 @@ struct Args {
     requests: usize,
 }
 
-const COLLECTION_NAME: &str = "dbil";
+const COLLECTION_NAME: &str = "dbeel";
 
 async fn run_benchmark(
     ip: String,

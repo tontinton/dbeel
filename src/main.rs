@@ -7,7 +7,7 @@ use bincode::{
 };
 use caches::Cache;
 use clap::Parser;
-use dbil::{
+use dbeel::{
     cached_file_reader::FileId,
     error::{Error, Result},
     lsm_tree::{LSMTree, TOMBSTONE},
@@ -35,9 +35,9 @@ extern crate pretty_env_logger;
 extern crate log;
 
 #[cfg(debug_assertions)]
-const DEFAULT_LOG_LEVEL: &str = "dbil=trace";
+const DEFAULT_LOG_LEVEL: &str = "dbeel=trace";
 #[cfg(not(debug_assertions))]
-const DEFAULT_LOG_LEVEL: &str = "dbil=info";
+const DEFAULT_LOG_LEVEL: &str = "dbeel=info";
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -48,7 +48,7 @@ struct Args {
         long,
         help = "Unique node name, used to differentiate between nodes for \
                 distribution of load.",
-        default_value = "dbil"
+        default_value = "dbeel"
     )]
     name: String,
 
@@ -782,7 +782,7 @@ fn main() -> Result<()> {
         .map(|x| x.cpu)
         .map(|cpu| {
             LocalExecutorBuilder::new(Placement::Fixed(cpu))
-                .name(format!("dbil({})", cpu).as_str())
+                .name(format!("executor({})", cpu).as_str())
                 .spawn(enclose!(
                 (local_connections.clone() => connections,
                  args.clone() => args)
