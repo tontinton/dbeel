@@ -863,18 +863,24 @@ async fn run_shard(
 
     if !state.borrow().args.seed_nodes.is_empty() {
         if let Some(remote_shards) = get_remote_shards(state.clone()).await? {
-            state
-                .borrow_mut()
-                .shards
-                .extend(remote_shards.into_iter().map(|(name, address)| {
-                    trace!("Discovered remote shard: ({}, {})", name, address);
-                    Shard::new(
-                        name,
-                        ShardConnection::Remote(RemoteShardConnection::new(
-                            address,
-                        )),
-                    )
-                }));
+            state.borrow_mut().shards.extend(
+                remote_shards
+                    .into_iter()
+                    .filter(|(name, _)| name != &shard_name)
+                    .map(|(name, address)| {
+                        trace!(
+                            "Discovered remote shard: ({}, {})",
+                            name,
+                            address
+                        );
+                        Shard::new(
+                            name,
+                            ShardConnection::Remote(
+                                RemoteShardConnection::new(address),
+                            ),
+                        )
+                    }),
+            );
         } else {
             trace!("No remote shards in seed nodes");
         }
