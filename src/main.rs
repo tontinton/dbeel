@@ -55,6 +55,15 @@ struct Args {
     #[clap(
         short,
         long,
+        help = "The seed nodes for service discovery of all nodes.
+Expected format is <hostname/ip>:<port>.",
+        num_args = 0..,
+    )]
+    seed_nodes: Vec<String>,
+
+    #[clap(
+        short,
+        long,
         help = "Listen hostname / ip.",
         default_value = "127.0.0.1"
     )]
@@ -64,9 +73,9 @@ struct Args {
         short,
         long,
         help = "Server port base.
-                Each shard has a different port calculated by <port_base> + \
+Each shard has a different port calculated by <port_base> + \
                 <cpu_id>.
-                This port is for listening on client requests.",
+This port is for listening on client requests.",
         default_value = "10000"
     )]
     port: u16,
@@ -82,7 +91,7 @@ struct Args {
     #[clap(
         long,
         help = "Remote shard port base.
-                This port is for listening for distributed messages from \
+This port is for listening for distributed messages from \
                 remote shards.",
         default_value = "20000"
     )]
@@ -112,9 +121,26 @@ struct Args {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-enum ShardMessage {
+enum ShardEvent {
     CreateCollection(String),
     DropCollection(String),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+enum ShardRequest {
+    GetShards,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+enum ShardResponse {
+    GetShards(Vec<(String, String)>),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+enum ShardMessage {
+    Event(ShardEvent),
+    Request((usize, ShardRequest)),
+    Response((usize, ShardResponse)),
 }
 
 fn bincode_options() -> WithOtherIntEncoding<
@@ -167,7 +193,10 @@ enum ShardConnection {
 
 #[derive(Debug)]
 struct Shard {
-    // The hash of the unique address, used for consistent hashing.
+    // The unique shard name.
+    name: String,
+
+    // The hash of the unique name, used for consistent hashing.
     hash: u32,
 
     // Communicate with a shard by abstracting away if it's remote or local.
@@ -179,8 +208,13 @@ fn hash_string(s: &String) -> std::io::Result<u32> {
 }
 
 impl Shard {
-    fn new(hash: u32, connection: ShardConnection) -> Self {
-        Self { hash, connection }
+    fn new(name: String, connection: ShardConnection) -> Self {
+        let hash = hash_string(&name).unwrap();
+        Self {
+            name,
+            hash,
+            connection,
+        }
     }
 }
 
@@ -200,6 +234,12 @@ struct PerShardState {
 
     // The shard's page cache.
     cache: Rc<RefCell<PageCache<FileId>>>,
+
+    // Requests currently waiting for responses.
+    waiting_requests: HashMap<usize, Sender<ShardResponse>>,
+
+    // The request id available for sending a request.
+    available_request_id: usize,
 }
 
 impl PerShardState {
@@ -215,26 +255,38 @@ impl PerShardState {
             shards,
             trees: HashMap::new(),
             cache: Rc::new(RefCell::new(cache)),
+            waiting_requests: HashMap::new(),
+            available_request_id: 0,
         }
+    }
+
+    fn get_request_id(&mut self) -> usize {
+        let id = self.available_request_id;
+        if id == std::usize::MAX {
+            self.available_request_id = 0;
+        } else {
+            self.available_request_id += 1;
+        }
+        id
     }
 }
 
 type SharedPerShardState = Rc<RefCell<PerShardState>>;
 
-async fn handle_shard_message(
+async fn handle_shard_event(
     state: SharedPerShardState,
-    msg: ShardMessage,
+    event: ShardEvent,
 ) -> Result<()> {
-    // All messages should be idempotent.
-    match msg {
-        ShardMessage::CreateCollection(name) => {
+    // All events should be idempotent.
+    match event {
+        ShardEvent::CreateCollection(name) => {
             if let Err(e) = create_collection_for_shard(state, name).await {
                 if e.type_id() != Error::CollectionAlreadyExists.type_id() {
                     return Err(e);
                 }
             }
         }
-        ShardMessage::DropCollection(name) => {
+        ShardEvent::DropCollection(name) => {
             if let Err(e) = drop_collection_for_shard(state, name) {
                 if e.type_id() != Error::CollectionNotFound.type_id() {
                     return Err(e);
@@ -246,19 +298,52 @@ async fn handle_shard_message(
     Ok(())
 }
 
+async fn handle_shard_request(
+    state: SharedPerShardState,
+    request: ShardRequest,
+) -> Result<ShardResponse> {
+    let response = match request {
+        ShardRequest::GetShards => ShardResponse::GetShards(
+            state
+                .borrow()
+                .shards
+                .iter()
+                .flat_map(|shard| match &shard.connection {
+                    ShardConnection::Remote(c) => {
+                        Some((shard.name.clone(), c.address.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        ),
+    };
+
+    Ok(response)
+}
+
+async fn get_message_from_stream(
+    stream: &mut TcpStream,
+) -> Result<ShardMessage> {
+    let size_buf = read_exactly(stream, 2).await?;
+    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
+    let request_buf = read_exactly(stream, size.into()).await?;
+
+    let mut cursor = std::io::Cursor::new(&request_buf[..]);
+
+    Ok(bincode_options().deserialize_from::<_, ShardMessage>(&mut cursor)?)
+}
+
 async fn handle_distributed_client(
     state: SharedPerShardState,
     mut client: TcpStream,
 ) -> Result<()> {
-    let size_buf = read_exactly(&mut client, 2).await?;
-    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
-    let request_buf = read_exactly(&mut client, size.into()).await?;
+    let msg = get_message_from_stream(&mut client).await?;
+    if let Some(response_msg) = handle_shard_message(state.clone(), msg).await?
+    {
+        send_message_to_stream(&mut client, &response_msg).await?;
+    }
 
-    let mut cursor = std::io::Cursor::new(&request_buf[..]);
-    let msg =
-        bincode_options().deserialize_from::<_, ShardMessage>(&mut cursor)?;
-
-    handle_shard_message(state.clone(), msg).await
+    Ok(())
 }
 
 async fn run_distributed_messages_server(
@@ -283,17 +368,51 @@ async fn run_distributed_messages_server(
     }
 }
 
+async fn handle_shard_message(
+    state: SharedPerShardState,
+    message: ShardMessage,
+) -> Result<Option<ShardMessage>> {
+    Ok(match message {
+        ShardMessage::Event(event) => {
+            handle_shard_event(state.clone(), event).await?;
+            None
+        }
+        ShardMessage::Request((id, request)) => {
+            let response = handle_shard_request(state.clone(), request).await?;
+            Some(ShardMessage::Response((id, response)))
+        }
+        ShardMessage::Response((id, response)) => {
+            let sender = state
+                .borrow_mut()
+                .waiting_requests
+                .remove(&id)
+                .ok_or(Error::RequestIdNotFoundInWaitingList)?;
+            // TODO: remove unwrap.
+            sender.send(response).await.unwrap();
+            None
+        }
+    })
+}
+
 async fn run_shard_messages_receiver(
     state: SharedPerShardState,
+    sender: Sender<ShardPacket>,
     receiver: Receiver<ShardPacket>,
 ) -> Result<()> {
+    let shard_id = state.borrow().id;
+
     loop {
         let (id, msg) = receiver.recv().await?;
-        if id == state.borrow().id {
+        if id == shard_id {
             continue;
         }
 
-        handle_shard_message(state.clone(), msg).await?;
+        if let Some(response_msg) =
+            handle_shard_message(state.clone(), msg).await?
+        {
+            // TODO: remove unwrap.
+            sender.send((shard_id, response_msg)).await.unwrap();
+        }
     }
 }
 
@@ -462,6 +581,39 @@ fn drop_collection_for_shard(
     Ok(())
 }
 
+async fn send_message_to_stream(
+    stream: &mut TcpStream,
+    message: &ShardMessage,
+) -> Result<()> {
+    let msg_buf = bincode_options().serialize(message)?;
+    let size_buf = (msg_buf.len() as u16).to_le_bytes();
+
+    stream.write_all(&size_buf).await?;
+    stream.write_all(&msg_buf).await?;
+
+    Ok(())
+}
+
+async fn request_from_stream(
+    stream: &mut TcpStream,
+    request: ShardRequest,
+    request_id: usize,
+) -> Result<ShardResponse> {
+    send_message_to_stream(
+        stream,
+        &ShardMessage::Request((request_id, request)),
+    )
+    .await?;
+    let msg = get_message_from_stream(stream).await?;
+    match msg {
+        ShardMessage::Response((response_id, response)) => {
+            assert_eq!(request_id, response_id);
+            Ok(response)
+        }
+        _ => Err(Error::ResponseWrongType),
+    }
+}
+
 async fn broadcast_message_to_remote_shards(
     state: SharedPerShardState,
     message: &ShardMessage,
@@ -476,32 +628,16 @@ async fn broadcast_message_to_remote_shards(
         })
         .collect::<Vec<_>>();
 
-    let msg_buf = bincode_options().serialize(message)?;
-    let size_buf = (msg_buf.len() as u16).to_le_bytes();
     let timeout =
         Duration::from_millis(state.borrow().args.remote_shard_connect_timeout);
 
     for address in addresses {
-        let mut stream =
-            match TcpStream::connect_timeout(&address, timeout).await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(
-                        "Error connecting to distributed client ({}): {}",
-                        address, e
-                    );
-                    continue;
-                }
-            };
-
-        if let Err(e) = stream.write_all(&size_buf).await {
-            eprintln!("Failed to send size to ({}): {}", address, e);
-            continue;
-        }
-
-        if let Err(e) = stream.write_all(&msg_buf).await {
-            eprintln!("Failed to send data to ({}): {}", address, e);
-            continue;
+        let mut stream = TcpStream::connect_timeout(&address, timeout).await?;
+        if let Err(e) = send_message_to_stream(&mut stream, &message).await {
+            error!(
+                "Error sending message to remote shard ({}): {}",
+                address, e
+            );
         }
     }
 
@@ -510,7 +646,7 @@ async fn broadcast_message_to_remote_shards(
 
 async fn broadcast_message_to_local_shards(
     state: SharedPerShardState,
-    message: ShardMessage,
+    message: &ShardMessage,
 ) -> Result<()> {
     let senders = state
         .borrow()
@@ -534,10 +670,10 @@ async fn broadcast_message_to_local_shards(
 
 async fn broadcast_message(
     state: SharedPerShardState,
-    message: ShardMessage,
+    message: &ShardMessage,
 ) -> Result<()> {
-    broadcast_message_to_local_shards(state.clone(), message.clone()).await?;
-    broadcast_message_to_remote_shards(state, &message).await?;
+    broadcast_message_to_local_shards(state.clone(), message).await?;
+    broadcast_message_to_remote_shards(state, message).await?;
     Ok(())
 }
 
@@ -546,7 +682,7 @@ fn broadcast_message_in_background(
     message: ShardMessage,
 ) {
     spawn_local(enclose!((state.clone() => state) async move {
-        if let Err(e) = broadcast_message(state, message).await {
+        if let Err(e) = broadcast_message(state, &message).await {
             error!("Failed to broadcast message: {}", e);
         }
     }))
@@ -573,7 +709,7 @@ async fn handle_request(
 
                 broadcast_message_in_background(
                     state,
-                    ShardMessage::CreateCollection(name),
+                    ShardMessage::Event(ShardEvent::CreateCollection(name)),
                 );
             }
             Some("drop_collection") => {
@@ -582,7 +718,7 @@ async fn handle_request(
 
                 broadcast_message_in_background(
                     state,
-                    ShardMessage::DropCollection(name),
+                    ShardMessage::Event(ShardEvent::DropCollection(name)),
                 );
             }
             Some("set") => {
@@ -665,6 +801,30 @@ async fn handle_client(
     Ok(())
 }
 
+async fn get_remote_shards(
+    state: SharedPerShardState,
+) -> Result<Option<Vec<(String, String)>>> {
+    let timeout =
+        Duration::from_millis(state.borrow().args.remote_shard_connect_timeout);
+    let seed_nodes = &state.borrow().args.seed_nodes;
+
+    for address in seed_nodes {
+        let request_id = state.borrow_mut().get_request_id();
+        let mut stream = TcpStream::connect_timeout(address, timeout).await?;
+        let response = request_from_stream(
+            &mut stream,
+            ShardRequest::GetShards,
+            request_id,
+        )
+        .await?;
+        match response {
+            ShardResponse::GetShards(shards) => return Ok(Some(shards)),
+        }
+    }
+
+    Ok(None)
+}
+
 async fn run_shard(
     args: Args,
     id: usize,
@@ -672,37 +832,20 @@ async fn run_shard(
 ) -> Result<()> {
     info!("Starting shard of id: {}", id);
 
-    let receiver = local_connections
+    let (sender, receiver) = local_connections
         .iter()
         .filter(|c| c.cpu == id)
-        .map(|c| c.receiver.clone())
+        .map(|c| (c.sender.clone(), c.receiver.clone()))
         .next()
         .unwrap();
 
     let shard_name = format!("{}-{}", args.name, id);
 
     let port = args.port + id as u16;
-    let mut shards = local_connections
+    let shards = local_connections
         .into_iter()
-        .map(|c| {
-            Shard::new(
-                hash_string(&shard_name).unwrap(),
-                ShardConnection::Local(c),
-            )
-        })
+        .map(|c| Shard::new(shard_name.clone(), ShardConnection::Local(c)))
         .collect::<Vec<_>>();
-
-    // TODO: Add remote shards.
-    // for i in 12345..12345 + 12 {
-    //     let address = format!("localhost:{}", i);
-    //     shards.push(Shard::new(
-    //         hash_string(&address).unwrap(),
-    //         ShardConnection::Remote(RemoteShardConnection::new(address)),
-    //     ));
-    // }
-
-    // Sort by hash to make it a consistant hashing ring.
-    shards.sort_unstable_by_key(|x| x.hash);
 
     let cache_len = args.page_cache_size / PAGE_SIZE / shards.len();
     let cache = PageCache::new(cache_len, cache_len / 16)
@@ -715,8 +858,30 @@ async fn run_shard(
     let state =
         Rc::new(RefCell::new(PerShardState::new(args, id, shards, cache)));
 
+    if !state.borrow().args.seed_nodes.is_empty() {
+        if let Some(remote_shards) = get_remote_shards(state.clone()).await? {
+            state
+                .borrow_mut()
+                .shards
+                .extend(remote_shards.into_iter().map(|(name, address)| {
+                    trace!("Discovered remote shard: ({}, {})", name, address);
+                    Shard::new(
+                        name,
+                        ShardConnection::Remote(RemoteShardConnection::new(
+                            address,
+                        )),
+                    )
+                }));
+        } else {
+            trace!("No remote shards in seed nodes");
+        }
+    }
+
+    // Sort by hash to make it a consistant hashing ring.
+    state.borrow_mut().shards.sort_unstable_by_key(|x| x.hash);
+
     spawn_local(enclose!((state.clone() => state) async move {
-        if let Err(e) = run_shard_messages_receiver(state, receiver).await {
+        if let Err(e) = run_shard_messages_receiver(state, sender, receiver).await {
             error!("Error running shard messages receiver: {}", e);
         }
     }))
