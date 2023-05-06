@@ -342,6 +342,7 @@ async fn handle_distributed_client(
     {
         send_message_to_stream(&mut client, &response_msg).await?;
     }
+    client.close().await?;
 
     Ok(())
 }
@@ -797,6 +798,8 @@ async fn handle_client(
             client.write_all(&buf).await?;
         }
     }
+
+    client.close().await?;
 
     Ok(())
 }
