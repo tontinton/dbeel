@@ -26,7 +26,7 @@ use pretty_env_logger::formatted_timed_builder;
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
 use serde::{Deserialize, Serialize};
-use std::{any::Any, env::temp_dir};
+use std::{any::Any, path::PathBuf};
 use std::{cell::RefCell, time::Duration};
 use std::{collections::HashMap, rc::Rc};
 
@@ -70,6 +70,14 @@ struct Args {
         default_value = "10000"
     )]
     port: u16,
+
+    #[clap(
+        short,
+        long,
+        help = "Database files directory.",
+        default_value = "/tmp"
+    )]
+    dir: String,
 
     #[clap(
         long,
@@ -420,7 +428,7 @@ async fn create_collection_for_shard(
         return Err(Error::CollectionAlreadyExists(name));
     }
 
-    let mut dir = temp_dir();
+    let mut dir = PathBuf::from(state.borrow().args.dir.clone());
     dir.push(format!("{}-{}", name, state.borrow().id));
     let cache = state.borrow().cache.clone();
     let tree = Rc::new(
