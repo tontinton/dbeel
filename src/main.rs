@@ -6,8 +6,8 @@ use bincode::{
     DefaultOptions, Options,
 };
 use caches::Cache;
-use clap::Parser;
 use dbeel::{
+    args::{get_args, Args},
     cached_file_reader::FileId,
     error::{Error, Result},
     lsm_tree::{LSMTree, TOMBSTONE},
@@ -39,87 +39,6 @@ extern crate log;
 const DEFAULT_LOG_LEVEL: &str = "dbeel=trace";
 #[cfg(not(debug_assertions))]
 const DEFAULT_LOG_LEVEL: &str = "dbeel=info";
-
-#[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
-/// A stupid database, by Tony Solomonik.
-struct Args {
-    #[clap(
-        short,
-        long,
-        help = "Unique node name, used to differentiate between nodes for \
-                distribution of load.",
-        default_value = "dbeel"
-    )]
-    name: String,
-
-    #[clap(
-        short,
-        long,
-        help = "The seed nodes for service discovery of all nodes.
-Expected format is <hostname/ip>:<port>.",
-        num_args = 0..,
-    )]
-    seed_nodes: Vec<String>,
-
-    #[clap(
-        short,
-        long,
-        help = "Listen hostname / ip.",
-        default_value = "127.0.0.1"
-    )]
-    ip: String,
-
-    #[clap(
-        short,
-        long,
-        help = "Server port base.
-Each shard has a different port calculated by <port_base> + \
-                <cpu_id>.
-This port is for listening on client requests.",
-        default_value = "10000"
-    )]
-    port: u16,
-
-    #[clap(
-        short,
-        long,
-        help = "Database files directory.",
-        default_value = "/tmp"
-    )]
-    dir: String,
-
-    #[clap(
-        long,
-        help = "Remote shard port base.
-This port is for listening for distributed messages from \
-                remote shards.",
-        default_value = "20000"
-    )]
-    remote_shard_port: u16,
-
-    #[clap(
-        long,
-        help = "Remote shard connect timeout in milliseconds.",
-        default_value = "5000"
-    )]
-    remote_shard_connect_timeout: u64,
-
-    #[clap(
-        short,
-        long,
-        help = "How much files to compact each time.",
-        default_value = "2"
-    )]
-    compaction_factor: usize,
-
-    #[clap(
-        long,
-        help = "Page cache size in bytes.",
-        default_value = "1073741824"
-    )]
-    page_cache_size: usize,
-}
 
 #[derive(Clone, Serialize, Deserialize)]
 enum ShardEvent {
@@ -931,7 +850,7 @@ fn main() -> Result<()> {
     );
     log_builder.try_init().unwrap();
 
-    let args = Args::parse();
+    let args = get_args();
 
     let cpu_set = CpuSet::online()?;
     assert!(!cpu_set.is_empty());
