@@ -333,7 +333,7 @@ async fn get_message_from_stream(
     Ok(bincode_options().deserialize_from::<_, ShardMessage>(&mut cursor)?)
 }
 
-async fn handle_distributed_client(
+async fn handle_remote_shard_client(
     state: SharedPerShardState,
     mut client: TcpStream,
 ) -> Result<()> {
@@ -347,15 +347,15 @@ async fn handle_distributed_client(
     Ok(())
 }
 
-async fn run_distributed_messages_server(
+async fn run_remote_shard_messages_server(
     state: SharedPerShardState,
     server: TcpListener,
-) -> Result<()> {
+) {
     loop {
         match server.accept().await {
             Ok(client) => {
                 spawn_local(enclose!((state.clone() => state) async move {
-                    let result = handle_distributed_client(state, client).await;
+                    let result = handle_remote_shard_client(state, client).await;
                     if let Err(e) = result {
                         error!("Failed to handle distributed client: {}", e);
                     }
@@ -916,9 +916,7 @@ async fn run_shard(
         };
         trace!("Listening for distributed messages on: {}", address);
 
-        if let Err(e) = run_distributed_messages_server(state, server).await {
-            error!("Error running remote messages server: {}", e);
-        }
+        run_remote_shard_messages_server(state, server).await;
     }))
     .detach();
 
