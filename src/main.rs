@@ -12,8 +12,9 @@ use dbeel::{
     error::{Error, Result},
     lsm_tree::{LSMTree, TOMBSTONE},
     page_cache::{PageCache, PartitionPageCache, PAGE_SIZE},
+    read_exactly::read_exactly,
 };
-use futures_lite::{AsyncReadExt, AsyncWriteExt, Future};
+use futures_lite::{AsyncWriteExt, Future};
 use glommio::{
     enclose,
     net::{TcpListener, TcpStream},
@@ -464,30 +465,6 @@ async fn run_compaction_loop(state: SharedPerShardState) {
 
         sleep(Duration::from_millis(1)).await;
     }
-}
-
-async fn read_exactly(
-    stream: &mut TcpStream,
-    n: usize,
-) -> std::io::Result<Vec<u8>> {
-    let mut buf = vec![0; n];
-    let mut bytes_read = 0;
-
-    while bytes_read < n {
-        match stream.read(&mut buf[bytes_read..]).await {
-            Ok(0) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "unexpected end of file",
-                ))
-            }
-            Ok(n) => bytes_read += n,
-            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-
-    Ok(buf)
 }
 
 async fn with_write<F>(tree: Rc<LSMTree>, write_fn: F) -> Result<()>
