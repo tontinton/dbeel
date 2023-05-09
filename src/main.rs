@@ -63,15 +63,6 @@ enum ShardMessage {
     Response((usize, ShardResponse)),
 }
 
-fn bincode_options() -> WithOtherIntEncoding<
-    WithOtherTrailing<DefaultOptions, RejectTrailing>,
-    FixintEncoding,
-> {
-    return DefaultOptions::new()
-        .reject_trailing_bytes()
-        .with_fixint_encoding();
-}
-
 // A packet that is sent between shards, holds a cpu id and a message.
 type ShardPacket = (usize, ShardMessage);
 
@@ -193,6 +184,15 @@ impl PerShardState {
 
 type SharedPerShardState = Rc<RefCell<PerShardState>>;
 
+fn remote_shard_bincode_options() -> WithOtherIntEncoding<
+    WithOtherTrailing<DefaultOptions, RejectTrailing>,
+    FixintEncoding,
+> {
+    return DefaultOptions::new()
+        .reject_trailing_bytes()
+        .with_fixint_encoding();
+}
+
 async fn handle_shard_event(
     state: SharedPerShardState,
     event: ShardEvent,
@@ -250,7 +250,8 @@ async fn get_message_from_stream(
 
     let mut cursor = std::io::Cursor::new(&request_buf[..]);
 
-    Ok(bincode_options().deserialize_from::<_, ShardMessage>(&mut cursor)?)
+    Ok(remote_shard_bincode_options()
+        .deserialize_from::<_, ShardMessage>(&mut cursor)?)
 }
 
 async fn handle_remote_shard_client(
@@ -490,7 +491,7 @@ async fn send_message_to_stream(
     stream: &mut TcpStream,
     message: &ShardMessage,
 ) -> Result<()> {
-    let msg_buf = bincode_options().serialize(message)?;
+    let msg_buf = remote_shard_bincode_options().serialize(message)?;
     let size_buf = (msg_buf.len() as u16).to_le_bytes();
 
     stream.write_all(&size_buf).await?;
