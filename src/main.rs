@@ -882,7 +882,7 @@ async fn run_shard(
                     }),
             );
         } else {
-            trace!("No remote shards in seed nodes");
+            warn!("No remote shards in seed nodes");
         }
     }
 
