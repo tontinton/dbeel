@@ -408,11 +408,19 @@ async fn run_shard_messages_receiver(
             continue;
         }
 
-        if let Some(response_msg) =
-            handle_shard_message(state.clone(), msg).await?
-        {
-            // TODO: remove unwrap.
-            sender.send((shard_id, response_msg)).await.unwrap();
+        match handle_shard_message(state.clone(), msg).await {
+            Ok(response) => {
+                if let Some(response_msg) = response {
+                    if let Err(e) = sender.send((shard_id, response_msg)).await
+                    {
+                        error!(
+                            "Failed to reply to local shard ({}): {}",
+                            shard_id, e
+                        );
+                    }
+                }
+            }
+            Err(e) => error!("Failed to handle shard message: {}", e),
         }
     }
 }
