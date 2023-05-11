@@ -185,7 +185,7 @@ impl LSMTree {
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<Self> {
         if !dir.is_dir() {
-            trace!("Creating new tree from: {:?}", dir);
+            trace!("Creating new tree in: {:?}", dir);
             std::fs::create_dir_all(&dir)?;
         } else {
             trace!("Opening existing tree from: {:?}", dir);
@@ -306,6 +306,7 @@ impl LSMTree {
     }
 
     pub fn purge(&self) -> Result<()> {
+        trace!("Deleting tree in: {:?}", self.dir);
         Ok(std::fs::remove_dir_all(&self.dir)?)
     }
 
