@@ -1,5 +1,7 @@
-use async_channel::RecvError;
+use async_channel::{RecvError, SendError};
 use thiserror::Error;
+
+use crate::messages::ShardPacket;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -20,6 +22,8 @@ pub enum Error {
 
     #[error(transparent)]
     ShardReceiverError(#[from] RecvError),
+    #[error(transparent)]
+    ShardPacketSenderError(#[from] SendError<ShardPacket>),
 
     #[error("request id not found in waiting list")]
     ResponseWrongType,

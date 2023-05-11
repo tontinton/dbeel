@@ -1,32 +1,29 @@
-use async_channel::{Receiver, Sender};
-use bincode::{
-    config::{
-        FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
-    },
-    DefaultOptions, Options,
-};
+use async_channel::Receiver;
 use caches::Cache;
 use dbeel::{
     args::{get_args, Args},
     cached_file_reader::FileId,
     error::{Error, Result},
+    local_shard::LocalShardConnection,
     lsm_tree::{LSMTree, TOMBSTONE},
+    messages::{
+        ShardEvent, ShardMessage, ShardPacket, ShardRequest, ShardResponse,
+    },
     page_cache::{PageCache, PartitionPageCache, PAGE_SIZE},
     read_exactly::read_exactly,
+    remote_shard::{
+        get_message_from_stream, send_message_to_stream, RemoteShardConnection,
+    },
 };
 use futures_lite::{AsyncRead, AsyncWrite, AsyncWriteExt, Future};
 use glommio::{
-    enclose,
-    net::{TcpListener, TcpStream},
-    spawn_local,
-    timer::sleep,
-    CpuSet, LocalExecutorBuilder, Placement,
+    enclose, net::TcpListener, spawn_local, timer::sleep, CpuSet,
+    LocalExecutorBuilder, Placement,
 };
 use murmur3::murmur3_32;
 use pretty_env_logger::formatted_timed_builder;
 use rmpv::encode::write_value;
 use rmpv::{decode::read_value_ref, encode::write_value_ref, Value, ValueRef};
-use serde::{Deserialize, Serialize};
 use std::{any::Any, path::PathBuf};
 use std::{cell::RefCell, time::Duration};
 use std::{collections::HashMap, rc::Rc};
@@ -39,118 +36,6 @@ extern crate log;
 const DEFAULT_LOG_LEVEL: &str = "dbeel=trace";
 #[cfg(not(debug_assertions))]
 const DEFAULT_LOG_LEVEL: &str = "dbeel=info";
-
-#[derive(Clone, Serialize, Deserialize)]
-enum ShardEvent {
-    CreateCollection(String),
-    DropCollection(String),
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-enum ShardRequest {
-    GetShards,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-enum ShardResponse {
-    GetShards(Vec<(String, String)>),
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-enum ShardMessage {
-    Event(ShardEvent),
-    Request(ShardRequest),
-    Response(ShardResponse),
-}
-
-// A packet that is sent between shards.
-struct ShardPacket {
-    source_id: usize,
-    message: ShardMessage,
-    response_sender: Option<Sender<ShardResponse>>,
-}
-
-impl ShardPacket {
-    fn new(id: usize, message: ShardMessage) -> Self {
-        Self {
-            source_id: id,
-            message,
-            response_sender: None,
-        }
-    }
-
-    fn new_request(
-        id: usize,
-        message: ShardMessage,
-        sender: Sender<ShardResponse>,
-    ) -> Self {
-        Self {
-            source_id: id,
-            message,
-            response_sender: Some(sender),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct LocalShardConnection {
-    id: usize,
-    sender: Sender<ShardPacket>,
-    receiver: Receiver<ShardPacket>,
-}
-
-impl LocalShardConnection {
-    fn new(id: usize) -> Self {
-        let (sender, receiver) = async_channel::unbounded();
-        Self {
-            id,
-            sender,
-            receiver,
-        }
-    }
-
-    async fn send_request(
-        &self,
-        request: ShardRequest,
-    ) -> Result<ShardResponse> {
-        let (sender, receiver) = async_channel::bounded(1);
-        let message = ShardMessage::Request(request);
-        // TODO: remove unwrap.
-        self.sender
-            .send(ShardPacket::new_request(self.id, message, sender))
-            .await
-            .unwrap();
-        Ok(receiver.recv().await?)
-    }
-}
-
-#[derive(Debug)]
-struct RemoteShardConnection {
-    // The address to use to connect to the remote shard.
-    address: String,
-    connect_timeout: Duration,
-}
-
-impl RemoteShardConnection {
-    fn new(address: String, connect_timeout: Duration) -> Self {
-        Self {
-            address,
-            connect_timeout,
-        }
-    }
-
-    async fn send_request(
-        &self,
-        request: ShardRequest,
-    ) -> Result<ShardResponse> {
-        let mut stream =
-            TcpStream::connect_timeout(&self.address, self.connect_timeout)
-                .await?;
-        let response = request_from_stream(&mut stream, request).await?;
-        stream.close().await?;
-        Ok(response)
-    }
-}
 
 #[derive(Debug)]
 enum ShardConnection {
@@ -269,27 +154,21 @@ impl MyShard {
         self: Rc<Self>,
         message: &ShardMessage,
     ) -> Result<()> {
-        let addresses = self
+        let connections = self
             .shards
             .borrow()
             .iter()
             .flat_map(|p| match &p.connection {
-                ShardConnection::Remote(c) => Some(c.address.clone()),
+                ShardConnection::Remote(c) => Some(c.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>();
 
-        let timeout =
-            Duration::from_millis(self.args.remote_shard_connect_timeout);
-
-        for address in addresses {
-            let mut stream =
-                TcpStream::connect_timeout(&address, timeout).await?;
-            if let Err(e) = send_message_to_stream(&mut stream, &message).await
-            {
+        for c in connections {
+            if let Err(e) = c.send_message(message).await {
                 error!(
                     "Error sending message to remote shard ({}): {}",
-                    address, e
+                    c.address, e
                 );
             }
         }
@@ -311,12 +190,10 @@ impl MyShard {
             })
             .collect::<Vec<_>>();
 
-        // TODO: remove unwrap.
         for sender in senders {
             sender
                 .send(ShardPacket::new(self.id, message.clone()))
-                .await
-                .unwrap();
+                .await?;
         }
 
         Ok(())
@@ -331,27 +208,6 @@ impl MyShard {
             .await?;
         self.broadcast_message_to_remote_shards(message).await?;
         Ok(())
-    }
-}
-
-fn remote_shard_bincode_options() -> WithOtherIntEncoding<
-    WithOtherTrailing<DefaultOptions, RejectTrailing>,
-    FixintEncoding,
-> {
-    return DefaultOptions::new()
-        .reject_trailing_bytes()
-        .with_fixint_encoding();
-}
-
-async fn request_from_stream(
-    stream: &mut (impl AsyncRead + AsyncWrite + std::marker::Unpin),
-    request: ShardRequest,
-) -> Result<ShardResponse> {
-    send_message_to_stream(stream, &ShardMessage::Request(request)).await?;
-    let msg = get_message_from_stream(stream).await?;
-    match msg {
-        ShardMessage::Response(response) => Ok(response),
-        _ => Err(Error::ResponseWrongType),
     }
 }
 
@@ -403,30 +259,14 @@ async fn handle_shard_request(
     Ok(response)
 }
 
-async fn get_message_from_stream(
-    stream: &mut (impl AsyncRead + std::marker::Unpin),
-) -> Result<ShardMessage> {
-    let size_buf = read_exactly(stream, 2).await?;
-    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
-    let request_buf = read_exactly(stream, size.into()).await?;
-
-    let mut cursor = std::io::Cursor::new(&request_buf[..]);
-
-    Ok(remote_shard_bincode_options()
-        .deserialize_from::<_, ShardMessage>(&mut cursor)?)
-}
-
 async fn handle_remote_shard_client(
     my_shard: Rc<MyShard>,
-    mut client: TcpStream,
+    client: &mut (impl AsyncRead + AsyncWrite + std::marker::Unpin),
 ) -> Result<()> {
-    let msg = get_message_from_stream(&mut client).await?;
+    let msg = get_message_from_stream(client).await?;
     if let Some(response_msg) = handle_shard_message(my_shard, msg).await? {
-        send_message_to_stream(
-            &mut client,
-            &ShardMessage::Response(response_msg),
-        )
-        .await?;
+        send_message_to_stream(client, &ShardMessage::Response(response_msg))
+            .await?;
     }
     client.close().await?;
 
@@ -439,10 +279,10 @@ async fn run_remote_shard_messages_server(
 ) {
     loop {
         match server.accept().await {
-            Ok(client) => {
+            Ok(mut client) => {
                 spawn_local(enclose!((my_shard.clone() => my_shard) async move {
                     let result =
-                        handle_remote_shard_client(my_shard, client).await;
+                        handle_remote_shard_client(my_shard, &mut client).await;
                     if let Err(e) = result {
                         error!("Failed to handle distributed client: {}", e);
                     }
@@ -572,19 +412,6 @@ fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
     write_value(&mut field_encoded, field)?;
 
     Ok(field_encoded)
-}
-
-async fn send_message_to_stream(
-    stream: &mut (impl AsyncWrite + std::marker::Unpin),
-    message: &ShardMessage,
-) -> Result<()> {
-    let msg_buf = remote_shard_bincode_options().serialize(message)?;
-    let size_buf = (msg_buf.len() as u16).to_le_bytes();
-
-    stream.write_all(&size_buf).await?;
-    stream.write_all(&msg_buf).await?;
-
-    Ok(())
 }
 
 fn broadcast_message_in_background(
