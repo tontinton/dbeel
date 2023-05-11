@@ -134,14 +134,11 @@ impl MyShard {
     }
 
     fn drop_collection(self: Rc<Self>, name: String) -> Result<()> {
-        {
-            let tree = self
-                .trees
-                .borrow_mut()
-                .remove(&name)
-                .ok_or(Error::CollectionNotFound(name))?;
-            tree.purge()?;
-        }
+        self.trees
+            .borrow_mut()
+            .remove(&name)
+            .ok_or(Error::CollectionNotFound(name))?
+            .purge()?;
 
         // TODO: add set items to cache, then there will be no reason to ever delete
         // items from the cache.
