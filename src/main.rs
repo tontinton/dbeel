@@ -15,6 +15,7 @@ use dbeel::{
         get_message_from_stream, send_message_to_stream, RemoteShardConnection,
     },
 };
+use futures::try_join;
 use futures_lite::{AsyncRead, AsyncWrite, AsyncWriteExt, Future};
 use glommio::{
     enclose, net::TcpListener, spawn_local, timer::sleep, CpuSet,
@@ -277,7 +278,7 @@ async fn handle_remote_shard_client(
     Ok(())
 }
 
-async fn run_remote_shard_messages_server(my_shard: Rc<MyShard>) -> Result<()> {
+async fn run_remote_shard_server(my_shard: Rc<MyShard>) -> Result<()> {
     let address = format!(
         "{}:{}",
         my_shard.args.ip,
@@ -637,12 +638,14 @@ async fn run_shard(
     // Start listening for other shards messages to be able to receive
     // responses to requests, for example receiving all remote shards from the
     // seed nodes.
-    spawn_local(enclose!((my_shard.clone() => my_shard) async move {
-        if let Err(e) = run_remote_shard_messages_server(my_shard).await {
-            error!("Error starting remote messages server: {}", e);
-        }
-    }))
-    .detach();
+    let remote_shard_server_task =
+        spawn_local(enclose!((my_shard.clone() => my_shard) async move {
+            let result = run_remote_shard_server(my_shard).await;
+            if let Err(e) = &result {
+                error!("Error starting remote shard server: {}", e);
+            }
+            result
+        }));
 
     if !my_shard.args.seed_nodes.is_empty() {
         let response = get_remote_shards(
@@ -699,21 +702,40 @@ async fn run_shard(
         .borrow_mut()
         .sort_unstable_by_key(|x| x.hash);
 
-    spawn_local(enclose!((my_shard.clone() => my_shard) async move {
-        let result =
-            run_shard_messages_receiver(my_shard, receiver).await;
-        if let Err(e) = result {
-            error!("Error running shard messages receiver: {}", e);
-        }
-    }))
-    .detach();
+    let shard_messages_receiver_task =
+        spawn_local(enclose!((my_shard.clone() => my_shard) async move {
+            let result =
+                run_shard_messages_receiver(my_shard, receiver).await;
+            if let Err(e) = &result {
+                error!("Error running shard messages receiver: {}", e);
+            }
+            result
+        }));
 
-    spawn_local(enclose!((my_shard.clone() => my_shard) async move {
-        run_compaction_loop(my_shard).await;
-    }))
-    .detach();
+    let compaction_task =
+        spawn_local(enclose!((my_shard.clone() => my_shard) async move {
+            run_compaction_loop(my_shard).await;
+            Ok(())
+        }));
 
-    run_server(my_shard).await
+    let server_task =
+        spawn_local(enclose!((my_shard.clone() => my_shard) async move {
+            let result = run_server(my_shard).await;
+            if let Err(e) = &result {
+                error!("Error running server: {}", e);
+            }
+            result
+        }));
+
+    // Await all, returns when first fails, cancels all others.
+    try_join!(
+        remote_shard_server_task,
+        shard_messages_receiver_task,
+        compaction_task,
+        server_task
+    )?;
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
