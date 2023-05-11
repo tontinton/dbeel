@@ -247,7 +247,14 @@ async fn handle_shard_request(
                     ShardConnection::Remote(c) => {
                         Some((shard.name.clone(), c.address.clone()))
                     }
-                    _ => None,
+                    ShardConnection::Local(c) => Some((
+                        shard.name.clone(),
+                        format!(
+                            "{}:{}",
+                            my_shard.args.ip,
+                            my_shard.args.remote_shard_port + c.id as u16
+                        ),
+                    )),
                 })
                 .collect::<Vec<_>>(),
         ),
