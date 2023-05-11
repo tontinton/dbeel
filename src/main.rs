@@ -764,10 +764,8 @@ fn main() -> Result<()> {
         .map(|cpu| {
             LocalExecutorBuilder::new(Placement::Fixed(cpu))
                 .name(format!("executor({})", cpu).as_str())
-                .spawn(enclose!(
-                (local_connections.clone() => connections,
-                 args.clone() => args)
-                move || async move {
+                .spawn(enclose!((local_connections.clone() => connections,
+                                args.clone() => args) move || async move {
                     run_shard(args, cpu, connections).await
                 }))
                 .map_err(|e| Error::GlommioError(e))
