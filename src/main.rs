@@ -277,10 +277,15 @@ async fn handle_remote_shard_client(
     Ok(())
 }
 
-async fn run_remote_shard_messages_server(
-    my_shard: Rc<MyShard>,
-    server: TcpListener,
-) {
+async fn run_remote_shard_messages_server(my_shard: Rc<MyShard>) -> Result<()> {
+    let address = format!(
+        "{}:{}",
+        my_shard.args.ip,
+        my_shard.args.remote_shard_port + my_shard.id as u16
+    );
+    let server = TcpListener::bind(address.as_str())?;
+    trace!("Listening for distributed messages on: {}", address);
+
     loop {
         match server.accept().await {
             Ok(mut client) => {
@@ -567,6 +572,29 @@ async fn handle_client(
     Ok(())
 }
 
+async fn run_server(my_shard: Rc<MyShard>) -> Result<()> {
+    let port = my_shard.args.port + my_shard.id as u16;
+    let address = format!("{}:{}", my_shard.args.ip, port);
+    let server = TcpListener::bind(address.as_str())?;
+    trace!("Listening for clients on: {}", address);
+
+    loop {
+        match server.accept().await {
+            Ok(mut client) => {
+                spawn_local(enclose!((my_shard.clone() => my_shard) async move {
+                    if let Err(e) = handle_client(my_shard, &mut client).await {
+                        error!("Failed to handle client: {}", e);
+                    }
+                }))
+                .detach();
+            }
+            Err(e) => {
+                error!("Failed to accept client: {}", e);
+            }
+        }
+    }
+}
+
 async fn get_remote_shards(
     seed_shards: &Vec<RemoteShardConnection>,
 ) -> Result<Option<Vec<(String, String)>>> {
@@ -595,7 +623,6 @@ async fn run_shard(
 
     let shard_name = format!("{}-{}", args.name, id);
 
-    let port = args.port + id as u16;
     let shards = local_connections
         .into_iter()
         .map(|c| OtherShard::new(shard_name.clone(), ShardConnection::Local(c)))
@@ -611,21 +638,9 @@ async fn run_shard(
     // responses to requests, for example receiving all remote shards from the
     // seed nodes.
     spawn_local(enclose!((my_shard.clone() => my_shard) async move {
-        let address = format!(
-            "{}:{}",
-            my_shard.args.ip,
-            my_shard.args.remote_shard_port + my_shard.id as u16
-        );
-        let server = match TcpListener::bind(address.as_str()) {
-            Ok(server) => server,
-            Err(e) => {
-                error!("Error starting remote messages server: {}", e);
-                return;
-            }
-        };
-        trace!("Listening for distributed messages on: {}", address);
-
-        run_remote_shard_messages_server(my_shard, server).await;
+        if let Err(e) = run_remote_shard_messages_server(my_shard).await {
+            error!("Error starting remote messages server: {}", e);
+        }
     }))
     .detach();
 
@@ -698,25 +713,7 @@ async fn run_shard(
     }))
     .detach();
 
-    let address = format!("{}:{}", my_shard.args.ip, port);
-    let server = TcpListener::bind(address.as_str())?;
-    trace!("Listening for clients on: {}", address);
-
-    loop {
-        match server.accept().await {
-            Ok(mut client) => {
-                spawn_local(enclose!((my_shard.clone() => my_shard) async move {
-                    if let Err(e) = handle_client(my_shard, &mut client).await {
-                        error!("Failed to handle client: {}", e);
-                    }
-                }))
-                .detach();
-            }
-            Err(e) => {
-                error!("Failed to accept client: {}", e);
-            }
-        }
-    }
+    run_server(my_shard).await
 }
 
 fn main() -> Result<()> {
