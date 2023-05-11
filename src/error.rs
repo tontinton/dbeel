@@ -22,8 +22,6 @@ pub enum Error {
     ShardReceiverError(#[from] RecvError),
 
     #[error("request id not found in waiting list")]
-    RequestIdNotFoundInWaitingList,
-    #[error("request id not found in waiting list")]
     ResponseWrongType,
 
     #[error("field '{0}' is missing")]
