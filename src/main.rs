@@ -44,7 +44,7 @@ async fn discover_remote_shards(my_shard: Rc<MyShard>) -> Result<()> {
         return Ok(());
     }
 
-    let response = get_remote_shards(
+    let remote_shards = get_remote_shards(
         &my_shard
             .args
             .seed_nodes
@@ -59,29 +59,26 @@ async fn discover_remote_shards(my_shard: Rc<MyShard>) -> Result<()> {
             })
             .collect::<Vec<_>>(),
     )
-    .await?;
+    .await?
+    .ok_or(Error::NoRemoteShardsFoundInSeedNodes)?;
 
-    if let Some(remote_shards) = response {
-        my_shard.shards.borrow_mut().extend(
-            remote_shards
-                .into_iter()
-                .filter(|(name, _)| name != &my_shard.name)
-                .map(|(name, address)| {
-                    trace!("Discovered remote shard: ({}, {})", name, address);
-                    OtherShard::new(
-                        name,
-                        ShardConnection::Remote(RemoteShardConnection::new(
-                            address,
-                            Duration::from_millis(
-                                my_shard.args.remote_shard_connect_timeout,
-                            ),
-                        )),
-                    )
-                }),
-        );
-    } else {
-        warn!("No remote shards in seed nodes");
-    }
+    my_shard.shards.borrow_mut().extend(
+        remote_shards
+            .into_iter()
+            .filter(|(name, _)| name != &my_shard.name)
+            .map(|(name, address)| {
+                trace!("Discovered remote shard: ({}, {})", name, address);
+                OtherShard::new(
+                    name,
+                    ShardConnection::Remote(RemoteShardConnection::new(
+                        address,
+                        Duration::from_millis(
+                            my_shard.args.remote_shard_connect_timeout,
+                        ),
+                    )),
+                )
+            }),
+    );
 
     Ok(())
 }

@@ -27,6 +27,8 @@ pub enum Error {
 
     #[error("request id not found in waiting list")]
     ResponseWrongType,
+    #[error("no remote shards received from asking all seed nodes")]
+    NoRemoteShardsFoundInSeedNodes,
 
     #[error("field '{0}' is missing")]
     MissingField(String),
