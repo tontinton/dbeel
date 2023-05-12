@@ -9,6 +9,7 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
+use futures::try_join;
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::{
     DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
@@ -258,8 +259,10 @@ impl LSMTree {
                 let memtable =
                     Self::read_memtable_from_wal_file(&unflashed_file_path)
                         .await?;
-                let data_file = DmaFile::open(&data_file_path).await?;
-                let index_file = DmaFile::open(&index_file_path).await?;
+                let (data_file, index_file) = try_join!(
+                    DmaFile::open(&data_file_path),
+                    DmaFile::open(&index_file_path)
+                )?;
                 Self::flush_memtable_to_disk(
                     memtable.into_iter().collect(),
                     data_file,
@@ -565,8 +568,10 @@ impl LSMTree {
             &self.dir,
             self.write_sstable_index.get(),
         );
-        let data_file = DmaFile::create(&data_filename).await?;
-        let index_file = DmaFile::create(&index_filename).await?;
+        let (data_file, index_file) = try_join!(
+            DmaFile::create(&data_filename),
+            DmaFile::create(&index_filename)
+        )?;
 
         let vec = self
             .flush_memtable
@@ -613,8 +618,10 @@ impl LSMTree {
         };
         let index_encoded = bincode_options().serialize(&entry_index)?;
 
-        data_writer.write_all(&data_encoded).await?;
-        index_writer.write_all(&index_encoded).await?;
+        try_join!(
+            data_writer.write_all(&data_encoded),
+            index_writer.write_all(&index_encoded)
+        )?;
         Ok(entry_size)
     }
 
@@ -646,8 +653,7 @@ impl LSMTree {
             )
             .await?;
         }
-        data_write_stream.close().await?;
-        index_write_stream.close().await?;
+        try_join!(data_write_stream.close(), index_write_stream.close())?;
 
         Ok(table_length)
     }
@@ -669,8 +675,8 @@ impl LSMTree {
         // If there was, itertools::kmerge would probably solve it all.
         let mut sstable_readers = Vec::with_capacity(sstable_paths.len());
         for (data_path, index_path) in &sstable_paths {
-            let data_file = DmaFile::open(data_path).await?;
-            let index_file = DmaFile::open(index_path).await?;
+            let (data_file, index_file) =
+                try_join!(DmaFile::open(data_path), DmaFile::open(index_path))?;
             let data_reader = DmaStreamReaderBuilder::new(data_file)
                 .with_buffer_size(PAGE_SIZE)
                 .with_read_ahead(DMA_STREAM_NUMBER_OF_BUFFERS)
@@ -684,8 +690,10 @@ impl LSMTree {
 
         let (compact_data_path, compact_index_path) =
             Self::get_compaction_file_paths(&self.dir, output_index);
-        let compact_data_file = DmaFile::create(&compact_data_path).await?;
-        let compact_index_file = DmaFile::create(&compact_index_path).await?;
+        let (compact_data_file, compact_index_file) = try_join!(
+            DmaFile::create(&compact_data_path),
+            DmaFile::create(&compact_index_path)
+        )?;
         let mut compact_data_writer =
             DmaStreamWriterBuilder::new(compact_data_file)
                 .with_buffer_size(PAGE_SIZE)
@@ -751,8 +759,7 @@ impl LSMTree {
             }
         }
 
-        compact_data_writer.close().await?;
-        compact_index_writer.close().await?;
+        try_join!(compact_data_writer.close(), compact_index_writer.close())?;
 
         let mut files_to_delete = Vec::with_capacity(sstable_paths.len() * 2);
         for (data_path, index_path) in sstable_paths {
