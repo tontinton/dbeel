@@ -37,7 +37,7 @@ impl<K: Hash + Eq> PartitionPageCache<K> {
         self.cache
             .borrow_mut()
             .get(&self.full_key(key, address))
-            .map(|p| p.clone())
+            .cloned()
     }
 
     pub fn set(&self, key: K, address: u64, value: Page) {

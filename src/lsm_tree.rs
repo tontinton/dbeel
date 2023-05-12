@@ -23,7 +23,7 @@ use std::{
     cmp::Ordering,
     collections::BinaryHeap,
     fs::DirEntry,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
 };
 
@@ -69,19 +69,10 @@ impl PartialEq for Entry {
 
 impl Eq for Entry {}
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 struct EntryOffset {
     entry_offset: u64,
     entry_size: usize,
-}
-
-impl Default for EntryOffset {
-    fn default() -> Self {
-        Self {
-            entry_offset: Default::default(),
-            entry_size: Default::default(),
-        }
-    }
 }
 
 static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
@@ -127,13 +118,13 @@ fn bincode_options() -> WithOtherIntEncoding<
     WithOtherTrailing<DefaultOptions, RejectTrailing>,
     FixintEncoding,
 > {
-    return DefaultOptions::new()
+    DefaultOptions::new()
         .reject_trailing_bytes()
-        .with_fixint_encoding();
+        .with_fixint_encoding()
 }
 
-fn get_file_path(dir: &PathBuf, index: usize, ext: &str) -> PathBuf {
-    let mut path = dir.clone();
+fn get_file_path(dir: &Path, index: usize, ext: &str) -> PathBuf {
+    let mut path = dir.to_path_buf();
     path.push(format!("{0:01$}.{2}", index, INDEX_PADDING, ext));
     path
 }
@@ -194,7 +185,7 @@ impl LSMTree {
         let pattern = create_file_path_regex(COMPACT_ACTION_FILE_EXT)?;
         let compact_action_paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
             .filter_map(std::result::Result::ok)
-            .filter(|entry| Self::get_first_capture(&pattern, &entry).is_some())
+            .filter(|entry| Self::get_first_capture(&pattern, entry).is_some())
             .map(|entry| entry.path())
             .collect();
         for compact_action_path in &compact_action_paths {
@@ -313,7 +304,7 @@ impl LSMTree {
     fn get_first_capture(pattern: &Regex, entry: &DirEntry) -> Option<usize> {
         let file_name = entry.file_name();
         file_name.to_str().and_then(|file_str| {
-            pattern.captures(&file_str).and_then(|captures| {
+            pattern.captures(file_str).and_then(|captures| {
                 captures.get(1).and_then(|number_capture| {
                     number_capture.as_str().parse::<usize>().ok()
                 })
@@ -365,14 +356,14 @@ impl LSMTree {
         Ok(())
     }
 
-    fn get_data_file_paths(dir: &PathBuf, index: usize) -> (PathBuf, PathBuf) {
+    fn get_data_file_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
         let data_path = get_file_path(dir, index, DATA_FILE_EXT);
         let index_path = get_file_path(dir, index, INDEX_FILE_EXT);
         (data_path, index_path)
     }
 
     fn get_compaction_file_paths(
-        dir: &PathBuf,
+        dir: &Path,
         index: usize,
     ) -> (PathBuf, PathBuf) {
         let data_path = get_file_path(dir, index, COMPACT_DATA_FILE_EXT);
@@ -416,7 +407,7 @@ impl LSMTree {
                     .await?,
             )?;
 
-            match value.key.cmp(&key) {
+            match value.key.cmp(key) {
                 std::cmp::Ordering::Equal => {
                     return Ok(Some(value));
                 }
@@ -585,7 +576,7 @@ impl LSMTree {
         // Replace sstables with new list containing the flushed sstable.
         {
             let mut sstables: Vec<SSTable> =
-                self.sstables.borrow().iter().map(|t| t.clone()).collect();
+                self.sstables.borrow().iter().cloned().collect();
             sstables.push(SSTable {
                 index: self.write_sstable_index.get(),
                 size: items_written as u64,
@@ -793,7 +784,7 @@ impl LSMTree {
 
         {
             let mut sstables: Vec<SSTable> =
-                old_sstables.iter().map(|t| t.clone()).collect();
+                old_sstables.iter().cloned().collect();
             sstables.retain(|x| !indices_to_compact.contains(&x.index));
             sstables.push(SSTable {
                 index: output_index,
@@ -827,11 +818,11 @@ impl LSMTree {
     async fn read_next_entry(
         data_reader: &mut (impl AsyncReadExt + Unpin),
         index_reader: &mut (impl AsyncReadExt + Unpin),
-        offset_bytes: &mut Vec<u8>,
+        offset_bytes: &mut [u8],
     ) -> Result<Entry> {
         index_reader.read_exact(offset_bytes).await?;
         let entry_offset: EntryOffset =
-            bincode_options().deserialize(&offset_bytes)?;
+            bincode_options().deserialize(offset_bytes)?;
         let mut data_bytes = vec![0; entry_offset.entry_size];
         data_reader.read_exact(&mut data_bytes).await?;
         let entry: Entry = bincode_options().deserialize(&data_bytes)?;

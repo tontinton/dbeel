@@ -1,5 +1,5 @@
 use async_channel::Sender;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardEvent {

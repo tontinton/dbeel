@@ -145,8 +145,7 @@ fn main() -> Result<()> {
     let mut log_builder = formatted_timed_builder();
     log_builder.parse_filters(
         &std::env::var("RUST_LOG")
-            .or::<String>(Ok(DEFAULT_LOG_LEVEL.to_string()))
-            .unwrap(),
+            .unwrap_or_else(|_| DEFAULT_LOG_LEVEL.to_string()),
     );
     log_builder.try_init().unwrap();
 
@@ -158,7 +157,7 @@ fn main() -> Result<()> {
     let local_connections = cpu_set
         .iter()
         .map(|x| x.cpu)
-        .map(|cpu| LocalShardConnection::new(cpu))
+        .map(LocalShardConnection::new)
         .collect::<Vec<_>>();
 
     let handles = cpu_set
@@ -171,13 +170,13 @@ fn main() -> Result<()> {
                                 args.clone() => args) move || async move {
                     run_shard(args, cpu, connections).await
                 }))
-                .map_err(|e| Error::GlommioError(e))
+                .map_err(Error::GlommioError)
         })
         .collect::<Result<Vec<_>>>()?;
 
     handles
         .into_iter()
-        .map(|h| h.join().map_err(|e| Error::GlommioError(e)))
+        .map(|h| h.join().map_err(Error::GlommioError))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(())

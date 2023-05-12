@@ -41,32 +41,21 @@ impl CachedFileReader {
             };
             let end = std::cmp::min(PAGE_SIZE, size - output_buf.len() + start);
 
-            'wait_for_fault: loop {
-                match self.cache.get(self.id.clone(), address) {
-                    Some(page) => {
-                        output_buf
-                            .extend_from_slice(&page.as_slice()[start..end]);
-                    }
-                    None => {
-                        let page = self
-                            .file
-                            .read_at_aligned(address, PAGE_SIZE)
-                            .await?;
-
-                        output_buf.extend_from_slice(&page[start..end]);
-
-                        let mut page_buf = [0; PAGE_SIZE];
-                        page_buf[..page.len()].copy_from_slice(&page);
-
-                        self.cache.set(
-                            self.id.clone(),
-                            address,
-                            Page::new(page_buf),
-                        );
-                    }
+            match self.cache.get(self.id, address) {
+                Some(page) => {
+                    output_buf.extend_from_slice(&page.as_slice()[start..end]);
                 }
+                None => {
+                    let page =
+                        self.file.read_at_aligned(address, PAGE_SIZE).await?;
 
-                break 'wait_for_fault;
+                    output_buf.extend_from_slice(&page[start..end]);
+
+                    let mut page_buf = [0; PAGE_SIZE];
+                    page_buf[..page.len()].copy_from_slice(&page);
+
+                    self.cache.set(self.id, address, Page::new(page_buf));
+                }
             }
         }
 

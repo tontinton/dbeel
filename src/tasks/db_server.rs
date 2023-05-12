@@ -30,7 +30,7 @@ fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
 fn extract_field_as_str(map: &Value, field_name: &str) -> Result<String> {
     Ok(extract_field(map, field_name)?
         .as_str()
-        .ok_or(Error::MissingField(field_name.to_string()))?
+        .ok_or_else(|| Error::MissingField(field_name.to_string()))?
         .to_string())
 }
 

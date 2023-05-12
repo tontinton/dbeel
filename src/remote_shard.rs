@@ -64,9 +64,9 @@ fn bincode_options() -> WithOtherIntEncoding<
     WithOtherTrailing<DefaultOptions, RejectTrailing>,
     FixintEncoding,
 > {
-    return DefaultOptions::new()
+    DefaultOptions::new()
         .reject_trailing_bytes()
-        .with_fixint_encoding();
+        .with_fixint_encoding()
 }
 
 pub async fn get_message_from_stream(

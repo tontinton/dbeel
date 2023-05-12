@@ -95,7 +95,7 @@ impl MyShard {
         self.trees
             .borrow()
             .get(name)
-            .ok_or(Error::CollectionNotFound(name.to_string()))
+            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
             .map(|t| t.clone())
     }
 

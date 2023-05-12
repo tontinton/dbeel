@@ -13,7 +13,7 @@ async fn run_compaction_loop(my_shard: Rc<MyShard>) {
             .trees
             .borrow()
             .values()
-            .map(|t| t.clone())
+            .cloned()
             .collect::<Vec<_>>();
 
         for tree in trees {
@@ -31,7 +31,7 @@ async fn run_compaction_loop(my_shard: Rc<MyShard>) {
                     continue 'current_tree_compaction;
                 }
 
-                if odd.len() >= compaction_factor && even.len() >= 1 {
+                if odd.len() >= compaction_factor && !even.is_empty() {
                     debug_assert!(even[0] > odd[odd.len() - 1]);
 
                     odd.push(even[0]);

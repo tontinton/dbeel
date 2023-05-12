@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use async_channel::Receiver;
-use glommio::{Task, spawn_local};
+use glommio::{spawn_local, Task};
 use log::error;
 
 use crate::{error::Result, messages::ShardPacket, shards::MyShard};
