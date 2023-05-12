@@ -4,7 +4,8 @@ use std::{
 };
 use thiserror::Error;
 
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub enum Error {
     #[error("cannot insert, reached capacity limit of: {0}")]
     ReachedCapacity(usize),
@@ -109,18 +110,6 @@ impl<K: Ord, V> NodePtr<K, V> {
     #[inline]
     fn unsafe_deref(&self) -> &Node<K, V> {
         unsafe { &(*self.0) }
-    }
-
-    #[inline]
-    fn unsafe_deref_mut(&self) -> &mut Node<K, V> {
-        unsafe { &mut (*self.0) }
-    }
-
-    fn unwrap_mut(&self) -> &mut Node<K, V> {
-        if self.0.is_null() {
-            panic!("called `NodePtr::unwrap_as_mut()` on a null pointer");
-        }
-        self.unsafe_deref_mut()
     }
 
     fn find_min(&self) -> NodePtr<K, V> {
@@ -571,7 +560,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         }
 
         loop {
-            let node = node_ptr.unsafe_deref_mut();
+            let mut node = unsafe { &mut *node_ptr.0 };
             let (left, next_ptr) = match key.cmp(&node.key) {
                 Ordering::Less => (true, node.left),
                 Ordering::Greater => (false, node.right),
@@ -594,7 +583,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
                     node.right = new_node_ptr;
                 }
 
-                self.insert_fixup(new_node_ptr);
+                unsafe { self.insert_fixup(new_node_ptr) };
                 return Ok(None);
             }
 
@@ -602,18 +591,18 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         }
     }
 
-    fn insert_fixup(&mut self, inserted_node_ptr: NodePtr<K, V>) {
+    unsafe fn insert_fixup(&mut self, inserted_node_ptr: NodePtr<K, V>) {
         let mut node_ptr = inserted_node_ptr;
         while node_ptr != self.root {
-            let node = node_ptr.unwrap_mut();
+            let node = &*node_ptr.0;
             let parent_ptr = node.parent;
-            let mut parent = parent_ptr.unwrap_mut();
+            let mut parent = &mut *parent_ptr.0;
             if parent.color == Color::Black {
                 break;
             }
 
             let grand_parent_ptr = parent.parent;
-            let mut grand_parent = grand_parent_ptr.unwrap_mut();
+            let mut grand_parent = &mut *grand_parent_ptr.0;
 
             if parent_ptr == grand_parent.left {
                 let uncle_ptr = grand_parent.right;
@@ -625,15 +614,12 @@ impl<K: Ord, V> RedBlackTree<K, V> {
                         self.rotate_left(node_ptr);
                     }
 
-                    parent =
-                        node_ptr.unsafe_deref_mut().parent.unsafe_deref_mut();
-                    grand_parent = parent.parent.unsafe_deref_mut();
-                    parent.color = Color::Black;
-                    grand_parent.color = Color::Red;
+                    (*(*node_ptr.0).parent.0).color = Color::Black;
+                    (*grand_parent_ptr.0).color = Color::Red;
                     node_ptr = parent_ptr;
                     self.rotate_right(grand_parent_ptr);
                 } else {
-                    let uncle = uncle_ptr.unsafe_deref_mut();
+                    let uncle = &mut *uncle_ptr.0;
                     parent.color = Color::Black;
                     uncle.color = Color::Black;
                     grand_parent.color = Color::Red;
@@ -649,15 +635,12 @@ impl<K: Ord, V> RedBlackTree<K, V> {
                         self.rotate_right(node_ptr);
                     }
 
-                    parent =
-                        node_ptr.unsafe_deref_mut().parent.unsafe_deref_mut();
-                    grand_parent = parent.parent.unsafe_deref_mut();
-                    parent.color = Color::Black;
-                    grand_parent.color = Color::Red;
+                    (*(*node_ptr.0).parent.0).color = Color::Black;
+                    (*grand_parent_ptr.0).color = Color::Red;
                     node_ptr = parent_ptr;
                     self.rotate_left(grand_parent_ptr);
                 } else {
-                    let uncle = uncle_ptr.unsafe_deref_mut();
+                    let uncle = &mut *uncle_ptr.0;
                     parent.color = Color::Black;
                     uncle.color = Color::Black;
                     grand_parent.color = Color::Red;
@@ -665,13 +648,13 @@ impl<K: Ord, V> RedBlackTree<K, V> {
                 }
             }
         }
-        self.root.unwrap_mut().color = Color::Black;
+        (*self.root.0).color = Color::Black;
     }
 
-    fn rotate_left(&mut self, node_ptr: NodePtr<K, V>) {
-        let node = node_ptr.unwrap_mut();
+    unsafe fn rotate_left(&mut self, node_ptr: NodePtr<K, V>) {
+        let mut node = &mut *node_ptr.0;
         let right_ptr = node.right;
-        let right = right_ptr.unwrap_mut();
+        let mut right = &mut *right_ptr.0;
 
         node.right = right.left;
         if let Some(left) = right.left.as_option_mut() {
@@ -695,10 +678,10 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         node.parent = right_ptr;
     }
 
-    fn rotate_right(&mut self, node_ptr: NodePtr<K, V>) {
-        let node = node_ptr.unwrap_mut();
+    unsafe fn rotate_right(&mut self, node_ptr: NodePtr<K, V>) {
+        let mut node = &mut *node_ptr.0;
         let left_ptr = node.left;
-        let left = left_ptr.unwrap_mut();
+        let mut left = &mut *left_ptr.0;
 
         node.left = left.right;
         if let Some(right) = left.right.as_option_mut() {
