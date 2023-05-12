@@ -31,8 +31,11 @@ async fn get_remote_shards(
     seed_shards: &Vec<RemoteShardConnection>,
 ) -> Result<Option<Vec<(String, String)>>> {
     for c in seed_shards {
-        match c.send_request(ShardRequest::GetShards).await? {
-            ShardResponse::GetShards(shards) => return Ok(Some(shards)),
+        match c.send_request(ShardRequest::GetShards).await {
+            Ok(ShardResponse::GetShards(shards)) => return Ok(Some(shards)),
+            Err(e) => {
+                error!("Failed to get shards from '{}': {}", c.address, e);
+            }
         }
     }
 
