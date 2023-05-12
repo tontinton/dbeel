@@ -260,8 +260,12 @@ impl LSMTree {
                         .await?;
                 let data_file = DmaFile::open(&data_file_path).await?;
                 let index_file = DmaFile::open(&index_file_path).await?;
-                Self::flush_memtable_to_disk(&memtable, data_file, index_file)
-                    .await?;
+                Self::flush_memtable_to_disk(
+                    memtable.into_iter().collect(),
+                    data_file,
+                    index_file,
+                )
+                .await?;
                 std::fs::remove_file(&unflashed_file_path)?;
                 wal_file_index
             }
@@ -564,12 +568,16 @@ impl LSMTree {
         let data_file = DmaFile::create(&data_filename).await?;
         let index_file = DmaFile::create(&index_filename).await?;
 
-        let items_written = Self::flush_memtable_to_disk(
-            self.flush_memtable.borrow().as_ref().unwrap(),
-            data_file,
-            index_file,
-        )
-        .await?;
+        let vec = self
+            .flush_memtable
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let items_written =
+            Self::flush_memtable_to_disk(vec, data_file, index_file).await?;
 
         self.flush_memtable.replace(None);
 
@@ -597,7 +605,7 @@ impl LSMTree {
         data_writer: &mut (impl AsyncWriteExt + Unpin),
         index_writer: &mut (impl AsyncWriteExt + Unpin),
     ) -> Result<usize> {
-        let data_encoded = bincode_options().serialize(&entry)?;
+        let data_encoded = bincode_options().serialize(entry)?;
         let entry_size = data_encoded.len();
         let entry_index = EntryOffset {
             entry_offset: offset,
@@ -611,42 +619,37 @@ impl LSMTree {
     }
 
     async fn flush_memtable_to_disk(
-        memtable: &RedBlackTree<Vec<u8>, Vec<u8>>,
+        memtable: Vec<(Vec<u8>, Vec<u8>)>,
         data_file: DmaFile,
         index_file: DmaFile,
     ) -> Result<usize> {
+        let table_length = memtable.len();
+
         let mut data_write_stream = DmaStreamWriterBuilder::new(data_file)
             .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
             .with_buffer_size(PAGE_SIZE)
             .build();
         index_file
-            .hint_extent_size((*INDEX_ENTRY_SIZE as usize) * memtable.len())
+            .hint_extent_size((*INDEX_ENTRY_SIZE as usize) * table_length)
             .await?;
         let mut index_write_stream = DmaStreamWriterBuilder::new(index_file)
             .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
             .with_buffer_size(PAGE_SIZE)
             .build();
 
-        let mut written = 0;
-        for (key, value) in memtable.iter() {
-            let entry_offset = data_write_stream.current_pos();
-            let entry = Entry {
-                key: key.clone(),
-                value: value.clone(),
-            };
+        for (key, value) in memtable {
             Self::write_entry(
-                &entry,
-                entry_offset,
+                &Entry { key, value },
+                data_write_stream.current_pos(),
                 &mut data_write_stream,
                 &mut index_write_stream,
             )
             .await?;
-            written += 1;
         }
         data_write_stream.close().await?;
         index_write_stream.close().await?;
 
-        Ok(written)
+        Ok(table_length)
     }
 
     // Compact all sstables in the given list of sstable files, write the result
