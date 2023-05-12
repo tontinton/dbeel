@@ -70,7 +70,7 @@ fn bincode_options() -> WithOtherIntEncoding<
 }
 
 pub async fn get_message_from_stream(
-    stream: &mut (impl AsyncRead + std::marker::Unpin),
+    stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<ShardMessage> {
     let size_buf = read_exactly(stream, 2).await?;
     let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
@@ -82,7 +82,7 @@ pub async fn get_message_from_stream(
 }
 
 pub async fn send_message_to_stream(
-    stream: &mut (impl AsyncWrite + std::marker::Unpin),
+    stream: &mut (impl AsyncWrite + Unpin),
     message: &ShardMessage,
 ) -> Result<()> {
     let msg_buf = bincode_options().serialize(message)?;

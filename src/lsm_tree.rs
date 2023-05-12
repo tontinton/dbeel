@@ -603,8 +603,8 @@ impl LSMTree {
     async fn write_entry(
         entry: &Entry,
         offset: u64,
-        data_writer: &mut (impl AsyncWriteExt + std::marker::Unpin),
-        index_writer: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        data_writer: &mut (impl AsyncWriteExt + Unpin),
+        index_writer: &mut (impl AsyncWriteExt + Unpin),
     ) -> Result<usize> {
         let data_encoded = bincode_options().serialize(&entry)?;
         let entry_size = data_encoded.len();
@@ -825,8 +825,8 @@ impl LSMTree {
     }
 
     async fn read_next_entry(
-        data_reader: &mut (impl AsyncReadExt + std::marker::Unpin),
-        index_reader: &mut (impl AsyncReadExt + std::marker::Unpin),
+        data_reader: &mut (impl AsyncReadExt + Unpin),
+        index_reader: &mut (impl AsyncReadExt + Unpin),
         offset_bytes: &mut Vec<u8>,
     ) -> Result<Entry> {
         index_reader.read_exact(offset_bytes).await?;

@@ -1,7 +1,7 @@
 use futures_lite::{AsyncRead, AsyncReadExt};
 
 pub async fn read_exactly(
-    stream: &mut (impl AsyncRead + std::marker::Unpin),
+    stream: &mut (impl AsyncRead + Unpin),
     n: usize,
 ) -> std::io::Result<Vec<u8>> {
     let mut buf = vec![0; n];
