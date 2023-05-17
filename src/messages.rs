@@ -24,7 +24,7 @@ pub enum ShardMessage {
     Response(ShardResponse),
 }
 
-// A packet that is sent between shards.
+// A packet that is sent between local shards.
 pub struct ShardPacket {
     pub source_id: usize,
     pub message: ShardMessage,
