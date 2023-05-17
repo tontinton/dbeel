@@ -37,13 +37,6 @@ impl RemoteShardConnection {
         )
     }
 
-    pub async fn send_message(&self, message: &ShardMessage) -> Result<()> {
-        let mut stream = self.connect().await?;
-        send_message_to_stream(&mut stream, message).await?;
-        stream.close().await?;
-        Ok(())
-    }
-
     pub async fn send_request(
         &self,
         request: ShardRequest,

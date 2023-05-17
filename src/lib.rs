@@ -6,6 +6,6 @@ pub mod lsm_tree;
 pub mod messages;
 pub mod page_cache;
 pub mod read_exactly;
-pub mod remote_shard;
+pub mod remote_shard_connection;
 pub mod shards;
 pub mod tasks;

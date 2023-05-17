@@ -7,7 +7,9 @@ use log::{error, trace};
 use crate::{
     error::Result,
     messages::ShardMessage,
-    remote_shard::{get_message_from_stream, send_message_to_stream},
+    remote_shard_connection::{
+        get_message_from_stream, send_message_to_stream,
+    },
     shards::MyShard,
 };
 

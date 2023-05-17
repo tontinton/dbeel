@@ -14,7 +14,7 @@ use crate::{
     lsm_tree::LSMTree,
     messages::{ShardEvent, ShardMessage, ShardPacket},
     page_cache::{PageCache, PartitionPageCache},
-    remote_shard::RemoteShardConnection,
+    remote_shard_connection::RemoteShardConnection,
 };
 
 #[derive(Debug)]
@@ -132,32 +132,6 @@ impl MyShard {
         Ok(())
     }
 
-    async fn broadcast_message_to_remote_shards(
-        self: Rc<Self>,
-        message: &ShardMessage,
-    ) -> Result<()> {
-        let connections = self
-            .shards
-            .borrow()
-            .iter()
-            .flat_map(|p| match &p.connection {
-                ShardConnection::Remote(c) => Some(c.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        for c in connections {
-            if let Err(e) = c.send_message(message).await {
-                error!(
-                    "Error sending message to remote shard ({}): {}",
-                    c.address, e
-                );
-            }
-        }
-
-        Ok(())
-    }
-
     pub async fn broadcast_message_to_local_shards(
         self: Rc<Self>,
         message: &ShardMessage,
@@ -178,17 +152,6 @@ impl MyShard {
                 .await?;
         }
 
-        Ok(())
-    }
-
-    pub async fn broadcast_message(
-        self: Rc<Self>,
-        message: &ShardMessage,
-    ) -> Result<()> {
-        self.clone()
-            .broadcast_message_to_local_shards(message)
-            .await?;
-        self.broadcast_message_to_remote_shards(message).await?;
         Ok(())
     }
 

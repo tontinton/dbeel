@@ -4,7 +4,7 @@ use dbeel::{
     local_shard::LocalShardConnection,
     messages::{ShardRequest, ShardResponse},
     page_cache::{PageCache, PAGE_SIZE},
-    remote_shard::RemoteShardConnection,
+    remote_shard_connection::RemoteShardConnection,
     shards::{MyShard, OtherShard, ShardConnection},
     tasks::{
         compaction::spawn_compaction_task, db_server::spawn_db_server,
