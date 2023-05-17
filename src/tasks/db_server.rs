@@ -43,12 +43,14 @@ fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
     Ok(field_encoded)
 }
 
-fn broadcast_message_in_background(
+fn broadcast_message_to_local_shards_in_background(
     my_shard: Rc<MyShard>,
     message: ShardMessage,
 ) {
     spawn_local(async move {
-        if let Err(e) = my_shard.broadcast_message(&message).await {
+        if let Err(e) =
+            my_shard.broadcast_message_to_local_shards(&message).await
+        {
             error!("Failed to broadcast message: {}", e);
         }
     })
@@ -96,7 +98,7 @@ async fn handle_request(
 
                 my_shard.clone().create_collection(name.clone()).await?;
 
-                broadcast_message_in_background(
+                broadcast_message_to_local_shards_in_background(
                     my_shard,
                     ShardMessage::Event(ShardEvent::CreateCollection(name)),
                 );
@@ -105,7 +107,7 @@ async fn handle_request(
                 let name = extract_field_as_str(&map, "name")?;
                 my_shard.clone().drop_collection(name.clone())?;
 
-                broadcast_message_in_background(
+                broadcast_message_to_local_shards_in_background(
                     my_shard,
                     ShardMessage::Event(ShardEvent::DropCollection(name)),
                 );

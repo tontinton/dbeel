@@ -158,7 +158,7 @@ impl MyShard {
         Ok(())
     }
 
-    async fn broadcast_message_to_local_shards(
+    pub async fn broadcast_message_to_local_shards(
         self: Rc<Self>,
         message: &ShardMessage,
     ) -> Result<()> {
