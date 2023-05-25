@@ -178,7 +178,9 @@ async fn handle_client(
         }
         Err(e) => {
             let error_string = format!("Error while handling request: {}", e);
-            error!("{}", error_string);
+            if !matches!(e, Error::KeyNotFound) {
+                error!("{}", error_string);
+            }
 
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(
