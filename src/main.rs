@@ -24,10 +24,8 @@ extern crate pretty_env_logger;
 #[macro_use]
 extern crate log;
 
-#[cfg(debug_assertions)]
-const DEFAULT_LOG_LEVEL: &str = "dbeel=trace";
-#[cfg(not(debug_assertions))]
-const DEFAULT_LOG_LEVEL: &str = "dbeel=info";
+const DEFAULT_DEBUG_LOG_LEVEL: &str = "dbeel=trace";
+const DEFAULT_RELEASE_LOG_LEVEL: &str = "dbeel=info";
 
 async fn get_nodes_metadata(
     seed_shards: &Vec<RemoteShardConnection>,
@@ -186,10 +184,16 @@ async fn run_shard(
 }
 
 fn main() -> Result<()> {
+    let default_log_level = if cfg!(debug_assertions) {
+        DEFAULT_DEBUG_LOG_LEVEL
+    } else {
+        DEFAULT_RELEASE_LOG_LEVEL
+    };
+
     let mut log_builder = formatted_timed_builder();
     log_builder.parse_filters(
         &std::env::var("RUST_LOG")
-            .unwrap_or_else(|_| DEFAULT_LOG_LEVEL.to_string()),
+            .unwrap_or_else(|_| default_log_level.to_string()),
     );
     log_builder.try_init().unwrap();
 
