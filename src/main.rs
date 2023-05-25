@@ -1,6 +1,7 @@
 use dbeel::{
     args::{get_args, Args},
     error::{Error, Result},
+    gossip::GossipEvent,
     local_shard::LocalShardConnection,
     messages::{NodeMetadata, ShardRequest, ShardResponse},
     page_cache::{PageCache, PAGE_SIZE},
@@ -162,10 +163,24 @@ async fn run_shard(
     // Tasks that only one shard of a node runs.
     if id == 0 {
         tasks.push(spawn_gossip_server_task(my_shard.clone()));
+
+        // Notify all nodes that we are now alive.
+        my_shard
+            .clone()
+            .gossip(GossipEvent::Alive(my_shard.get_node_metadata()))
+            .await?;
     }
 
     // Await all, returns when first fails, cancels all others.
     try_join_all(tasks).await?;
+
+    if id == 0 {
+        // Notify all nodes that we are now dead.
+        my_shard
+            .clone()
+            .gossip(GossipEvent::Dead(my_shard.args.ip.clone()))
+            .await?;
+    }
 
     Ok(())
 }
