@@ -3,11 +3,13 @@ import msgpack
 import struct
 import contextlib
 
+
 @contextlib.contextmanager
 def client():
     with contextlib.closing(socket.socket()) as s:
         s.connect(('127.0.0.1', 10000))
         yield s
+
 
 def _db_send(s, p):
     r = msgpack.dumps(p)
@@ -15,12 +17,14 @@ def _db_send(s, p):
     s.send(r)
     buf = b''
     while packet := s.recv(1024 * 64):
-          buf += packet
+        buf += packet
     return msgpack.loads(buf)
+
 
 def _db_request(**kwargs):
     with client() as s:
-         return _db_send(s, kwargs)
+        return _db_send(s, kwargs)
+
 
 class DB:
     @staticmethod

@@ -37,9 +37,11 @@ I have also written a mini client that you can use inside of python:
 ``` python
 from dbeel import DB
 
+document = {"hello": "world"}
+
 assert DB.create("test") == "OK"
-assert DB.set("test", "key", "value") == "OK"
-assert DB.get("test", "key") == "value"
+assert DB.set("test", "key", document) == "OK"
+assert DB.get("test", "key") == document
 assert DB.delete("test", "key") == "OK"
 assert "key not found" in DB.get("test", "key")
 assert DB.drop("test") == "OK"
