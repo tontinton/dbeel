@@ -2,17 +2,18 @@ use dbeel::{
     args::{get_args, Args},
     error::{Error, Result},
     local_shard::LocalShardConnection,
-    messages::{ShardRequest, ShardResponse},
+    messages::{NodeMetadata, ShardRequest, ShardResponse},
     page_cache::{PageCache, PAGE_SIZE},
     remote_shard_connection::RemoteShardConnection,
     shards::{MyShard, OtherShard, ShardConnection},
     tasks::{
         compaction::spawn_compaction_task, db_server::spawn_db_server,
+        gossip_server::spawn_gossip_server_task,
         local_shard_server::spawn_local_shard_server_task,
         remote_shard_server::spawn_remote_shard_server_task,
     },
 };
-use futures::try_join;
+use futures::future::try_join_all;
 use glommio::{enclose, CpuSet, LocalExecutorBuilder, Placement};
 use pretty_env_logger::formatted_timed_builder;
 use std::rc::Rc;
@@ -27,12 +28,14 @@ const DEFAULT_LOG_LEVEL: &str = "dbeel=trace";
 #[cfg(not(debug_assertions))]
 const DEFAULT_LOG_LEVEL: &str = "dbeel=info";
 
-async fn get_remote_shards(
+async fn get_nodes_metadata(
     seed_shards: &Vec<RemoteShardConnection>,
-) -> Result<Option<Vec<(String, String)>>> {
+) -> Result<Option<Vec<NodeMetadata>>> {
     for c in seed_shards {
-        match c.send_request(ShardRequest::GetShards).await {
-            Ok(ShardResponse::GetShards(shards)) => return Ok(Some(shards)),
+        match c.send_request(ShardRequest::GetMetadata).await {
+            Ok(ShardResponse::GetMetadata(metadata)) => {
+                return Ok(Some(metadata))
+            }
             Err(e) => {
                 error!("Failed to get shards from '{}': {}", c.address, e);
             }
@@ -42,12 +45,12 @@ async fn get_remote_shards(
     Ok(None)
 }
 
-async fn discover_remote_shards(my_shard: Rc<MyShard>) -> Result<()> {
+async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
     if my_shard.args.seed_nodes.is_empty() {
         return Ok(());
     }
 
-    let remote_shards = get_remote_shards(
+    let nodes = get_nodes_metadata(
         &my_shard
             .args
             .seed_nodes
@@ -65,14 +68,29 @@ async fn discover_remote_shards(my_shard: Rc<MyShard>) -> Result<()> {
     .await?
     .ok_or(Error::NoRemoteShardsFoundInSeedNodes)?;
 
+    my_shard
+        .nodes
+        .replace(nodes.into_iter().map(|n| (n.ip.clone(), n)).collect());
+
     my_shard.shards.borrow_mut().extend(
-        remote_shards
-            .into_iter()
-            .filter(|(name, _)| name != &my_shard.name)
-            .map(|(name, address)| {
-                trace!("Discovered remote shard: ({}, {})", name, address);
+        my_shard
+            .nodes
+            .borrow()
+            .iter()
+            .flat_map(|(_, node)| {
+                trace!(
+                    "Discovered node '{}' with {} number of shards",
+                    node.ip,
+                    node.shard_ports.len()
+                );
+                node.shard_ports
+                    .iter()
+                    .map(|port| format!("{}:{}", node.ip, port))
+                    .collect::<Vec<_>>()
+            })
+            .map(|address| {
                 OtherShard::new(
-                    name,
+                    address.clone(),
                     ShardConnection::Remote(RemoteShardConnection::new(
                         address,
                         Duration::from_millis(
@@ -118,7 +136,7 @@ async fn run_shard(
     let remote_shard_server_task =
         spawn_remote_shard_server_task(my_shard.clone());
 
-    discover_remote_shards(my_shard.clone()).await?;
+    discover_nodes(my_shard.clone()).await?;
 
     // Sort by hash to make it a consistant hashing ring.
     my_shard
@@ -131,15 +149,23 @@ async fn run_shard(
 
     let compaction_task = spawn_compaction_task(my_shard.clone());
 
-    let server_task = spawn_db_server(my_shard);
+    let server_task = spawn_db_server(my_shard.clone());
 
-    // Await all, returns when first fails, cancels all others.
-    try_join!(
+    // Tasks that all shards run.
+    let mut tasks = vec![
         remote_shard_server_task,
         shard_messages_receiver_task,
         compaction_task,
-        server_task
-    )?;
+        server_task,
+    ];
+
+    // Tasks that only one shard of a node runs.
+    if id == 0 {
+        tasks.push(spawn_gossip_server_task(my_shard.clone()));
+    }
+
+    // Await all, returns when first fails, cancels all others.
+    try_join_all(tasks).await?;
 
     Ok(())
 }

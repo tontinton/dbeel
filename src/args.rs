@@ -66,6 +66,26 @@ This port is for listening for distributed messages from \
     pub remote_shard_connect_timeout: u64,
 
     #[clap(
+        long,
+        help = "Gossip UDP server port.
+This port is for listening for gossip messages from \
+                remote nodes.",
+        default_value = "30000"
+    )]
+    pub gossip_port: u16,
+
+    #[clap(long, help = "Gossip number of nodes fanout.", default_value = "3")]
+    pub gossip_fanout: usize,
+
+    #[clap(
+        long,
+        help = "Gossip max number of items an event is seen before \
+retransmitting the event again.",
+        default_value = "5"
+    )]
+    pub gossip_max_seen_count: u8,
+
+    #[clap(
         short,
         long,
         help = "How much files to compact each time.",

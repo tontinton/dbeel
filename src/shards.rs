@@ -1,11 +1,15 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use caches::Cache;
-use log::error;
+use futures::future::join_all;
+use glommio::net::UdpSocket;
 use murmur3::murmur3_32;
+use rand::seq::IteratorRandom;
+use rand::thread_rng;
 
-use crate::messages::{ShardRequest, ShardResponse};
+use crate::gossip::{serialize_gossip_message, GossipEvent, GossipMessage};
+use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
 use crate::{
     args::Args,
     cached_file_reader::FileId,
@@ -66,6 +70,12 @@ pub struct MyShard {
     // The consistent hash ring (shards sorted by hash).
     pub shards: RefCell<Vec<OtherShard>>,
 
+    // All known nodes.
+    pub nodes: RefCell<HashMap<String, NodeMetadata>>,
+
+    // Holds the counts of gossip requests.
+    pub gossip_requests: RefCell<HashMap<(String, TypeId), u8>>,
+
     // Collections to the lsm tree on disk.
     pub trees: RefCell<HashMap<String, Rc<LSMTree>>>,
 
@@ -86,6 +96,8 @@ impl MyShard {
             id,
             name,
             shards: RefCell::new(shards),
+            nodes: RefCell::new(HashMap::new()),
+            gossip_requests: RefCell::new(HashMap::new()),
             trees: RefCell::new(HashMap::new()),
             cache: Rc::new(RefCell::new(cache)),
         }
@@ -180,30 +192,42 @@ impl MyShard {
         Ok(())
     }
 
+    pub fn get_node_metadata(&self) -> NodeMetadata {
+        let shard_ports = self
+            .shards
+            .borrow()
+            .iter()
+            .flat_map(|shard| match &shard.connection {
+                ShardConnection::Remote(_) => None,
+                ShardConnection::Local(c) => {
+                    Some(self.args.remote_shard_port + c.id as u16)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        NodeMetadata {
+            ip: self.args.ip.clone(),
+            shard_ports,
+            gossip_port: self.args.gossip_port,
+        }
+    }
+
     fn handle_shard_request(
         &self,
         request: ShardRequest,
     ) -> Result<ShardResponse> {
         let response = match request {
-            ShardRequest::GetShards => ShardResponse::GetShards(
-                self.shards
+            ShardRequest::GetMetadata => {
+                let mut nodes = self
+                    .nodes
                     .borrow()
                     .iter()
-                    .flat_map(|shard| match &shard.connection {
-                        ShardConnection::Remote(c) => {
-                            Some((shard.name.clone(), c.address.clone()))
-                        }
-                        ShardConnection::Local(c) => Some((
-                            shard.name.clone(),
-                            format!(
-                                "{}:{}",
-                                self.args.ip,
-                                self.args.remote_shard_port + c.id as u16
-                            ),
-                        )),
-                    })
-                    .collect::<Vec<_>>(),
-            ),
+                    .map(|(_, n)| n.clone())
+                    .collect::<Vec<_>>();
+                nodes.push(self.get_node_metadata());
+
+                ShardResponse::GetMetadata(nodes)
+            }
         };
 
         Ok(response)
@@ -223,5 +247,41 @@ impl MyShard {
             }
             ShardMessage::Response(_) => None,
         })
+    }
+
+    pub async fn gossip(self: Rc<Self>, event: GossipEvent) -> Result<()> {
+        let message = GossipMessage::new(self.name.clone(), event);
+        self.gossip_buffer(&serialize_gossip_message(&message)?)
+            .await
+    }
+
+    pub async fn gossip_buffer(
+        self: Rc<Self>,
+        message_buffer: &[u8],
+    ) -> Result<()> {
+        let mut rng = thread_rng();
+        let addresses = self
+            .nodes
+            .borrow()
+            .iter()
+            .choose_multiple(&mut rng, self.args.gossip_fanout)
+            .into_iter()
+            .map(|(_, node)| format!("{}:{}", node.ip, node.gossip_port))
+            .collect::<Vec<_>>();
+
+        let sockets = (0..addresses.len())
+            .map(|_| {
+                UdpSocket::bind("127.0.0.1:0").map_err(Error::GlommioError)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let futures = addresses
+            .into_iter()
+            .zip(sockets.iter())
+            .map(|(address, socket)| socket.send_to(message_buffer, address));
+
+        join_all(futures).await;
+
+        Ok(())
     }
 }
