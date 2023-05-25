@@ -440,6 +440,7 @@ dependencies = [
  "murmur3",
  "once_cell",
  "pretty_env_logger",
+ "rand",
  "redblacktree",
  "regex",
  "rmp",

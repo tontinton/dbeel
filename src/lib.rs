@@ -1,6 +1,7 @@
 pub mod args;
 pub mod cached_file_reader;
 pub mod error;
+pub mod gossip;
 pub mod local_shard;
 pub mod lsm_tree;
 pub mod messages;

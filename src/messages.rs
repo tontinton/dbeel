@@ -9,12 +9,19 @@ pub enum ShardEvent {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardRequest {
-    GetShards,
+    GetMetadata,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct NodeMetadata {
+    pub ip: String,
+    pub shard_ports: Vec<u16>,
+    pub gossip_port: u16,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardResponse {
-    GetShards(Vec<(String, String)>),
+    GetMetadata(Vec<NodeMetadata>),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
