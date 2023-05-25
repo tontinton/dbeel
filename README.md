@@ -31,21 +31,17 @@ To run the benchmarks:
 ./target/release/blackbox_bench      # On second terminal
 ```
 
-I have also written a mini client that you can run inside of IPython:
-
-``` sh
-ipython -i dbeel.py
-```
-
-Then once inside IPython, you can interact with the db using the DB class:
+I have also written a mini client that you can use inside of python:
 
 ``` python
-DB.create("test")
-DB.set("test", "key", "value")
+from dbeel import DB
+
+assert DB.create("test") == "OK"
+assert DB.set("test", "key", "value") == "OK"
 assert DB.get("test", "key") == "value"
-DB.delete("test", "key")
+assert DB.delete("test", "key") == "OK"
 assert "key not found" in DB.get("test", "key")
-DB.drop("test")
+assert DB.drop("test") == "OK"
 ```
 
 ## Performance
