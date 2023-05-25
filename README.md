@@ -10,6 +10,7 @@ If you ever wanted to read database code without getting overwhelmed by massive 
 * Direct I/O
 * Custom page cache using WTiny-LFU eviction algorithm
 * Thread per core
+* Distributed using gossip dissemination
 
 ## Try it out
 
