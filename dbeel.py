@@ -46,4 +46,3 @@ class DB:
     @staticmethod
     def get(c, k):
         return _db_request(type="get", collection=c, key=k)
-
