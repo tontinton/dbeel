@@ -221,14 +221,12 @@ impl MyShard {
                 .flat_map(|node| {
                     node.shard_ports
                         .into_iter()
-                        .map(|port| {
-                            (node.name.clone(), format!("{}:{}", node.ip, port))
-                        })
+                        .map(|port| format!("{}:{}", node.ip, port))
                         .collect::<Vec<_>>()
                 })
-                .map(|(name, address)| {
+                .map(|address| {
                     OtherShard::new(
-                        name,
+                        address.clone(),
                         ShardConnection::Remote(RemoteShardConnection::new(
                             address,
                             Duration::from_millis(
