@@ -67,9 +67,13 @@ async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
     .await?
     .ok_or(Error::NoRemoteShardsFoundInSeedNodes)?;
 
-    my_shard
-        .nodes
-        .replace(nodes.iter().map(|n| (n.name.clone(), n.clone())).collect());
+    my_shard.nodes.replace(
+        nodes
+            .iter()
+            .filter(|n| n.name != my_shard.args.name)
+            .map(|n| (n.name.clone(), n.clone()))
+            .collect(),
+    );
 
     trace!(
         "Got {} number of nodes in discovery",
