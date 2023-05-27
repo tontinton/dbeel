@@ -69,38 +69,14 @@ async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
 
     my_shard
         .nodes
-        .replace(nodes.into_iter().map(|n| (n.name.clone(), n)).collect());
+        .replace(nodes.iter().map(|n| (n.name.clone(), n.clone())).collect());
 
     trace!(
         "Got {} number of nodes in discovery",
         my_shard.nodes.borrow().len()
     );
 
-    my_shard.shards.borrow_mut().extend(
-        my_shard
-            .nodes
-            .borrow()
-            .iter()
-            .flat_map(|(_, node)| {
-                node.shard_ports
-                    .iter()
-                    .map(|port| {
-                        (node.name.clone(), format!("{}:{}", node.ip, port))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .map(|(name, address)| {
-                OtherShard::new(
-                    name,
-                    ShardConnection::Remote(RemoteShardConnection::new(
-                        address,
-                        Duration::from_millis(
-                            my_shard.args.remote_shard_connect_timeout,
-                        ),
-                    )),
-                )
-            }),
-    );
+    my_shard.add_shards_of_nodes(nodes);
 
     Ok(())
 }

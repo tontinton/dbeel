@@ -1,4 +1,5 @@
 use std::any::{Any, TypeId};
+use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use caches::Cache;
@@ -211,6 +212,32 @@ impl MyShard {
             shard_ports,
             gossip_port: self.args.gossip_port,
         }
+    }
+
+    pub fn add_shards_of_nodes(&self, nodes: Vec<NodeMetadata>) {
+        self.shards.borrow_mut().extend(
+            nodes
+                .into_iter()
+                .flat_map(|node| {
+                    node.shard_ports
+                        .into_iter()
+                        .map(|port| {
+                            (node.name.clone(), format!("{}:{}", node.ip, port))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map(|(name, address)| {
+                    OtherShard::new(
+                        name,
+                        ShardConnection::Remote(RemoteShardConnection::new(
+                            address,
+                            Duration::from_millis(
+                                self.args.remote_shard_connect_timeout,
+                            ),
+                        )),
+                    )
+                }),
+        );
     }
 
     fn handle_shard_request(
