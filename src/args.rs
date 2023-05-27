@@ -81,7 +81,7 @@ This port is for listening for gossip messages from \
         long,
         help = "Gossip max number of items an event is seen before \
 retransmitting the event again.",
-        default_value = "5"
+        default_value = "3"
     )]
     pub gossip_max_seen_count: u8,
 
