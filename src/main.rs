@@ -71,17 +71,17 @@ async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
         .nodes
         .replace(nodes.into_iter().map(|n| (n.name.clone(), n)).collect());
 
+    trace!(
+        "Got {} number of nodes in discovery",
+        my_shard.nodes.borrow().len()
+    );
+
     my_shard.shards.borrow_mut().extend(
         my_shard
             .nodes
             .borrow()
             .iter()
             .flat_map(|(_, node)| {
-                trace!(
-                    "Discovered node '{}' with {} number of shards",
-                    node.ip,
-                    node.shard_ports.len()
-                );
                 node.shard_ports
                     .iter()
                     .map(|port| {

@@ -26,10 +26,18 @@ async fn handle_gossip_event(
                 .borrow_mut()
                 .entry(node.name.clone())
                 .or_insert(node);
+            trace!(
+                "After alive: holding {} number of nodes",
+                my_shard.nodes.borrow().len()
+            );
             // TODO: add remote shards.
         }
         GossipEvent::Dead(node_name) => {
             my_shard.nodes.borrow_mut().remove(&node_name);
+            trace!(
+                "After death: holding {} number of nodes",
+                my_shard.nodes.borrow().len()
+            );
         }
         _ => {}
     }
