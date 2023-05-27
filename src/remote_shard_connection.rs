@@ -65,9 +65,9 @@ fn bincode_options() -> WithOtherIntEncoding<
 pub async fn get_message_from_stream(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<ShardMessage> {
-    let size_buf = read_exactly(stream, 2).await?;
-    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
-    let request_buf = read_exactly(stream, size.into()).await?;
+    let size_buf = read_exactly(stream, 4).await?;
+    let size = u32::from_le_bytes(size_buf.as_slice().try_into().unwrap());
+    let request_buf = read_exactly(stream, size as usize).await?;
 
     let mut cursor = std::io::Cursor::new(&request_buf[..]);
 
@@ -79,7 +79,7 @@ pub async fn send_message_to_stream(
     message: &ShardMessage,
 ) -> Result<()> {
     let msg_buf = bincode_options().serialize(message)?;
-    let size_buf = (msg_buf.len() as u16).to_le_bytes();
+    let size_buf = (msg_buf.len() as u32).to_le_bytes();
 
     stream.write_all(&size_buf).await?;
     stream.write_all(&msg_buf).await?;

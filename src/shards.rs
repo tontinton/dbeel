@@ -64,13 +64,13 @@ pub struct MyShard {
     // Current shard's cpu id.
     pub id: usize,
 
-    // Shard unique name.
-    pub name: String,
+    // Shard unique name, if you want the node unique name, it's in args.name.
+    pub shard_name: String,
 
     // The consistent hash ring (shards sorted by hash).
     pub shards: RefCell<Vec<OtherShard>>,
 
-    // All known nodes other than this node.
+    // All known nodes other than this node, key is node unique name.
     pub nodes: RefCell<HashMap<String, NodeMetadata>>,
 
     // Holds the counts of gossip requests.
@@ -90,11 +90,11 @@ impl MyShard {
         shards: Vec<OtherShard>,
         cache: PageCache<FileId>,
     ) -> Self {
-        let name = format!("{}-{}", args.name, id);
+        let shard_name = format!("{}-{}", args.name, id);
         Self {
             args,
             id,
-            name,
+            shard_name,
             shards: RefCell::new(shards),
             nodes: RefCell::new(HashMap::new()),
             gossip_requests: RefCell::new(HashMap::new()),
@@ -206,6 +206,7 @@ impl MyShard {
             .collect::<Vec<_>>();
 
         NodeMetadata {
+            name: self.args.name.clone(),
             ip: self.args.ip.clone(),
             shard_ports,
             gossip_port: self.args.gossip_port,
@@ -250,7 +251,7 @@ impl MyShard {
     }
 
     pub async fn gossip(self: Rc<Self>, event: GossipEvent) -> Result<()> {
-        let message = GossipMessage::new(self.name.clone(), event);
+        let message = GossipMessage::new(self.args.name.clone(), event);
         self.gossip_buffer(&serialize_gossip_message(&message)?)
             .await
     }

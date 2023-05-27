@@ -12,8 +12,9 @@ pub enum ShardRequest {
     GetMetadata,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct NodeMetadata {
+    pub name: String,
     pub ip: String,
     pub shard_ports: Vec<u16>,
     pub gossip_port: u16,

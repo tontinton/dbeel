@@ -69,7 +69,7 @@ async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
 
     my_shard
         .nodes
-        .replace(nodes.into_iter().map(|n| (n.ip.clone(), n)).collect());
+        .replace(nodes.into_iter().map(|n| (n.name.clone(), n)).collect());
 
     my_shard.shards.borrow_mut().extend(
         my_shard
@@ -84,12 +84,14 @@ async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
                 );
                 node.shard_ports
                     .iter()
-                    .map(|port| format!("{}:{}", node.ip, port))
+                    .map(|port| {
+                        (node.name.clone(), format!("{}:{}", node.ip, port))
+                    })
                     .collect::<Vec<_>>()
             })
-            .map(|address| {
+            .map(|(name, address)| {
                 OtherShard::new(
-                    address.clone(),
+                    name,
                     ShardConnection::Remote(RemoteShardConnection::new(
                         address,
                         Duration::from_millis(
@@ -176,7 +178,7 @@ async fn run_shard(
         // Notify all nodes that we are now dead.
         my_shard
             .clone()
-            .gossip(GossipEvent::Dead(my_shard.args.ip.clone()))
+            .gossip(GossipEvent::Dead(my_shard.args.name.clone()))
             .await?;
     }
 
