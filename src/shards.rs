@@ -70,7 +70,7 @@ pub struct MyShard {
     // The consistent hash ring (shards sorted by hash).
     pub shards: RefCell<Vec<OtherShard>>,
 
-    // All known nodes.
+    // All known nodes other than this node.
     pub nodes: RefCell<HashMap<String, NodeMetadata>>,
 
     // Holds the counts of gossip requests.

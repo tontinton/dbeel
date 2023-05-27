@@ -18,7 +18,7 @@ async fn handle_gossip_event(
     // All events must be handled idempotently, as gossip messages can be seen
     // multiple times.
     match event {
-        GossipEvent::Alive(node) => {
+        GossipEvent::Alive(node) if node.ip != my_shard.args.ip => {
             my_shard
                 .nodes
                 .borrow_mut()
@@ -29,6 +29,7 @@ async fn handle_gossip_event(
         GossipEvent::Dead(node_ip) => {
             my_shard.nodes.borrow_mut().remove(&node_ip);
         }
+        _ => {}
     }
 
     Ok(())
