@@ -4,46 +4,10 @@ use glommio::{net::UdpSocket, spawn_local, Task};
 use log::{error, trace};
 
 use crate::{
-    error::Result,
-    gossip::{deserialize_gossip_message, GossipEvent},
-    shards::MyShard,
+    error::Result, gossip::deserialize_gossip_message, shards::MyShard,
 };
 
 const UDP_PACKET_BUFFER_SIZE: usize = 65536;
-
-async fn handle_gossip_event(
-    my_shard: Rc<MyShard>,
-    event: GossipEvent,
-) -> Result<()> {
-    trace!("Gossip: {:?}", event);
-
-    // All events must be handled idempotently, as gossip messages can be seen
-    // multiple times.
-    match event {
-        GossipEvent::Alive(node) if node.name != my_shard.args.name => {
-            my_shard
-                .nodes
-                .borrow_mut()
-                .entry(node.name.clone())
-                .or_insert(node.clone());
-            trace!(
-                "After alive: holding {} number of nodes",
-                my_shard.nodes.borrow().len()
-            );
-            my_shard.add_shards_of_nodes(vec![node]);
-        }
-        GossipEvent::Dead(node_name) => {
-            my_shard.nodes.borrow_mut().remove(&node_name);
-            trace!(
-                "After death: holding {} number of nodes",
-                my_shard.nodes.borrow().len()
-            );
-        }
-        _ => {}
-    }
-
-    Ok(())
-}
 
 async fn handle_gossip_packet(
     my_shard: Rc<MyShard>,
@@ -68,7 +32,8 @@ async fn handle_gossip_packet(
     };
 
     if seen_first_time {
-        handle_gossip_event(my_shard.clone(), message.event).await?;
+        trace!("Gossip: {:?}", message.event);
+        my_shard.handle_gossip_event(message.event);
     }
 
     my_shard.gossip_buffer(packet_buf).await?;

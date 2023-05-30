@@ -3,12 +3,13 @@ use dbeel::{
     error::{Error, Result},
     gossip::GossipEvent,
     local_shard::LocalShardConnection,
-    messages::{NodeMetadata, ShardRequest, ShardResponse},
+    messages::NodeMetadata,
     page_cache::{PageCache, PAGE_SIZE},
     remote_shard_connection::RemoteShardConnection,
     shards::{MyShard, OtherShard, ShardConnection},
     tasks::{
         compaction::spawn_compaction_task, db_server::spawn_db_server,
+        failure_detector::spawn_failure_detector_task,
         gossip_server::spawn_gossip_server_task,
         local_shard_server::spawn_local_shard_server_task,
         remote_shard_server::spawn_remote_shard_server_task,
@@ -31,8 +32,8 @@ async fn get_nodes_metadata(
     seed_shards: &Vec<RemoteShardConnection>,
 ) -> Option<Vec<NodeMetadata>> {
     for c in seed_shards {
-        match c.send_request(ShardRequest::GetMetadata).await {
-            Ok(ShardResponse::GetMetadata(metadata)) => return Some(metadata),
+        match c.get_metadata().await {
+            Ok(metadata) => return Some(metadata),
             Err(e) => {
                 error!("Failed to get shards from '{}': {}", c.address, e);
             }
@@ -141,6 +142,7 @@ async fn run_shard(
     // Tasks that only one shard of a node runs.
     if id == 0 {
         tasks.push(spawn_gossip_server_task(my_shard.clone()));
+        tasks.push(spawn_failure_detector_task(my_shard.clone()));
 
         // Notify all nodes that we are now alive.
         my_shard

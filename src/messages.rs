@@ -9,6 +9,7 @@ pub enum ShardEvent {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardRequest {
+    Ping,
     GetMetadata,
 }
 
@@ -22,6 +23,7 @@ pub struct NodeMetadata {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardResponse {
+    Pong,
     GetMetadata(Vec<NodeMetadata>),
 }
 
