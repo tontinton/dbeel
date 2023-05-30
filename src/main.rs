@@ -29,19 +29,17 @@ const DEFAULT_RELEASE_LOG_LEVEL: &str = "dbeel=info";
 
 async fn get_nodes_metadata(
     seed_shards: &Vec<RemoteShardConnection>,
-) -> Result<Option<Vec<NodeMetadata>>> {
+) -> Option<Vec<NodeMetadata>> {
     for c in seed_shards {
         match c.send_request(ShardRequest::GetMetadata).await {
-            Ok(ShardResponse::GetMetadata(metadata)) => {
-                return Ok(Some(metadata))
-            }
+            Ok(ShardResponse::GetMetadata(metadata)) => return Some(metadata),
             Err(e) => {
                 error!("Failed to get shards from '{}': {}", c.address, e);
             }
         }
     }
 
-    Ok(None)
+    None
 }
 
 async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
@@ -64,7 +62,7 @@ async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
             })
             .collect::<Vec<_>>(),
     )
-    .await?
+    .await
     .ok_or(Error::NoRemoteShardsFoundInSeedNodes)?;
 
     my_shard.nodes.replace(
