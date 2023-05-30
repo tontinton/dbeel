@@ -11,7 +11,7 @@ use glommio::net::TcpStream;
 
 use crate::{
     error::{Error, Result},
-    messages::{ShardMessage, ShardRequest, ShardResponse},
+    messages::{NodeMetadata, ShardMessage, ShardRequest, ShardResponse},
     read_exactly::read_exactly,
 };
 
@@ -50,6 +50,20 @@ impl RemoteShardConnection {
         };
         stream.close().await?;
         Ok(response)
+    }
+
+    pub async fn ping(&self) -> Result<()> {
+        match self.send_request(ShardRequest::Ping).await? {
+            ShardResponse::Pong => Ok(()),
+            _ => Err(Error::ResponseWrongType),
+        }
+    }
+
+    pub async fn get_metadata(&self) -> Result<Vec<NodeMetadata>> {
+        match self.send_request(ShardRequest::GetMetadata).await? {
+            ShardResponse::GetMetadata(metadata) => Ok(metadata),
+            _ => Err(Error::ResponseWrongType),
+        }
     }
 }
 

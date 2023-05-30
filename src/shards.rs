@@ -5,6 +5,7 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 use caches::Cache;
 use futures::future::join_all;
 use glommio::net::UdpSocket;
+use log::trace;
 use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
@@ -243,6 +244,7 @@ impl MyShard {
         request: ShardRequest,
     ) -> Result<ShardResponse> {
         let response = match request {
+            ShardRequest::Ping => ShardResponse::Pong,
             ShardRequest::GetMetadata => {
                 let mut nodes = self
                     .nodes
@@ -309,5 +311,39 @@ impl MyShard {
         join_all(futures).await;
 
         Ok(())
+    }
+
+    pub fn handle_dead_node(&self, node_name: &String) {
+        self.nodes.borrow_mut().remove(node_name);
+        trace!(
+            "After death: holding {} number of nodes",
+            self.nodes.borrow().len()
+        );
+    }
+
+    pub fn handle_gossip_event(&self, event: GossipEvent) {
+        // All events must be handled idempotently, as gossip messages can be seen
+        // multiple times.
+        match event {
+            GossipEvent::Alive(node) if node.name != self.args.name => {
+                self.nodes
+                    .borrow_mut()
+                    .entry(node.name.clone())
+                    .or_insert(node.clone());
+                trace!(
+                    "After alive: holding {} number of nodes",
+                    self.nodes.borrow().len()
+                );
+                self.add_shards_of_nodes(vec![node]);
+            }
+            GossipEvent::Dead(node_name) => {
+                self.nodes.borrow_mut().remove(&node_name);
+                trace!(
+                    "After death: holding {} number of nodes",
+                    self.nodes.borrow().len()
+                );
+            }
+            _ => {}
+        }
     }
 }
