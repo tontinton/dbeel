@@ -43,7 +43,7 @@ async fn run_remote_shard_server(my_shard: Rc<MyShard>) -> Result<()> {
                     let result =
                         handle_remote_shard_client(my_shard, &mut client).await;
                     if let Err(e) = result {
-                        error!("Failed to handle distributed client: {}", e);
+                        error!("Failed to handle remote shard client: {}", e);
                     }
                 }))
                 .detach();
