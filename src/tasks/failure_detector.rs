@@ -10,8 +10,11 @@ use crate::{
 };
 
 async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
+    let interval =
+        Duration::from_millis(my_shard.args.failure_detection_interval);
+
     loop {
-        sleep(Duration::from_millis(500)).await;
+        sleep(interval).await;
 
         let mut rng = thread_rng();
         let node = if let Some(node) = my_shard

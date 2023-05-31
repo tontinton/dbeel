@@ -86,6 +86,13 @@ retransmitting the event again.",
     pub gossip_max_seen_count: u8,
 
     #[clap(
+        long,
+        help = "The interval at which to ping a node, in milliseconds.",
+        default_value = "500"
+    )]
+    pub failure_detection_interval: u64,
+
+    #[clap(
         short,
         long,
         help = "How much files to compact each time.",
