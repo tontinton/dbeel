@@ -48,7 +48,7 @@ assert DB.drop("test") == "OK"
 ```
 
 ## Performance
-Running the benchmark with no fdatasync results in the following output:
+Running the benchmark on my machine ([System76 lemp11](https://tech-docs.system76.com/models/lemp11/README.html)) with no fdatasync results in the following output:
 
 ```
 Set:
