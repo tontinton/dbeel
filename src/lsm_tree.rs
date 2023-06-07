@@ -2,6 +2,7 @@ use crate::{
     cached_file_reader::{CachedFileReader, FileId},
     error::{Error, Result},
     page_cache::{PartitionPageCache, PAGE_SIZE},
+    utils::get_first_capture,
 };
 use bincode::{
     config::{
@@ -23,7 +24,6 @@ use std::{
     cell::{Cell, RefCell},
     cmp::Ordering,
     collections::BinaryHeap,
-    fs::DirEntry,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -186,7 +186,7 @@ impl LSMTree {
         let pattern = create_file_path_regex(COMPACT_ACTION_FILE_EXT)?;
         let compact_action_paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
             .filter_map(std::result::Result::ok)
-            .filter(|entry| Self::get_first_capture(&pattern, entry).is_some())
+            .filter(|entry| get_first_capture(&pattern, entry).is_some())
             .map(|entry| entry.path())
             .collect();
         for compact_action_path in &compact_action_paths {
@@ -210,10 +210,11 @@ impl LSMTree {
 
         let pattern = create_file_path_regex(DATA_FILE_EXT)?;
         let sstables: Vec<SSTable> = {
-            let mut indices: Vec<usize> = std::fs::read_dir(&dir)?
+            let mut indices = std::fs::read_dir(&dir)?
                 .filter_map(std::result::Result::ok)
-                .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
-                .collect();
+                .filter_map(|entry| get_first_capture(&pattern, &entry))
+                .filter_map(|n| n.parse::<usize>().ok())
+                .collect::<Vec<_>>();
             indices.sort();
 
             let mut sstables = Vec::with_capacity(indices.len());
@@ -234,10 +235,11 @@ impl LSMTree {
 
         let pattern = create_file_path_regex(MEMTABLE_FILE_EXT)?;
         let wal_indices: Vec<usize> = {
-            let mut vec: Vec<usize> = std::fs::read_dir(&dir)?
+            let mut vec = std::fs::read_dir(&dir)?
                 .filter_map(std::result::Result::ok)
-                .filter_map(|entry| Self::get_first_capture(&pattern, &entry))
-                .collect();
+                .filter_map(|entry| get_first_capture(&pattern, &entry))
+                .filter_map(|n| n.parse::<usize>().ok())
+                .collect::<Vec<_>>();
             vec.sort();
             vec
         };
@@ -306,17 +308,6 @@ impl LSMTree {
     pub fn purge(&self) -> Result<()> {
         trace!("Deleting tree in: {:?}", self.dir);
         Ok(std::fs::remove_dir_all(&self.dir)?)
-    }
-
-    fn get_first_capture(pattern: &Regex, entry: &DirEntry) -> Option<usize> {
-        let file_name = entry.file_name();
-        file_name.to_str().and_then(|file_str| {
-            pattern.captures(file_str).and_then(|captures| {
-                captures.get(1).and_then(|number_capture| {
-                    number_capture.as_str().parse::<usize>().ok()
-                })
-            })
-        })
     }
 
     async fn read_memtable_from_wal_file(

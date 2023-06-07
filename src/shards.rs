@@ -9,9 +9,11 @@ use log::trace;
 use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
+use regex::Regex;
 
 use crate::gossip::{serialize_gossip_message, GossipEvent, GossipMessage};
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
+use crate::utils::get_first_capture;
 use crate::{
     args::Args,
     cached_file_reader::FileId,
@@ -113,17 +115,39 @@ impl MyShard {
             .map(|t| t.clone())
     }
 
+    pub fn get_collection_names_from_disk(&self) -> Result<Vec<String>> {
+        if !std::fs::metadata(&self.args.dir)
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
+            return Ok(Vec::new());
+        }
+
+        let pattern = format!(r#"(.*)\-{}$"#, self.id);
+        let regex = Regex::new(pattern.as_str())
+            .map_err(|source| Error::RegexCreationError { source, pattern })?;
+        let paths = std::fs::read_dir(&self.args.dir)?
+            .filter_map(std::result::Result::ok)
+            .filter_map(|entry| get_first_capture(&regex, &entry))
+            .collect::<Vec<_>>();
+        Ok(paths)
+    }
+
+    fn get_collection_dir(&self, name: &String) -> PathBuf {
+        let mut dir = PathBuf::from(self.args.dir.clone());
+        dir.push(format!("{}-{}", name, self.id));
+        dir
+    }
+
     pub async fn create_collection(self: Rc<Self>, name: String) -> Result<()> {
         if self.trees.borrow().contains_key(&name) {
             return Err(Error::CollectionAlreadyExists(name));
         }
 
-        let mut dir = PathBuf::from(self.args.dir.clone());
-        dir.push(format!("{}-{}", name, self.id));
         let cache = self.cache.clone();
         let tree = Rc::new(
             LSMTree::open_or_create(
-                dir,
+                self.get_collection_dir(&name),
                 PartitionPageCache::new(name.clone(), cache),
             )
             .await?,

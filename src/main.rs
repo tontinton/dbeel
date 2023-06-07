@@ -28,6 +28,13 @@ extern crate log;
 const DEFAULT_DEBUG_LOG_LEVEL: &str = "dbeel=trace";
 const DEFAULT_RELEASE_LOG_LEVEL: &str = "dbeel=info";
 
+async fn discover_collections(my_shard: Rc<MyShard>) -> Result<()> {
+    for name in my_shard.get_collection_names_from_disk()? {
+        my_shard.clone().create_collection(name).await?;
+    }
+    Ok(())
+}
+
 async fn get_nodes_metadata(
     seed_shards: &Vec<RemoteShardConnection>,
 ) -> Option<Vec<NodeMetadata>> {
@@ -109,6 +116,8 @@ async fn run_shard(
         .map_err(|e| Error::CacheCreationError(e.to_string()))?;
 
     let my_shard = Rc::new(MyShard::new(args, id, shards, cache));
+
+    discover_collections(my_shard.clone()).await?;
 
     // Start listening for other shards messages to be able to receive
     // responses to requests, for example receiving all remote shards from the
@@ -198,7 +207,9 @@ fn main() -> Result<()> {
                 .name(format!("executor({})", cpu).as_str())
                 .spawn(enclose!((local_connections.clone() => connections,
                                 args.clone() => args) move || async move {
-                    run_shard(args, cpu, connections).await
+                    if let Err(e) = run_shard(args, cpu, connections).await {
+                        error!("Failed to start shard {}: {}", cpu, e);
+                    }
                 }))
                 .map_err(Error::GlommioError)
         })

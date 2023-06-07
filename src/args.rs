@@ -45,7 +45,7 @@ This port is for listening on client requests.",
         short,
         long,
         help = "Database files directory.",
-        default_value = "/tmp"
+        default_value = "/tmp/dbeel"
     )]
     pub dir: String,
 
