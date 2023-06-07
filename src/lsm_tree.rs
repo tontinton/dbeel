@@ -131,7 +131,7 @@ fn get_file_path(dir: &Path, index: usize, ext: &str) -> PathBuf {
 }
 
 fn create_file_path_regex(file_ext: &'static str) -> Result<Regex> {
-    let pattern = format!(r#"^(\d+)\.{}"#, file_ext);
+    let pattern = format!(r#"^(\d+)\.{}$"#, file_ext);
     Regex::new(pattern.as_str())
         .map_err(|source| Error::RegexCreationError { source, pattern })
 }
