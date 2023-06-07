@@ -31,12 +31,16 @@ async fn handle_gossip_packet(
         *seen_count == 1
     };
 
-    if seen_first_time {
+    let continue_with_gossip = if seen_first_time {
         trace!("Gossip: {:?}", message.event);
-        my_shard.handle_gossip_event(message.event);
-    }
+        my_shard.clone().handle_gossip_event(message.event).await?
+    } else {
+        true
+    };
 
-    my_shard.gossip_buffer(packet_buf).await?;
+    if continue_with_gossip {
+        my_shard.gossip_buffer(packet_buf).await?;
+    }
 
     Ok(())
 }

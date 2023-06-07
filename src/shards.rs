@@ -321,10 +321,13 @@ impl MyShard {
         );
     }
 
-    pub fn handle_gossip_event(&self, event: GossipEvent) {
+    pub async fn handle_gossip_event(
+        self: Rc<Self>,
+        event: GossipEvent,
+    ) -> Result<bool> {
         // All events must be handled idempotently, as gossip messages can be seen
         // multiple times.
-        match event {
+        let sent_event = match event {
             GossipEvent::Alive(node) if node.name != self.args.name => {
                 self.nodes
                     .borrow_mut()
@@ -335,15 +338,29 @@ impl MyShard {
                     self.nodes.borrow().len()
                 );
                 self.add_shards_of_nodes(vec![node]);
+                false
             }
             GossipEvent::Dead(node_name) => {
-                self.nodes.borrow_mut().remove(&node_name);
-                trace!(
-                    "After death: holding {} number of nodes",
-                    self.nodes.borrow().len()
-                );
+                if node_name == self.args.name {
+                    // Whoops, someone marked us as dead, even though we are alive
+                    // and well.
+                    // Let's notify everyone that we are actually alive.
+                    self.clone()
+                        .gossip(GossipEvent::Alive(self.get_node_metadata()))
+                        .await?;
+                    true
+                } else {
+                    self.nodes.borrow_mut().remove(&node_name);
+                    trace!(
+                        "After death: holding {} number of nodes",
+                        self.nodes.borrow().len()
+                    );
+                    false
+                }
             }
-            _ => {}
-        }
+            _ => false,
+        };
+
+        Ok(sent_event)
     }
 }
