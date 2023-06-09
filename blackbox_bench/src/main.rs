@@ -36,7 +36,7 @@ struct Args {
         short = 'n',
         long,
         help = "Total number of requests each client sends.",
-        default_value = "1000"
+        default_value = "5000"
     )]
     requests: usize,
 }
