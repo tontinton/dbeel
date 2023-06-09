@@ -33,7 +33,7 @@ pub const TOMBSTONE: Vec<u8> = vec![];
 // Whether to ensure full durability against system crashes.
 const SYNC_WAL_FILE: bool = false;
 
-const TREE_CAPACITY: usize = 1024;
+const TREE_CAPACITY: usize = 4096;
 const INDEX_PADDING: usize = 20; // Number of integers in max u64.
 const DMA_STREAM_NUMBER_OF_BUFFERS: usize = 16;
 

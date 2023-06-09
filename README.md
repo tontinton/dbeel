@@ -52,13 +52,13 @@ Running the benchmark on my machine ([System76 lemp11](https://tech-docs.system7
 
 ```
 Set:
-total: 39.637963212s, min: 312.495µs, p50: 981.203µs, p90: 2.837719ms, p99: 8.379054ms, p999: 101.891049ms, max: 103.660656ms
+total: 8.808562092s, min: 91.967µs, p50: 358.538µs, p90: 769.608µs, p99: 1.308489ms, p999: 3.542049ms, max: 25.519163ms
 
 Get:
-total: 33.889400913s, min: 212.567µs, p50: 1.263362ms, p90: 3.128171ms, p99: 7.633867ms, p999: 9.755045ms, max: 17.755394ms
+total: 6.05312515s, min: 53.671µs, p50: 134.195µs, p90: 758.463µs, p99: 1.604895ms, p999: 2.925088ms, max: 5.121712ms
 ```
 
-Meaning median write is 1ms and median read is 1.26ms.
+Meaning the median user will have ~3 writes in a millisecond and ~7 reads in a millisecond.
 
 Running with fdatasync results in the following output for Set:
 
