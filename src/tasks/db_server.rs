@@ -59,7 +59,7 @@ fn broadcast_message_to_local_shards_in_background(
 
 async fn with_write<F>(tree: Rc<LSMTree>, write_fn: F) -> Result<()>
 where
-    F: Future<Output = Result<Option<Vec<u8>>>> + 'static,
+    F: Future<Output = Result<Option<Vec<u8>>>>,
 {
     // Wait for flush.
     while tree.memtable_full() {
@@ -118,21 +118,14 @@ async fn handle_request(
                 let value = extract_field_encoded(&map, "value")?;
 
                 let tree = my_shard.get_collection(&collection)?;
-
-                with_write(
-                    tree.clone(),
-                    async move { tree.set(key, value).await },
-                )
-                .await?;
+                with_write(tree.clone(), tree.set(key, value)).await?;
             }
             Some("delete") => {
                 let collection = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
 
                 let tree = my_shard.get_collection(&collection)?;
-
-                with_write(tree.clone(), async move { tree.delete(key).await })
-                    .await?;
+                with_write(tree.clone(), tree.delete(key)).await?;
             }
             Some("get") => {
                 let collection = extract_field_as_str(&map, "collection")?;
