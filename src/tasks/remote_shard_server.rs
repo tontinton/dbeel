@@ -18,6 +18,7 @@ async fn handle_remote_shard_client(
     client: &mut (impl AsyncRead + AsyncWrite + Unpin),
 ) -> Result<()> {
     let msg = get_message_from_stream(client).await?;
+    // TODO: send the error as a response.
     if let Some(response_msg) = my_shard.handle_shard_message(msg).await? {
         send_message_to_stream(client, &ShardMessage::Response(response_msg))
             .await?;

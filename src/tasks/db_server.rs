@@ -1,6 +1,6 @@
-use std::rc::Rc;
+use std::{cmp::min, rc::Rc};
 
-use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, Future};
+use futures::{future::try_join, AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::{enclose, net::TcpListener, spawn_local, Task};
 use log::{error, trace};
 use rmpv::{
@@ -11,8 +11,8 @@ use rmpv::{
 
 use crate::{
     error::{Error, Result},
-    lsm_tree::{LSMTree, TOMBSTONE},
-    messages::{ShardEvent, ShardMessage},
+    lsm_tree::TOMBSTONE,
+    messages::{ShardEvent, ShardMessage, ShardRequest},
     read_exactly::read_exactly,
     shards::MyShard,
 };
@@ -32,6 +32,12 @@ fn extract_field_as_str(map: &Value, field_name: &str) -> Result<String> {
         .as_str()
         .ok_or_else(|| Error::MissingField(field_name.to_string()))?
         .to_string())
+}
+
+fn extract_field_as_u64(map: &Value, field_name: &str) -> Result<u64> {
+    Ok(extract_field(map, field_name)?
+        .as_u64()
+        .ok_or_else(|| Error::MissingField(field_name.to_string()))?)
 }
 
 fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
@@ -57,30 +63,6 @@ fn broadcast_message_to_local_shards_in_background(
     .detach();
 }
 
-async fn with_write<F>(tree: Rc<LSMTree>, write_fn: F) -> Result<()>
-where
-    F: Future<Output = Result<Option<Vec<u8>>>>,
-{
-    // Wait for flush.
-    while tree.memtable_full() {
-        futures_lite::future::yield_now().await;
-    }
-
-    write_fn.await?;
-
-    if tree.memtable_full() {
-        // Capacity is full, flush memtable to disk.
-        spawn_local(async move {
-            if let Err(e) = tree.flush().await {
-                error!("Failed to flush memtable: {}", e);
-            }
-        })
-        .detach();
-    }
-
-    Ok(())
-}
-
 async fn handle_request(
     my_shard: Rc<MyShard>,
     buffer: Vec<u8>,
@@ -96,7 +78,7 @@ async fn handle_request(
                     return Err(Error::CollectionAlreadyExists(name));
                 }
 
-                my_shard.clone().create_collection(name.clone()).await?;
+                my_shard.create_collection(name.clone()).await?;
 
                 broadcast_message_to_local_shards_in_background(
                     my_shard,
@@ -105,7 +87,7 @@ async fn handle_request(
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
-                my_shard.clone().drop_collection(name.clone())?;
+                my_shard.drop_collection(&name)?;
 
                 broadcast_message_to_local_shards_in_background(
                     my_shard,
@@ -116,16 +98,31 @@ async fn handle_request(
                 let collection = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
                 let value = extract_field_encoded(&map, "value")?;
+                let write_consistency = min(
+                    extract_field_as_u64(&map, "consistency").unwrap_or(1),
+                    my_shard.args.replication_factor as u64,
+                );
 
                 let tree = my_shard.get_collection(&collection)?;
-                with_write(tree.clone(), tree.set(key, value)).await?;
+                if my_shard.args.replication_factor > 1 {
+                    let local_write_future =
+                        tree.set(key.clone(), value.clone());
+                    let remote_write_future = my_shard
+                        .send_request_to_replicas(
+                            ShardRequest::Set(collection, key, value),
+                            write_consistency as usize - 1,
+                        );
+                    try_join(local_write_future, remote_write_future).await?;
+                } else {
+                    tree.set(key, value).await?;
+                }
             }
             Some("delete") => {
                 let collection = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
 
                 let tree = my_shard.get_collection(&collection)?;
-                with_write(tree.clone(), tree.delete(key)).await?;
+                tree.delete(key).await?;
             }
             Some("get") => {
                 let collection = extract_field_as_str(&map, "collection")?;

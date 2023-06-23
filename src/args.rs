@@ -50,6 +50,15 @@ This port is for listening on client requests.",
     pub dir: String,
 
     #[clap(
+        short,
+        long,
+        help = "Number of nodes (replicas) that hold a copy for a specific key \
+for tunable availability.",
+        default_value = "1"
+    )]
+    pub replication_factor: usize,
+
+    #[clap(
         long,
         help = "Remote shard port base.
 This port is for listening for distributed messages from \

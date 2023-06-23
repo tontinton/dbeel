@@ -1,11 +1,14 @@
 use std::any::{Any, TypeId};
+use std::collections::HashSet;
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use caches::Cache;
 use futures::future::join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use glommio::net::UdpSocket;
-use log::trace;
+use glommio::spawn_local;
+use log::{error, trace};
 use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
@@ -34,6 +37,9 @@ pub enum ShardConnection {
 // A struct to hold other shards to communicate with.
 #[derive(Debug)]
 pub struct OtherShard {
+    // The unique node name.
+    pub node_name: String,
+
     // The unique shard name.
     pub name: String,
 
@@ -49,9 +55,14 @@ fn hash_string(s: &String) -> std::io::Result<u32> {
 }
 
 impl OtherShard {
-    pub fn new(name: String, connection: ShardConnection) -> Self {
+    pub fn new(
+        node_name: String,
+        name: String,
+        connection: ShardConnection,
+    ) -> Self {
         let hash = hash_string(&name).unwrap();
         Self {
+            node_name,
             name,
             hash,
             connection,
@@ -71,7 +82,11 @@ pub struct MyShard {
     // Shard unique name, if you want the node unique name, it's in args.name.
     pub shard_name: String,
 
+    // The shard's hash.
+    pub hash: u32,
+
     // The consistent hash ring (shards sorted by hash).
+    // Starts with the first hash that has a greaater hash than our shard.
     pub shards: RefCell<Vec<OtherShard>>,
 
     // All known nodes other than this node, key is node unique name.
@@ -95,10 +110,14 @@ impl MyShard {
         cache: PageCache<FileId>,
     ) -> Self {
         let shard_name = format!("{}-{}", args.name, id);
+        let hash =
+            hash_string(&format!("{}:{}", args.ip, args.port + id as u16))
+                .unwrap();
         Self {
             args,
             id,
             shard_name,
+            hash,
             shards: RefCell::new(shards),
             nodes: RefCell::new(HashMap::new()),
             gossip_requests: RefCell::new(HashMap::new()),
@@ -139,11 +158,7 @@ impl MyShard {
         dir
     }
 
-    pub async fn create_collection(self: Rc<Self>, name: String) -> Result<()> {
-        if self.trees.borrow().contains_key(&name) {
-            return Err(Error::CollectionAlreadyExists(name));
-        }
-
+    async fn create_lsm_tree(&self, name: String) -> Result<Rc<LSMTree>> {
         let cache = self.cache.clone();
         let tree = Rc::new(
             LSMTree::open_or_create(
@@ -152,15 +167,23 @@ impl MyShard {
             )
             .await?,
         );
+        Ok(tree)
+    }
+
+    pub async fn create_collection(&self, name: String) -> Result<()> {
+        if self.trees.borrow().contains_key(&name) {
+            return Err(Error::CollectionAlreadyExists(name));
+        }
+        let tree = self.create_lsm_tree(name.clone()).await?;
         self.trees.borrow_mut().insert(name, tree);
         Ok(())
     }
 
-    pub fn drop_collection(self: Rc<Self>, name: String) -> Result<()> {
+    pub fn drop_collection(&self, name: &String) -> Result<()> {
         self.trees
             .borrow_mut()
-            .remove(&name)
-            .ok_or(Error::CollectionNotFound(name))?
+            .remove(name)
+            .ok_or_else(|| Error::CollectionNotFound(name.clone()))?
             .purge()?;
 
         // TODO: add set items to cache, then there will be no reason to ever delete
@@ -193,10 +216,72 @@ impl MyShard {
         Ok(())
     }
 
-    async fn handle_shard_event(
+    pub async fn send_request_to_replicas(
         self: Rc<Self>,
-        event: ShardEvent,
+        request: ShardRequest,
+        number_of_acks: usize,
     ) -> Result<()> {
+        let (sender, receiver) = async_channel::bounded(1);
+        let my_shard = self.clone();
+        spawn_local(async move {
+            // Filter out remote shards of nodes we already collected.
+            let mut nodes =
+                HashSet::with_capacity(my_shard.args.replication_factor);
+
+            let connections = my_shard.shards.borrow() 
+                .iter()
+                .flat_map(|p| match &p.connection {
+                    ShardConnection::Remote(c)
+                        if !nodes.contains(&p.node_name) =>
+                    {
+                        nodes.insert(&p.node_name);
+                        Some(c)
+                    }
+                    _ => None,
+                })
+                .take(my_shard.args.replication_factor)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            let mut futures = connections.iter()
+                .map(|c| c.send_request(request.clone()))
+                .collect::<FuturesUnordered<_>>();
+
+            if number_of_acks > 0 {
+                let mut acks = 0;
+                while let Some(result) = futures.next().await {
+                    match result {
+                        Ok(_) => {
+                            acks += 1;
+                            if acks >= number_of_acks {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to send request to replica: {}", e)
+                        }
+                    }
+                }
+            }
+
+            if let Err(e) = sender.send(()).await {
+                error!(
+                    "Failed to notify that {} replicas responded with an ack: {}",
+                    number_of_acks, e
+                );
+            }
+
+            // Run remaining futures in the background.
+            while let Some(_) = futures.next().await {}
+        })
+        .detach();
+
+        receiver.recv().await?;
+
+        Ok(())
+    }
+
+    async fn handle_shard_event(&self, event: ShardEvent) -> Result<()> {
         // All events should be idempotent.
         match event {
             ShardEvent::CreateCollection(name) => {
@@ -207,7 +292,7 @@ impl MyShard {
                 }
             }
             ShardEvent::DropCollection(name) => {
-                if let Err(e) = self.drop_collection(name) {
+                if let Err(e) = self.drop_collection(&name) {
                     if e.type_id() != Error::CollectionNotFound.type_id() {
                         return Err(e);
                     }
@@ -246,11 +331,14 @@ impl MyShard {
                 .flat_map(|node| {
                     node.shard_ports
                         .into_iter()
-                        .map(|port| format!("{}:{}", node.ip, port))
+                        .map(|port| {
+                            (node.name.clone(), format!("{}:{}", node.ip, port))
+                        })
                         .collect::<Vec<_>>()
                 })
-                .map(|address| {
+                .map(|(node_name, address)| {
                     OtherShard::new(
+                        node_name,
                         address.clone(),
                         ShardConnection::Remote(RemoteShardConnection::new(
                             address,
@@ -261,9 +349,26 @@ impl MyShard {
                     )
                 }),
         );
+
+        self.sort_consistent_hash_ring();
     }
 
-    fn handle_shard_request(
+    fn sort_consistent_hash_ring(&self) {
+        self.shards.borrow_mut().sort_unstable_by(|a, b| {
+            let x = a.hash;
+            let y = b.hash;
+            let threshold = self.hash;
+            if x < threshold && y >= threshold {
+                std::cmp::Ordering::Greater
+            } else if x >= threshold && y < threshold {
+                std::cmp::Ordering::Less
+            } else {
+                x.cmp(&y)
+            }
+        });
+    }
+
+    async fn handle_shard_request(
         &self,
         request: ShardRequest,
     ) -> Result<ShardResponse> {
@@ -280,13 +385,24 @@ impl MyShard {
 
                 ShardResponse::GetMetadata(nodes)
             }
+            ShardRequest::Set(collection, key, value) => {
+                if let Some(tree) = self.trees.borrow().get(&collection) {
+                    tree.clone().set(key, value).await?;
+                } else {
+                    let tree = self.create_lsm_tree(collection.clone()).await?;
+                    tree.clone().set(key, value).await?;
+                    self.trees.borrow_mut().insert(collection, tree);
+                };
+
+                ShardResponse::Set
+            }
         };
 
         Ok(response)
     }
 
     pub async fn handle_shard_message(
-        self: Rc<Self>,
+        &self,
         message: ShardMessage,
     ) -> Result<Option<ShardResponse>> {
         Ok(match message {
@@ -295,7 +411,7 @@ impl MyShard {
                 None
             }
             ShardMessage::Request(request) => {
-                Some(self.handle_shard_request(request)?)
+                Some(self.handle_shard_request(request).await?)
             }
             ShardMessage::Response(_) => None,
         })
