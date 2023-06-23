@@ -33,7 +33,7 @@ async fn handle_gossip_packet(
 
     let continue_with_gossip = if seen_first_time {
         trace!("Gossip: {:?}", message.event);
-        my_shard.clone().handle_gossip_event(message.event).await?
+        my_shard.handle_gossip_event(message.event).await?
     } else {
         true
     };

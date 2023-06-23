@@ -417,16 +417,13 @@ impl MyShard {
         })
     }
 
-    pub async fn gossip(self: Rc<Self>, event: GossipEvent) -> Result<()> {
+    pub async fn gossip(&self, event: GossipEvent) -> Result<()> {
         let message = GossipMessage::new(self.args.name.clone(), event);
         self.gossip_buffer(&serialize_gossip_message(&message)?)
             .await
     }
 
-    pub async fn gossip_buffer(
-        self: Rc<Self>,
-        message_buffer: &[u8],
-    ) -> Result<()> {
+    pub async fn gossip_buffer(&self, message_buffer: &[u8]) -> Result<()> {
         let mut rng = thread_rng();
         let addresses = self
             .nodes
@@ -462,7 +459,7 @@ impl MyShard {
     }
 
     pub async fn handle_gossip_event(
-        self: Rc<Self>,
+        &self,
         event: GossipEvent,
     ) -> Result<bool> {
         // All events must be handled idempotently, as gossip messages can be seen
@@ -485,8 +482,7 @@ impl MyShard {
                     // Whoops, someone marked us as dead, even though we are alive
                     // and well.
                     // Let's notify everyone that we are actually alive.
-                    self.clone()
-                        .gossip(GossipEvent::Alive(self.get_node_metadata()))
+                    self.gossip(GossipEvent::Alive(self.get_node_metadata()))
                         .await?;
                     true
                 } else {

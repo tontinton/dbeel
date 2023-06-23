@@ -43,8 +43,7 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
                 connection.address, e
             );
 
-            if let Err(e) =
-                my_shard.clone().gossip(GossipEvent::Dead(node.name)).await
+            if let Err(e) = my_shard.gossip(GossipEvent::Dead(node.name)).await
             {
                 error!("Failed to gossip node death event: {}", e);
             }
