@@ -36,8 +36,9 @@ class DB:
         return _db_request(type="drop_collection", name=c)
 
     @staticmethod
-    def set(c, k, v):
-        return _db_request(type="set", collection=c, key=k, value=v)
+    def set(c, k, v, w=None):
+        return _db_request(type="set", collection=c, key=k, value=v,
+                           consistensy=w)
 
     @staticmethod
     def delete(c, k):

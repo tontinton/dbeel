@@ -12,8 +12,12 @@ use bincode::{
 };
 use futures::try_join;
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
-use glommio::io::{
-    DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
+use glommio::{
+    enclose,
+    io::{
+        DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
+    },
+    spawn_local,
 };
 use log::{error, trace};
 use once_cell::sync::Lazy;
@@ -373,7 +377,7 @@ impl LSMTree {
         self.sstables.borrow().iter().map(|t| t.index).collect()
     }
 
-    pub fn memtable_full(&self) -> bool {
+    fn memtable_full(&self) -> bool {
         self.active_memtable.borrow().capacity()
             == self.active_memtable.borrow().len()
     }
@@ -481,7 +485,7 @@ impl LSMTree {
     }
 
     pub async fn set(
-        &self,
+        self: Rc<Self>,
         key: Vec<u8>,
         value: Vec<u8>,
     ) -> Result<Option<Vec<u8>>> {
@@ -491,13 +495,26 @@ impl LSMTree {
             .borrow_mut()
             .set(key.clone(), value.clone())?;
 
+        if self.memtable_full() {
+            // Capacity is full, flush memtable to disk in background.
+            spawn_local(enclose!((self.clone() => tree) async move {
+                if let Err(e) = tree.flush().await {
+                    error!("Failed to flush memtable: {}", e);
+                }
+            }))
+            .detach();
+        }
+
         // Write to WAL for persistance.
         self.write_to_wal(&Entry { key, value }).await?;
 
         Ok(result)
     }
 
-    pub async fn delete(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
+    pub async fn delete(
+        self: Rc<Self>,
+        key: Vec<u8>,
+    ) -> Result<Option<Vec<u8>>> {
         self.set(key, TOMBSTONE).await
     }
 
@@ -882,10 +899,11 @@ mod tests {
     ) -> Result<()> {
         // New tree.
         {
-            let tree =
+            let tree = Rc::new(
                 LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?;
-            tree.set(vec![100], vec![200]).await?;
+                    .await?,
+            );
+            tree.clone().set(vec![100], vec![200]).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
             assert_eq!(tree.get(&vec![0]).await?, None);
         }
@@ -912,9 +930,10 @@ mod tests {
     ) -> Result<()> {
         // New tree.
         {
-            let tree =
+            let tree = Rc::new(
                 LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?;
+                    .await?,
+            );
             assert_eq!(tree.write_sstable_index.get(), 0);
 
             let values: Vec<Vec<u8>> = (0..TREE_CAPACITY as u16)
@@ -922,9 +941,9 @@ mod tests {
                 .collect();
 
             for v in values {
-                tree.set(v.clone(), v).await?;
+                tree.clone().set(v.clone(), v).await?;
             }
-            tree.flush().await?;
+            tree.clone().flush().await?;
 
             assert_eq!(tree.active_memtable.borrow().len(), 0);
             assert_eq!(tree.write_sstable_index.get(), 2);
@@ -959,9 +978,10 @@ mod tests {
     ) -> Result<()> {
         // New tree.
         {
-            let tree =
+            let tree = Rc::new(
                 LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?;
+                    .await?,
+            );
             assert_eq!(tree.write_sstable_index.get(), 0);
             assert_eq!(*tree.sstable_indices(), vec![]);
 
@@ -970,14 +990,11 @@ mod tests {
                 .collect();
 
             for v in values {
-                tree.set(v.clone(), v).await?;
-                if tree.memtable_full() {
-                    tree.flush().await?;
-                }
+                tree.clone().set(v.clone(), v).await?;
             }
-            tree.delete(vec![0, 1]).await?;
-            tree.delete(vec![100, 2]).await?;
-            tree.flush().await?;
+            tree.clone().delete(vec![0, 1]).await?;
+            tree.clone().delete(vec![100, 2]).await?;
+            tree.clone().flush().await?;
 
             assert_eq!(*tree.sstable_indices(), vec![0, 2, 4]);
 

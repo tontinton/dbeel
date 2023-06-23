@@ -28,9 +28,9 @@ extern crate log;
 const DEFAULT_DEBUG_LOG_LEVEL: &str = "dbeel=trace";
 const DEFAULT_RELEASE_LOG_LEVEL: &str = "dbeel=info";
 
-async fn discover_collections(my_shard: Rc<MyShard>) -> Result<()> {
+async fn discover_collections(my_shard: &MyShard) -> Result<()> {
     for name in my_shard.get_collection_names_from_disk()? {
-        my_shard.clone().create_collection(name).await?;
+        my_shard.create_collection(name).await?;
     }
     Ok(())
 }
@@ -50,7 +50,7 @@ async fn get_nodes_metadata(
     None
 }
 
-async fn discover_nodes(my_shard: Rc<MyShard>) -> Result<()> {
+async fn discover_nodes(my_shard: &MyShard) -> Result<()> {
     if my_shard.args.seed_nodes.is_empty() {
         return Ok(());
     }
@@ -108,7 +108,13 @@ async fn run_shard(
     let shard_name = format!("{}-{}", args.name, id);
     let shards = local_connections
         .into_iter()
-        .map(|c| OtherShard::new(shard_name.clone(), ShardConnection::Local(c)))
+        .map(|c| {
+            OtherShard::new(
+                args.name.clone(),
+                shard_name.clone(),
+                ShardConnection::Local(c),
+            )
+        })
         .collect::<Vec<_>>();
 
     let cache_len = args.page_cache_size / PAGE_SIZE / shards.len();
@@ -117,7 +123,7 @@ async fn run_shard(
 
     let my_shard = Rc::new(MyShard::new(args, id, shards, cache));
 
-    discover_collections(my_shard.clone()).await?;
+    discover_collections(&my_shard).await?;
 
     // Start listening for other shards messages to be able to receive
     // responses to requests, for example receiving all remote shards from the
@@ -125,13 +131,7 @@ async fn run_shard(
     let remote_shard_server_task =
         spawn_remote_shard_server_task(my_shard.clone());
 
-    discover_nodes(my_shard.clone()).await?;
-
-    // Sort by hash to make it a consistant hashing ring.
-    my_shard
-        .shards
-        .borrow_mut()
-        .sort_unstable_by_key(|x| x.hash);
+    discover_nodes(&my_shard).await?;
 
     let shard_messages_receiver_task =
         spawn_local_shard_server_task(my_shard.clone(), receiver);
