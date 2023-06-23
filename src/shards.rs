@@ -456,6 +456,9 @@ impl MyShard {
             "After death: holding {} number of nodes",
             self.nodes.borrow().len()
         );
+        self.shards
+            .borrow_mut()
+            .retain(|shard| &shard.node_name != node_name);
     }
 
     pub async fn handle_gossip_event(
@@ -486,11 +489,7 @@ impl MyShard {
                         .await?;
                     true
                 } else {
-                    self.nodes.borrow_mut().remove(&node_name);
-                    trace!(
-                        "After death: holding {} number of nodes",
-                        self.nodes.borrow().len()
-                    );
+                    self.handle_dead_node(&node_name);
                     false
                 }
             }
