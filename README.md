@@ -5,13 +5,14 @@ It's not production ready at all, but that doesn't mean there is no value in the
 If you ever wanted to read database code without getting overwhelmed by massive amounts of code, dbeel is for you.
 
 ## Traits
-* LSM Tree (Memtable is a red black tree)
+* LSM Tree
+  * Memtable is a red black tree
+* Thread per core
 * io_uring
 * Direct I/O
-* Custom page cache using WTiny-LFU eviction algorithm
-* Thread per core
+  * Page cache implemented using WTiny-LFU eviction algorithm
 * Distributed events using gossip dissemination
-* Leaderless replication with tunable consistency:
+* Leaderless replication with tunable consistency
   * `--replication-factor` - Number of nodes that will store a copy of data
   * Write `consistency` (parameter in `set` command) - Number of nodes that will acknowledge a write for it to succeed
 
