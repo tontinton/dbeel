@@ -405,7 +405,7 @@ impl LSMTree {
         while lind <= hind {
             let value: Entry = bincode_options().deserialize(
                 &data_file
-                    .read_at(current.entry_offset as u64, current.entry_size)
+                    .read_at(current.entry_offset, current.entry_size)
                     .await?,
             )?;
 

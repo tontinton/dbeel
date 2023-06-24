@@ -272,7 +272,11 @@ impl MyShard {
             }
 
             // Run remaining futures in the background.
-            while let Some(_) = futures.next().await {}
+            while let Some(result) = futures.next().await {
+                if let Err(e) = result {
+                    error!("Failed to send request to replica in background: {}", e);
+                }
+            }
         })
         .detach();
 
@@ -386,8 +390,10 @@ impl MyShard {
                 ShardResponse::GetMetadata(nodes)
             }
             ShardRequest::Set(collection, key, value) => {
-                if let Some(tree) = self.trees.borrow().get(&collection) {
-                    tree.clone().set(key, value).await?;
+                let existing_tree =
+                    self.trees.borrow().get(&collection).cloned();
+                if let Some(tree) = existing_tree {
+                    tree.set(key, value).await?;
                 } else {
                     let tree = self.create_lsm_tree(collection.clone()).await?;
                     tree.clone().set(key, value).await?;

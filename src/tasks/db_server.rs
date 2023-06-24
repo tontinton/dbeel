@@ -38,9 +38,9 @@ fn extract_field_as_str(map: &Value, field_name: &str) -> Result<String> {
 }
 
 fn extract_field_as_u64(map: &Value, field_name: &str) -> Result<u64> {
-    Ok(extract_field(map, field_name)?
+    extract_field(map, field_name)?
         .as_u64()
-        .ok_or_else(|| Error::MissingField(field_name.to_string()))?)
+        .ok_or_else(|| Error::MissingField(field_name.to_string()))
 }
 
 fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
