@@ -1,4 +1,4 @@
-use std::{cmp::min, rc::Rc};
+use std::{cmp::min, rc::Rc, time::Duration};
 
 use futures::{future::try_join, AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::{enclose, net::TcpListener, spawn_local, Task};
@@ -15,7 +15,10 @@ use crate::{
     messages::{ShardEvent, ShardMessage, ShardRequest},
     read_exactly::read_exactly,
     shards::MyShard,
+    timeout::timeout,
 };
+
+const DEFAULT_SET_TIMEOUT_MS: u64 = 15000;
 
 fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
     let field = &map[field_name];
@@ -102,6 +105,10 @@ async fn handle_request(
                     extract_field_as_u64(&map, "consistency").unwrap_or(1),
                     my_shard.args.replication_factor as u64,
                 );
+                let write_timeout = Duration::from_millis(
+                    extract_field_as_u64(&map, "timeout")
+                        .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
+                );
 
                 let tree = my_shard.get_collection(&collection)?;
                 if my_shard.args.replication_factor > 1 {
@@ -112,9 +119,13 @@ async fn handle_request(
                             ShardRequest::Set(collection, key, value),
                             write_consistency as usize - 1,
                         );
-                    try_join(local_write_future, remote_write_future).await?;
+                    timeout(
+                        write_timeout,
+                        try_join(local_write_future, remote_write_future),
+                    )
+                    .await?;
                 } else {
-                    tree.set(key, value).await?;
+                    timeout(write_timeout, tree.set(key, value)).await?;
                 }
             }
             Some("delete") => {
