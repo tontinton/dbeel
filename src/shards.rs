@@ -228,7 +228,7 @@ impl MyShard {
             let mut nodes =
                 HashSet::with_capacity(my_shard.args.replication_factor);
 
-            let connections = my_shard.shards.borrow() 
+            let connections = my_shard.shards.borrow()
                 .iter()
                 .flat_map(|p| match &p.connection {
                     ShardConnection::Remote(c)
