@@ -25,6 +25,9 @@ pub enum Error {
     #[error(transparent)]
     ShardPacketSenderError(#[from] SendError<ShardPacket>),
 
+    #[error("timed out")]
+    Timeout,
+
     #[error("request id not found in waiting list")]
     ResponseWrongType,
     #[error("no remote shards received from asking all seed nodes")]
