@@ -20,3 +20,32 @@ jobs:
 
       - name: Build
         run: cargo build --verbose
+
+  lint:
+    name: rustfmt + clippy
+    runs-on: ubuntu-latest
+    permissions: write-all
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+          components: rustfmt, clippy
+
+      - name: Run cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+      - name: Clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
