@@ -439,6 +439,7 @@ dependencies = [
  "log",
  "murmur3",
  "once_cell",
+ "pin-project-lite",
  "pretty_env_logger",
  "rand",
  "redblacktree",

@@ -20,6 +20,7 @@ glommio = "0.8.0"
 log = "0.4.17"
 murmur3 = "0.5.2"
 once_cell = "1.17.1"
+pin-project-lite = "0.2.9"
 pretty_env_logger = "0.4.0"
 rand = "0.8.5"
 redblacktree = { path = "redblacktree" }
