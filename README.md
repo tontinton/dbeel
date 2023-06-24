@@ -10,7 +10,10 @@ If you ever wanted to read database code without getting overwhelmed by massive 
 * Direct I/O
 * Custom page cache using WTiny-LFU eviction algorithm
 * Thread per core
-* Distributed using gossip dissemination
+* Distributed events using gossip dissemination
+* Leaderless replication with tunable consistency:
+  * `--replication-factor` - Number of nodes that will store a copy of data
+  * Write `consistency` (parameter in `set` command) - Number of nodes that will acknowledge a write for it to succeed
 
 ## Try it out
 
