@@ -131,9 +131,30 @@ async fn handle_request(
             Some("delete") => {
                 let collection = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
+                let delete_consistency = min(
+                    extract_field_as_u64(&map, "consistency").unwrap_or(1),
+                    my_shard.args.replication_factor as u64,
+                );
+                let delete_timeout = Duration::from_millis(
+                    extract_field_as_u64(&map, "timeout")
+                        .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
+                );
 
                 let tree = my_shard.get_collection(&collection)?;
-                tree.delete(key).await?;
+                if my_shard.args.replication_factor > 1 {
+                    let local_future = tree.delete(key.clone());
+                    let remote_future = my_shard.send_request_to_replicas(
+                        ShardRequest::Delete(collection, key),
+                        delete_consistency as usize - 1,
+                    );
+                    timeout(
+                        delete_timeout,
+                        try_join(local_future, remote_future),
+                    )
+                    .await?;
+                } else {
+                    timeout(delete_timeout, tree.delete(key)).await?;
+                }
             }
             Some("get") => {
                 let collection = extract_field_as_str(&map, "collection")?;

@@ -402,6 +402,14 @@ impl MyShard {
 
                 ShardResponse::Set
             }
+            ShardRequest::Delete(collection, key) => {
+                let existing_tree =
+                    self.trees.borrow().get(&collection).cloned();
+                if let Some(tree) = existing_tree {
+                    tree.delete(key).await?;
+                };
+                ShardResponse::Delete
+            }
         };
 
         Ok(response)

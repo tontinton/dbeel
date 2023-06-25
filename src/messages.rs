@@ -12,6 +12,7 @@ pub enum ShardRequest {
     Ping,
     GetMetadata,
     Set(String, Vec<u8>, Vec<u8>),
+    Delete(String, Vec<u8>),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -27,6 +28,7 @@ pub enum ShardResponse {
     Pong,
     GetMetadata(Vec<NodeMetadata>),
     Set,
+    Delete,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
