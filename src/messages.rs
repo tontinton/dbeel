@@ -1,6 +1,8 @@
 use async_channel::Sender;
 use serde::{Deserialize, Serialize};
 
+use crate::lsm_tree::EntryValue;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
     CreateCollection(String),
@@ -13,6 +15,7 @@ pub enum ShardRequest {
     GetMetadata,
     Set(String, Vec<u8>, Vec<u8>),
     Delete(String, Vec<u8>),
+    Get(String, Vec<u8>),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -29,6 +32,7 @@ pub enum ShardResponse {
     GetMetadata(Vec<NodeMetadata>),
     Set,
     Delete,
+    Get(Option<EntryValue>),
 }
 
 #[derive(Clone, Serialize, Deserialize)]

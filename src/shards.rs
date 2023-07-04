@@ -220,7 +220,7 @@ impl MyShard {
         self: Rc<Self>,
         request: ShardRequest,
         number_of_acks: usize,
-    ) -> Result<()> {
+    ) -> Result<Vec<ShardResponse>> {
         let (sender, receiver) = async_channel::bounded(1);
         let my_shard = self.clone();
         spawn_local(async move {
@@ -247,11 +247,14 @@ impl MyShard {
                 .map(|c| c.send_request(request.clone()))
                 .collect::<FuturesUnordered<_>>();
 
+            let mut results = Vec::with_capacity(number_of_acks);
+
             if number_of_acks > 0 {
                 let mut acks = 0;
                 while let Some(result) = futures.next().await {
                     match result {
-                        Ok(_) => {
+                        Ok(response) => {
+                            results.push(response);
                             acks += 1;
                             if acks >= number_of_acks {
                                 break;
@@ -264,7 +267,7 @@ impl MyShard {
                 }
             }
 
-            if let Err(e) = sender.send(()).await {
+            if let Err(e) = sender.send(results).await {
                 error!(
                     "Failed to notify that {} replicas responded with an ack: {}",
                     number_of_acks, e
@@ -280,9 +283,7 @@ impl MyShard {
         })
         .detach();
 
-        receiver.recv().await?;
-
-        Ok(())
+        Ok(receiver.recv().await?)
     }
 
     async fn handle_shard_event(&self, event: ShardEvent) -> Result<()> {
@@ -409,6 +410,16 @@ impl MyShard {
                     tree.delete(key).await?;
                 };
                 ShardResponse::Delete
+            }
+            ShardRequest::Get(collection, key) => {
+                let existing_tree =
+                    self.trees.borrow().get(&collection).cloned();
+                let value = if let Some(tree) = existing_tree {
+                    tree.get_entry(&key).await?
+                } else {
+                    None
+                };
+                ShardResponse::Get(value)
             }
         };
 
