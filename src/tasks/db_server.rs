@@ -12,13 +12,14 @@ use rmpv::{
 use crate::{
     error::{Error, Result},
     lsm_tree::TOMBSTONE,
-    messages::{ShardEvent, ShardMessage, ShardRequest},
+    messages::{ShardEvent, ShardMessage, ShardRequest, ShardResponse},
     read_exactly::read_exactly,
     shards::MyShard,
     timeout::timeout,
 };
 
 const DEFAULT_SET_TIMEOUT_MS: u64 = 15000;
+const DEFAULT_GET_TIMEOUT_MS: u64 = 15000;
 
 fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
     let field = &map[field_name];
@@ -159,12 +160,52 @@ async fn handle_request(
             Some("get") => {
                 let collection = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
+                let read_consistency = min(
+                    extract_field_as_u64(&map, "consistency").unwrap_or(1),
+                    my_shard.args.replication_factor as u64,
+                );
+                let read_timeout = Duration::from_millis(
+                    extract_field_as_u64(&map, "timeout")
+                        .unwrap_or(DEFAULT_GET_TIMEOUT_MS),
+                );
 
                 let tree = my_shard.get_collection(&collection)?;
 
-                return match tree.get(&key).await? {
-                    Some(value) if value != TOMBSTONE => Ok(Some(value)),
-                    _ => Err(Error::KeyNotFound),
+                return if my_shard.args.replication_factor > 1 {
+                    let local_future = tree.get_entry(&key);
+                    let remote_future = my_shard.send_request_to_replicas(
+                        ShardRequest::Get(collection, key.clone()),
+                        read_consistency as usize - 1,
+                    );
+                    let (local_value, responses) = timeout(
+                        read_timeout,
+                        try_join(local_future, remote_future),
+                    )
+                    .await?;
+
+                    let mut values = responses
+                        .into_iter()
+                        .map(|response| match response {
+                            ShardResponse::Get(value) => Ok(value),
+                            _ => Err(Error::ResponseWrongType),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    values.push(local_value);
+
+                    match values
+                        .into_iter()
+                        .flatten()
+                        .max_by_key(|v| v.timestamp)
+                        .map(|v| v.data)
+                    {
+                        Some(value) if value != TOMBSTONE => Ok(Some(value)),
+                        _ => Err(Error::KeyNotFound),
+                    }
+                } else {
+                    match timeout(read_timeout, tree.get(&key)).await? {
+                        Some(value) if value != TOMBSTONE => Ok(Some(value)),
+                        _ => Err(Error::KeyNotFound),
+                    }
                 };
             }
             Some(name) => {
