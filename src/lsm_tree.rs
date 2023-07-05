@@ -2,6 +2,7 @@ use crate::{
     cached_file_reader::{CachedFileReader, FileId},
     error::{Error, Result},
     page_cache::{PartitionPageCache, PAGE_SIZE},
+    timestamp_nanos,
     utils::get_first_capture,
 };
 use bincode::{
@@ -31,6 +32,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
+use time::OffsetDateTime;
 
 pub const TOMBSTONE: Vec<u8> = vec![];
 
@@ -48,10 +50,28 @@ const COMPACT_DATA_FILE_EXT: &str = "compact_data";
 const COMPACT_INDEX_FILE_EXT: &str = "compact_index";
 const COMPACT_ACTION_FILE_EXT: &str = "compact_action";
 
+type MemTable = RedBlackTree<Vec<u8>, EntryValue>;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EntryValue {
+    pub data: Vec<u8>,
+    #[serde(with = "timestamp_nanos")]
+    pub timestamp: OffsetDateTime,
+}
+
+impl EntryValue {
+    fn new(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            timestamp: OffsetDateTime::now_utc(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Entry {
     key: Vec<u8>,
-    value: Vec<u8>,
+    value: EntryValue,
 }
 
 impl Ord for Entry {
@@ -148,10 +168,10 @@ pub struct LSMTree {
     page_cache: Rc<PartitionPageCache<FileId>>,
 
     // The memtable that is currently being written to.
-    active_memtable: RefCell<RedBlackTree<Vec<u8>, Vec<u8>>>,
+    active_memtable: RefCell<MemTable>,
 
     // The memtable that is currently being flushed to disk.
-    flush_memtable: RefCell<Option<RedBlackTree<Vec<u8>, Vec<u8>>>>,
+    flush_memtable: RefCell<Option<MemTable>>,
 
     // The next sstable index that is going to be written.
     write_sstable_index: Cell<usize>,
@@ -316,7 +336,7 @@ impl LSMTree {
 
     async fn read_memtable_from_wal_file(
         wal_path: &PathBuf,
-    ) -> Result<RedBlackTree<Vec<u8>, Vec<u8>>> {
+    ) -> Result<MemTable> {
         let mut memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
         let wal_file = DmaFile::open(wal_path).await?;
         let mut reader = DmaStreamReaderBuilder::new(wal_file)
@@ -437,7 +457,9 @@ impl LSMTree {
         Ok(None)
     }
 
-    pub async fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
+    /// Get the value together with the metadata saved for a key.
+    /// If you only want the raw value, use get().
+    pub async fn get_entry(&self, key: &Vec<u8>) -> Result<Option<EntryValue>> {
         // Query the active tree first.
         if let Some(result) = self.active_memtable.borrow().get(key) {
             return Ok(Some(result.clone()));
@@ -484,11 +506,19 @@ impl LSMTree {
         Ok(None)
     }
 
+    /// Get the raw value saved for a key.
+    /// If you prefer to also get metadata of the value, use get_entry().
+    pub async fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
+        Ok(self.get_entry(key).await?.map(|v| v.data))
+    }
+
     pub async fn set(
         self: Rc<Self>,
         key: Vec<u8>,
         value: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<EntryValue>> {
+        let value = EntryValue::new(value);
+
         // Write to memtable in memory.
         let result = self
             .active_memtable
@@ -514,7 +544,7 @@ impl LSMTree {
     pub async fn delete(
         self: Rc<Self>,
         key: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<EntryValue>> {
         self.set(key, TOMBSTONE).await
     }
 
@@ -634,7 +664,7 @@ impl LSMTree {
     }
 
     async fn flush_memtable_to_disk(
-        memtable: Vec<(Vec<u8>, Vec<u8>)>,
+        memtable: Vec<(Vec<u8>, EntryValue)>,
         data_file: DmaFile,
         index_file: DmaFile,
     ) -> Result<usize> {
@@ -741,7 +771,7 @@ impl LSMTree {
                 should_write_current &= next.entry.key != current.entry.key;
             }
             should_write_current &=
-                !remove_tombstones || current.entry.value != TOMBSTONE;
+                !remove_tombstones || current.entry.value.data != TOMBSTONE;
 
             if should_write_current {
                 let written = Self::write_entry(
