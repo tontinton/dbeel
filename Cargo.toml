@@ -29,6 +29,7 @@ rmp = "0.8.11"
 rmpv = "1.0.0"
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.40"
+time = { version = "0.3.22", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3.4.0"
