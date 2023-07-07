@@ -212,35 +212,35 @@ fn create_file_path_regex(file_ext: &'static str) -> Result<Regex> {
 pub struct LSMTree {
     dir: PathBuf,
 
-    // The page cache to ensure skipping kernel code when reading / writing to
-    // disk.
+    /// The page cache to ensure skipping kernel code when reading / writing to
+    /// disk.
     page_cache: Rc<PartitionPageCache<FileId>>,
 
-    // The memtable that is currently being written to.
+    /// The memtable that is currently being written to.
     active_memtable: RefCell<MemTable>,
 
-    // The memtable that is currently being flushed to disk.
+    /// The memtable that is currently being flushed to disk.
     flush_memtable: RefCell<Option<MemTable>>,
 
-    // The next sstable index that is going to be written.
+    /// The next sstable index that is going to be written.
     write_sstable_index: Cell<usize>,
 
-    // The sstables to query from.
-    // Rc tracks the number of sstable file reads are happening.
-    // The reason for tracking is that when ending a compaction, there are
-    // sstable files that should be removed / replaced, but there could be
-    // reads to the same files concurrently, so the compaction process will
-    // wait for the number of reads to reach 0.
+    /// The sstables to query from.
+    /// Rc tracks the number of sstable file reads are happening.
+    /// The reason for tracking is that when ending a compaction, there are
+    /// sstable files that should be removed / replaced, but there could be
+    /// reads to the same files concurrently, so the compaction process will
+    /// wait for the number of reads to reach 0.
     sstables: RefCell<Rc<Vec<SSTable>>>,
 
-    // The next memtable index.
+    /// The next memtable index.
     memtable_index: Cell<usize>,
 
-    // The memtable WAL for durability in case the process crashes without
-    // flushing the memtable to disk.
+    /// The memtable WAL for durability in case the process crashes without
+    /// flushing the memtable to disk.
     wal_file: RefCell<Rc<DmaFile>>,
 
-    // The current end offset of the wal file.
+    /// The current end offset of the wal file.
     wal_offset: Cell<u64>,
 }
 
@@ -716,8 +716,8 @@ impl LSMTree {
         Ok(table_length)
     }
 
-    // Compact all sstables in the given list of sstable files, write the result
-    // to the output file given.
+    /// Compact all sstables in the given list of sstable files, write the result
+    /// to the output file given.
     pub async fn compact(
         &self,
         indices_to_compact: Vec<usize>,
