@@ -184,11 +184,6 @@ impl MyShard {
             .remove(name)
             .ok_or_else(|| Error::CollectionNotFound(name.clone()))?
             .purge()?;
-
-        // TODO: add set items to cache, then there will be no reason to ever delete
-        // items from the cache.
-        self.cache.borrow_mut().clear();
-
         Ok(())
     }
 
