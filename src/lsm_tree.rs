@@ -1,7 +1,7 @@
 use crate::{
     cached_file_reader::{CachedFileReader, FileId},
     error::{Error, Result},
-    page_cache::{PartitionPageCache, PAGE_SIZE},
+    page_cache::{Page, PartitionPageCache, PAGE_SIZE},
     timestamp_nanos,
     utils::get_first_capture,
 };
@@ -112,10 +112,21 @@ static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
 struct EntryWriter {
     data_writer: DmaStreamWriter,
     index_writer: DmaStreamWriter,
+    files_index: usize,
+    page_cache: Rc<PartitionPageCache<FileId>>,
+    data_buf: [u8; PAGE_SIZE],
+    data_written: usize,
+    index_buf: [u8; PAGE_SIZE],
+    index_written: usize,
 }
 
 impl EntryWriter {
-    fn new(data_file: DmaFile, index_file: DmaFile) -> Self {
+    fn new(
+        data_file: DmaFile,
+        index_file: DmaFile,
+        files_index: usize,
+        page_cache: Rc<PartitionPageCache<FileId>>,
+    ) -> Self {
         let data_writer = DmaStreamWriterBuilder::new(data_file)
             .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
             .with_buffer_size(PAGE_SIZE)
@@ -128,6 +139,12 @@ impl EntryWriter {
         Self {
             data_writer,
             index_writer,
+            files_index,
+            page_cache,
+            data_buf: [0; PAGE_SIZE],
+            data_written: 0,
+            index_buf: [0; PAGE_SIZE],
+            index_written: 0,
         }
     }
 
@@ -146,10 +163,62 @@ impl EntryWriter {
             self.index_writer.write_all(&index_encoded)
         )?;
 
+        self.write_to_cache(data_encoded, true);
+        self.write_to_cache(index_encoded, false);
+
         Ok(data_size)
     }
 
+    fn write_to_cache(&mut self, bytes: Vec<u8>, is_data_file: bool) {
+        let (buf, written, ext) = if is_data_file {
+            (&mut self.data_buf, &mut self.data_written, DATA_FILE_EXT)
+        } else {
+            (&mut self.index_buf, &mut self.index_written, INDEX_FILE_EXT)
+        };
+
+        for chunk in bytes.chunks(PAGE_SIZE) {
+            let data_buf_offset = *written % PAGE_SIZE;
+            let end = std::cmp::min(data_buf_offset + chunk.len(), PAGE_SIZE);
+            buf[data_buf_offset..end]
+                .copy_from_slice(&chunk[..end - data_buf_offset]);
+
+            let written_first_copy = end - data_buf_offset;
+            *written += written_first_copy;
+
+            if *written % PAGE_SIZE == 0 {
+                // Filled a page, write it to cache.
+                self.page_cache.set(
+                    (ext, self.files_index),
+                    *written as u64 - PAGE_SIZE as u64,
+                    Page::new(std::mem::replace(buf, [0; PAGE_SIZE])),
+                );
+
+                // Write whatever is left in the chunk.
+                let left = chunk.len() - written_first_copy;
+                buf[..left].copy_from_slice(&chunk[written_first_copy..]);
+                *written += left;
+            }
+        }
+    }
+
     async fn close(&mut self) -> Result<()> {
+        let data_left = self.data_written % PAGE_SIZE;
+        if data_left != 0 {
+            self.page_cache.set(
+                (DATA_FILE_EXT, self.files_index),
+                (self.data_written - data_left) as u64,
+                Page::new(self.data_buf),
+            );
+        }
+        let index_left = self.index_written % PAGE_SIZE;
+        if self.index_written % PAGE_SIZE != 0 {
+            self.page_cache.set(
+                (INDEX_FILE_EXT, self.files_index),
+                (self.index_written - index_left) as u64,
+                Page::new(self.index_buf),
+            );
+        }
+
         try_join!(self.data_writer.close(), self.index_writer.close())?;
         Ok(())
     }
@@ -256,6 +325,8 @@ impl LSMTree {
             trace!("Opening existing tree from: {:?}", dir);
         }
 
+        let page_cache = Rc::new(page_cache);
+
         let pattern = create_file_path_regex(COMPACT_ACTION_FILE_EXT)?;
         let compact_action_paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
             .filter_map(std::result::Result::ok)
@@ -342,6 +413,8 @@ impl LSMTree {
                     memtable.into_iter().collect(),
                     data_file,
                     index_file,
+                    unflashed_file_index,
+                    page_cache.clone(),
                 )
                 .await?;
                 std::fs::remove_file(&unflashed_file_path)?;
@@ -367,7 +440,7 @@ impl LSMTree {
 
         Ok(Self {
             dir,
-            page_cache: Rc::new(page_cache),
+            page_cache,
             active_memtable: RefCell::new(active_memtable),
             flush_memtable: RefCell::new(None),
             write_sstable_index: Cell::new(write_file_index),
@@ -673,8 +746,14 @@ impl LSMTree {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let items_written =
-            Self::flush_memtable_to_disk(vec, data_file, index_file).await?;
+        let items_written = Self::flush_memtable_to_disk(
+            vec,
+            data_file,
+            index_file,
+            self.write_sstable_index.get(),
+            self.page_cache.clone(),
+        )
+        .await?;
 
         self.flush_memtable.replace(None);
 
@@ -700,6 +779,8 @@ impl LSMTree {
         memtable: Vec<(Vec<u8>, EntryValue)>,
         data_file: DmaFile,
         index_file: DmaFile,
+        files_index: usize,
+        page_cache: Rc<PartitionPageCache<(&'static str, usize)>>,
     ) -> Result<usize> {
         let table_length = memtable.len();
 
@@ -707,7 +788,8 @@ impl LSMTree {
             .hint_extent_size((*INDEX_ENTRY_SIZE as usize) * table_length)
             .await?;
 
-        let mut entry_writer = EntryWriter::new(data_file, index_file);
+        let mut entry_writer =
+            EntryWriter::new(data_file, index_file, files_index, page_cache);
         for (key, value) in memtable {
             entry_writer.write(&Entry { key, value }).await?;
         }
@@ -770,7 +852,12 @@ impl LSMTree {
             }
         }
 
-        let mut entry_writer = EntryWriter::new(compact_data_file, compact_index_file);
+        let mut entry_writer = EntryWriter::new(
+            compact_data_file,
+            compact_index_file,
+            output_index,
+            self.page_cache.clone(),
+        );
         let mut items_written = 0;
 
         while let Some(current) = heap.pop() {
