@@ -15,6 +15,8 @@ If you ever wanted to read database code without getting overwhelmed by massive 
 * Leaderless replication with tunable consistency
   * `--replication-factor` - Number of nodes that will store a copy of data
   * Write `consistency` (parameter in `set` command) - Number of nodes that will acknowledge a write for it to succeed
+  * Read `consistency` (parameter in `get` command) - Number of nodes that have to respond to a read operation for it to succeed
+    * Max timestamp conflict resolution
 
 ## Try it out
 
