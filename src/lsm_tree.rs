@@ -915,8 +915,7 @@ mod tests {
         let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
         let handle = builder.name("test").spawn(|| async move {
             let dir = tempdir().unwrap().into_path();
-            let cache =
-                Rc::new(RefCell::new(PageCache::new(1024, 1024).unwrap()));
+            let cache = Rc::new(RefCell::new(PageCache::new(1024, 1024)));
             let result = fut_gen(dir.clone(), cache).await;
             std::fs::remove_dir_all(dir).unwrap();
             result

@@ -1,14 +1,14 @@
 use core::hash::Hash;
 use std::{cell::RefCell, rc::Rc};
 
-use caches::{Cache, WTinyLFUCache};
+use wtinylfu::WTinyLfuCache;
 
 pub const PAGE_SIZE: usize = 4096;
 
 pub type Page = Rc<[u8; PAGE_SIZE]>;
 
 type CacheKey<K> = (String, K, u64);
-pub type PageCache<K> = WTinyLFUCache<CacheKey<K>, Page>;
+pub type PageCache<K> = WTinyLfuCache<CacheKey<K>, Page>;
 
 pub fn align_up(address: u64) -> u64 {
     (address + (PAGE_SIZE as u64) - 1) & !((PAGE_SIZE as u64) - 1)

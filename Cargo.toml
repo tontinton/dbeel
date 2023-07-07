@@ -12,7 +12,6 @@ authors = ["Tony Solomonik"]
 [dependencies]
 async-channel = "1.8.0"
 bincode = "1.3.3"
-caches = "0.2.3"
 clap = { version = "4.2.7", features = ["derive"] }
 futures = "0.3.28"
 futures-lite = "1.12.0"
@@ -30,6 +29,7 @@ rmpv = "1.0.0"
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.40"
 time = { version = "0.3.22", features = ["serde"] }
+wtinylfu = "0.1.0"
 
 [dev-dependencies]
 color-backtrace = "0.5.1"

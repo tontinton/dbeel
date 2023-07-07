@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
-use caches::Cache;
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
 use glommio::net::UdpSocket;
@@ -188,7 +187,7 @@ impl MyShard {
 
         // TODO: add set items to cache, then there will be no reason to ever delete
         // items from the cache.
-        self.cache.borrow_mut().purge();
+        self.cache.borrow_mut().clear();
 
         Ok(())
     }

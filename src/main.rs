@@ -118,8 +118,7 @@ async fn run_shard(
         .collect::<Vec<_>>();
 
     let cache_len = args.page_cache_size / PAGE_SIZE / shards.len();
-    let cache = PageCache::new(cache_len, cache_len / 16)
-        .map_err(|e| Error::CacheCreationError(e.to_string()))?;
+    let cache = PageCache::new(cache_len, cache_len / 16);
 
     let my_shard = Rc::new(MyShard::new(args, id, shards, cache));
 
