@@ -76,7 +76,9 @@ struct Entry {
 
 impl Ord for Entry {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.key.cmp(&other.key)
+        self.key
+            .cmp(&other.key)
+            .then(self.value.timestamp.cmp(&other.value.timestamp))
     }
 }
 
