@@ -521,6 +521,11 @@ impl LSMTree {
     ) -> Result<Option<EntryValue>> {
         let value = EntryValue::new(value);
 
+        // Wait until some flush happens.
+        while self.memtable_full() {
+            futures_lite::future::yield_now().await;
+        }
+
         // Write to memtable in memory.
         let result = self
             .active_memtable
