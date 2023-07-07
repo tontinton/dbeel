@@ -998,11 +998,17 @@ impl LSMTree {
 
 #[cfg(test)]
 mod tests {
-    use crate::page_cache::PageCache;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
     use ctor::ctor;
-    use futures_lite::Future;
+    use futures_lite::{io::Cursor, Future};
     use glommio::{LocalExecutorBuilder, Placement};
     use tempfile::tempdir;
+
+    use crate::page_cache::PageCache;
 
     use super::*;
 
@@ -1171,5 +1177,112 @@ mod tests {
     #[test]
     fn get_after_compaction() -> Result<()> {
         run_with_glommio(_get_after_compaction)
+    }
+
+    #[derive(Clone)]
+    struct RcCursorBuffer(Rc<RefCell<Cursor<Vec<u8>>>>);
+
+    impl RcCursorBuffer {
+        fn new() -> Self {
+            Self(Rc::new(RefCell::new(Cursor::new(vec![]))))
+        }
+    }
+
+    impl AsyncWrite for RcCursorBuffer {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::result::Result<usize, std::io::Error>> {
+            let rc_cursor = &mut *self.0.borrow_mut();
+            Pin::new(rc_cursor).poll_write(cx, buf)
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), std::io::Error>> {
+            let rc_cursor = &mut *self.0.borrow_mut();
+            Pin::new(rc_cursor).poll_flush(cx)
+        }
+
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let rc_cursor = &mut *self.0.borrow_mut();
+            Pin::new(rc_cursor).poll_close(cx)
+        }
+    }
+
+    async fn _entry_writer_cache_equals_disk(
+        _dir: PathBuf,
+        cache: GlobalCache,
+    ) -> Result<()> {
+        let test_partition_cache = Rc::new(partitioned_cache(&cache));
+
+        let data_cursor = RcCursorBuffer::new();
+        let index_cursor = RcCursorBuffer::new();
+
+        let mut entry_writer = EntryWriter::new(
+            Box::new(data_cursor.clone()),
+            Box::new(index_cursor.clone()),
+            0,
+            test_partition_cache.clone(),
+        );
+
+        let entries = (0..TREE_CAPACITY)
+            .map(|x| x.to_le_bytes().to_vec())
+            .map(|x| Entry {
+                key: x.clone(),
+                value: EntryValue::new(x),
+            })
+            .collect::<Vec<_>>();
+
+        let mut data_written = 0;
+        let mut index_written = 0;
+        for entry in entries {
+            let (d, i) = entry_writer.write(&entry).await?;
+            data_written += d;
+            index_written += i;
+        }
+        entry_writer.close().await?;
+
+        assert_eq!(data_cursor.0.borrow().get_ref().len(), data_written);
+        assert_eq!(index_cursor.0.borrow().get_ref().len(), index_written);
+
+        let cache_pages = (0..data_written).step_by(PAGE_SIZE).map(|address| {
+            test_partition_cache
+                .get((DATA_FILE_EXT, 0), address as u64)
+                .expect(format!("No cache on address: {}", address).as_str())
+        });
+
+        for (cache_page, chunk) in
+            cache_pages.zip(data_cursor.0.borrow().get_ref().chunks(PAGE_SIZE))
+        {
+            assert_eq!(&cache_page[..chunk.len()], chunk);
+        }
+
+        let cache_pages =
+            (0..index_written).step_by(PAGE_SIZE).map(|address| {
+                test_partition_cache
+                    .get((INDEX_FILE_EXT, 0), address as u64)
+                    .expect(
+                        format!("No cache on address: {}", address).as_str(),
+                    )
+            });
+
+        for (cache_page, chunk) in
+            cache_pages.zip(index_cursor.0.borrow().get_ref().chunks(PAGE_SIZE))
+        {
+            assert_eq!(&cache_page[..chunk.len()], chunk);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn entry_writer_cache_equals_disk() -> Result<()> {
+        run_with_glommio(_entry_writer_cache_equals_disk)
     }
 }
