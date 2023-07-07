@@ -240,7 +240,8 @@ async fn handle_client(
             client.write_all(&buf).await?;
         }
         Err(e) => {
-            let error_string = format!("Error while handling request: {}", e);
+            let error_string =
+                format!("Error while handling request: {0:?}, '{0}'", e);
             if !matches!(e, Error::KeyNotFound) {
                 error!("{}", error_string);
             }
