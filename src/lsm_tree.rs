@@ -892,11 +892,17 @@ impl LSMTree {
 #[cfg(test)]
 mod tests {
     use crate::page_cache::PageCache;
+    use ctor::ctor;
     use futures_lite::Future;
     use glommio::{LocalExecutorBuilder, Placement};
     use tempfile::tempdir;
 
     use super::*;
+
+    #[ctor]
+    fn init_color_backtrace() {
+        color_backtrace::install();
+    }
 
     type GlobalCache = Rc<RefCell<PageCache<FileId>>>;
 

@@ -32,4 +32,6 @@ thiserror = "1.0.40"
 time = { version = "0.3.22", features = ["serde"] }
 
 [dev-dependencies]
+color-backtrace = "0.5.1"
+ctor = "0.2.3"
 tempfile = "3.4.0"
