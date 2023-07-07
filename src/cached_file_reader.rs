@@ -43,7 +43,7 @@ impl CachedFileReader {
 
             match self.cache.get(self.id, address) {
                 Some(page) => {
-                    output_buf.extend_from_slice(&page.as_slice()[start..end]);
+                    output_buf.extend_from_slice(&page[start..end]);
                 }
                 None => {
                     let page =
