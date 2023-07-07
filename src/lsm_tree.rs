@@ -11,13 +11,12 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
-use futures::try_join;
+use futures::{try_join, AsyncWrite};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
     io::{
-        DmaFile, DmaStreamReaderBuilder, DmaStreamWriter,
-        DmaStreamWriterBuilder, OpenOptions,
+        DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
     },
     spawn_local,
 };
@@ -110,8 +109,8 @@ static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
 });
 
 struct EntryWriter {
-    data_writer: DmaStreamWriter,
-    index_writer: DmaStreamWriter,
+    data_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
+    index_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
     files_index: usize,
     page_cache: Rc<PartitionPageCache<FileId>>,
     data_buf: [u8; PAGE_SIZE],
@@ -121,21 +120,34 @@ struct EntryWriter {
 }
 
 impl EntryWriter {
-    fn new(
+    fn new_from_dma(
         data_file: DmaFile,
         index_file: DmaFile,
         files_index: usize,
         page_cache: Rc<PartitionPageCache<FileId>>,
     ) -> Self {
-        let data_writer = DmaStreamWriterBuilder::new(data_file)
-            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-            .with_buffer_size(PAGE_SIZE)
-            .build();
-        let index_writer = DmaStreamWriterBuilder::new(index_file)
-            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-            .with_buffer_size(PAGE_SIZE)
-            .build();
+        let data_writer = Box::new(
+            DmaStreamWriterBuilder::new(data_file)
+                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .with_buffer_size(PAGE_SIZE)
+                .build(),
+        );
+        let index_writer = Box::new(
+            DmaStreamWriterBuilder::new(index_file)
+                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+                .with_buffer_size(PAGE_SIZE)
+                .build(),
+        );
 
+        Self::new(data_writer, index_writer, files_index, page_cache)
+    }
+
+    fn new(
+        data_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
+        index_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
+        files_index: usize,
+        page_cache: Rc<PartitionPageCache<FileId>>,
+    ) -> Self {
         Self {
             data_writer,
             index_writer,
@@ -148,15 +160,16 @@ impl EntryWriter {
         }
     }
 
-    async fn write(&mut self, entry: &Entry) -> Result<usize> {
+    async fn write(&mut self, entry: &Entry) -> Result<(usize, usize)> {
         let data_encoded = bincode_options().serialize(entry)?;
         let data_size = data_encoded.len();
 
         let entry_index = EntryOffset {
-            entry_offset: self.data_writer.current_pos(),
+            entry_offset: self.data_written as u64,
             entry_size: data_size,
         };
         let index_encoded = bincode_options().serialize(&entry_index)?;
+        let index_size = index_encoded.len();
 
         try_join!(
             self.data_writer.write_all(&data_encoded),
@@ -166,7 +179,7 @@ impl EntryWriter {
         self.write_to_cache(data_encoded, true);
         self.write_to_cache(index_encoded, false);
 
-        Ok(data_size)
+        Ok((data_size, index_size))
     }
 
     fn write_to_cache(&mut self, bytes: Vec<u8>, is_data_file: bool) {
@@ -788,8 +801,12 @@ impl LSMTree {
             .hint_extent_size((*INDEX_ENTRY_SIZE as usize) * table_length)
             .await?;
 
-        let mut entry_writer =
-            EntryWriter::new(data_file, index_file, files_index, page_cache);
+        let mut entry_writer = EntryWriter::new_from_dma(
+            data_file,
+            index_file,
+            files_index,
+            page_cache,
+        );
         for (key, value) in memtable {
             entry_writer.write(&Entry { key, value }).await?;
         }
@@ -852,7 +869,7 @@ impl LSMTree {
             }
         }
 
-        let mut entry_writer = EntryWriter::new(
+        let mut entry_writer = EntryWriter::new_from_dma(
             compact_data_file,
             compact_index_file,
             output_index,
