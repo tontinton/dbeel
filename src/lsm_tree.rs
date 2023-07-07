@@ -16,7 +16,8 @@ use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
     io::{
-        DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
+        DmaFile, DmaStreamReaderBuilder, DmaStreamWriter,
+        DmaStreamWriterBuilder, OpenOptions,
     },
     spawn_local,
 };
@@ -107,6 +108,52 @@ static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
         .serialized_size(&EntryOffset::default())
         .unwrap()
 });
+
+struct EntryWriter {
+    data_writer: DmaStreamWriter,
+    index_writer: DmaStreamWriter,
+}
+
+impl EntryWriter {
+    fn new(data_file: DmaFile, index_file: DmaFile) -> Self {
+        let data_writer = DmaStreamWriterBuilder::new(data_file)
+            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+            .with_buffer_size(PAGE_SIZE)
+            .build();
+        let index_writer = DmaStreamWriterBuilder::new(index_file)
+            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
+            .with_buffer_size(PAGE_SIZE)
+            .build();
+
+        Self {
+            data_writer,
+            index_writer,
+        }
+    }
+
+    async fn write(&mut self, entry: &Entry) -> Result<usize> {
+        let data_encoded = bincode_options().serialize(entry)?;
+        let data_size = data_encoded.len();
+
+        let entry_index = EntryOffset {
+            entry_offset: self.data_writer.current_pos(),
+            entry_size: data_size,
+        };
+        let index_encoded = bincode_options().serialize(&entry_index)?;
+
+        try_join!(
+            self.data_writer.write_all(&data_encoded),
+            self.index_writer.write_all(&index_encoded)
+        )?;
+
+        Ok(data_size)
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        try_join!(self.data_writer.close(), self.index_writer.close())?;
+        Ok(())
+    }
+}
 
 #[derive(Eq, PartialEq)]
 struct CompactionItem {
@@ -649,27 +696,6 @@ impl LSMTree {
         Ok(())
     }
 
-    async fn write_entry(
-        entry: &Entry,
-        offset: u64,
-        data_writer: &mut (impl AsyncWriteExt + Unpin),
-        index_writer: &mut (impl AsyncWriteExt + Unpin),
-    ) -> Result<usize> {
-        let data_encoded = bincode_options().serialize(entry)?;
-        let entry_size = data_encoded.len();
-        let entry_index = EntryOffset {
-            entry_offset: offset,
-            entry_size,
-        };
-        let index_encoded = bincode_options().serialize(&entry_index)?;
-
-        try_join!(
-            data_writer.write_all(&data_encoded),
-            index_writer.write_all(&index_encoded)
-        )?;
-        Ok(entry_size)
-    }
-
     async fn flush_memtable_to_disk(
         memtable: Vec<(Vec<u8>, EntryValue)>,
         data_file: DmaFile,
@@ -677,28 +703,15 @@ impl LSMTree {
     ) -> Result<usize> {
         let table_length = memtable.len();
 
-        let mut data_write_stream = DmaStreamWriterBuilder::new(data_file)
-            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-            .with_buffer_size(PAGE_SIZE)
-            .build();
         index_file
             .hint_extent_size((*INDEX_ENTRY_SIZE as usize) * table_length)
             .await?;
-        let mut index_write_stream = DmaStreamWriterBuilder::new(index_file)
-            .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-            .with_buffer_size(PAGE_SIZE)
-            .build();
 
+        let mut entry_writer = EntryWriter::new(data_file, index_file);
         for (key, value) in memtable {
-            Self::write_entry(
-                &Entry { key, value },
-                data_write_stream.current_pos(),
-                &mut data_write_stream,
-                &mut index_write_stream,
-            )
-            .await?;
+            entry_writer.write(&Entry { key, value }).await?;
         }
-        try_join!(data_write_stream.close(), index_write_stream.close())?;
+        entry_writer.close().await?;
 
         Ok(table_length)
     }
@@ -739,16 +752,6 @@ impl LSMTree {
             DmaFile::create(&compact_data_path),
             DmaFile::create(&compact_index_path)
         )?;
-        let mut compact_data_writer =
-            DmaStreamWriterBuilder::new(compact_data_file)
-                .with_buffer_size(PAGE_SIZE)
-                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-                .build();
-        let mut compact_index_writer =
-            DmaStreamWriterBuilder::new(compact_index_file)
-                .with_buffer_size(PAGE_SIZE)
-                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-                .build();
 
         let mut offset_bytes = vec![0; *INDEX_ENTRY_SIZE as usize];
         let mut heap = BinaryHeap::new();
@@ -767,7 +770,7 @@ impl LSMTree {
             }
         }
 
-        let mut entry_offset = 0u64;
+        let mut entry_writer = EntryWriter::new(compact_data_file, compact_index_file);
         let mut items_written = 0;
 
         while let Some(current) = heap.pop() {
@@ -781,14 +784,7 @@ impl LSMTree {
                 !remove_tombstones || current.entry.value.data != TOMBSTONE;
 
             if should_write_current {
-                let written = Self::write_entry(
-                    &current.entry,
-                    entry_offset,
-                    &mut compact_data_writer,
-                    &mut compact_index_writer,
-                )
-                .await?;
-                entry_offset += written as u64;
+                entry_writer.write(&current.entry).await?;
                 items_written += 1;
             }
 
@@ -804,7 +800,7 @@ impl LSMTree {
             }
         }
 
-        try_join!(compact_data_writer.close(), compact_index_writer.close())?;
+        entry_writer.close().await?;
 
         let mut files_to_delete = Vec::with_capacity(sstable_paths.len() * 2);
         for (data_path, index_path) in sstable_paths {
