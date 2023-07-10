@@ -13,6 +13,7 @@ use crate::{
     error::{Error, Result},
     messages::{NodeMetadata, ShardMessage, ShardRequest, ShardResponse},
     read_exactly::read_exactly,
+    response_to_empty_result, response_to_result,
 };
 
 #[derive(Debug, Clone)]
@@ -53,17 +54,17 @@ impl RemoteShardConnection {
     }
 
     pub async fn ping(&self) -> Result<()> {
-        match self.send_request(ShardRequest::Ping).await? {
-            ShardResponse::Pong => Ok(()),
-            _ => Err(Error::ResponseWrongType),
-        }
+        response_to_empty_result!(
+            self.send_request(ShardRequest::Ping).await?,
+            ShardResponse::Pong
+        )
     }
 
     pub async fn get_metadata(&self) -> Result<Vec<NodeMetadata>> {
-        match self.send_request(ShardRequest::GetMetadata).await? {
-            ShardResponse::GetMetadata(metadata) => Ok(metadata),
-            _ => Err(Error::ResponseWrongType),
-        }
+        response_to_result!(
+            self.send_request(ShardRequest::GetMetadata).await?,
+            ShardResponse::GetMetadata
+        )
     }
 }
 

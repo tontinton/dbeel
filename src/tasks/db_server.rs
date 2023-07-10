@@ -14,6 +14,7 @@ use crate::{
     lsm_tree::TOMBSTONE,
     messages::{ShardEvent, ShardMessage, ShardRequest, ShardResponse},
     read_exactly::read_exactly,
+    response_to_empty_result, response_to_result,
     shards::MyShard,
     timeout::timeout,
 };
@@ -119,6 +120,12 @@ async fn handle_request(
                         .send_request_to_replicas(
                             ShardRequest::Set(collection, key, value),
                             write_consistency as usize - 1,
+                            |res| {
+                                response_to_empty_result!(
+                                    res,
+                                    ShardResponse::Set
+                                )
+                            },
                         );
                     timeout(
                         write_timeout,
@@ -147,6 +154,12 @@ async fn handle_request(
                     let remote_future = my_shard.send_request_to_replicas(
                         ShardRequest::Delete(collection, key),
                         delete_consistency as usize - 1,
+                        |res| {
+                            response_to_empty_result!(
+                                res,
+                                ShardResponse::Delete
+                            )
+                        },
                     );
                     timeout(
                         delete_timeout,
@@ -176,20 +189,14 @@ async fn handle_request(
                     let remote_future = my_shard.send_request_to_replicas(
                         ShardRequest::Get(collection, key.clone()),
                         read_consistency as usize - 1,
+                        |res| response_to_result!(res, ShardResponse::Get),
                     );
-                    let (local_value, responses) = timeout(
+                    let (local_value, mut values) = timeout(
                         read_timeout,
                         try_join(local_future, remote_future),
                     )
                     .await?;
 
-                    let mut values = responses
-                        .into_iter()
-                        .map(|response| match response {
-                            ShardResponse::Get(value) => Ok(value),
-                            _ => Err(Error::ResponseWrongType),
-                        })
-                        .collect::<Result<Vec<_>>>()?;
                     values.push(local_value);
 
                     match values

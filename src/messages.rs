@@ -33,6 +33,33 @@ pub enum ShardResponse {
     Set,
     Delete,
     Get(Option<EntryValue>),
+    Error(String),
+}
+
+/// Map a ShardResponse with a value to Result<T>.
+/// Must also import ShardResponse to compile.
+#[macro_export]
+macro_rules! response_to_result {
+    ($response:expr, $identifier:path) => {
+        match $response {
+            $identifier(inner_value) => Ok(inner_value),
+            ShardResponse::Error(e) => Err(Error::ResponseError(e)),
+            _ => Err(Error::ResponseWrongType),
+        }
+    };
+}
+
+/// Map a ShardResponse with no value to Result<()>.
+/// Must also import ShardResponse to compile.
+#[macro_export]
+macro_rules! response_to_empty_result {
+    ($response:expr, $identifier:path) => {
+        match $response {
+            $identifier => Ok(()),
+            ShardResponse::Error(e) => Err(Error::ResponseError(e)),
+            _ => Err(Error::ResponseWrongType),
+        }
+    };
 }
 
 #[derive(Clone, Serialize, Deserialize)]

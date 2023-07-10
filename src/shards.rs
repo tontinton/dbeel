@@ -210,11 +210,16 @@ impl MyShard {
         Ok(())
     }
 
-    pub async fn send_request_to_replicas(
+    pub async fn send_request_to_replicas<F, T>(
         self: Rc<Self>,
         request: ShardRequest,
         number_of_acks: usize,
-    ) -> Result<Vec<ShardResponse>> {
+        response_map_fn: F,
+    ) -> Result<Vec<T>>
+    where
+        F: Fn(ShardResponse) -> Result<T> + 'static,
+        T: 'static,
+    {
         let (sender, receiver) = async_channel::bounded(1);
         let my_shard = self.clone();
         spawn_local(async move {
@@ -248,7 +253,13 @@ impl MyShard {
                 while let Some(result) = futures.next().await {
                     match result {
                         Ok(response) => {
-                            results.push(response);
+                            let response = response_map_fn(response);
+                            if let Err(e) = response {
+                                error!("Failed response from replica: {}", e);
+                                continue;
+                            }
+
+                            results.push(response.unwrap());
                             acks += 1;
                             if acks >= number_of_acks {
                                 break;
