@@ -114,22 +114,17 @@ async fn handle_request(
 
                 let tree = my_shard.get_collection(&collection)?;
                 if my_shard.args.replication_factor > 1 {
-                    let local_write_future =
-                        tree.set(key.clone(), value.clone());
-                    let remote_write_future = my_shard
-                        .send_request_to_replicas(
-                            ShardRequest::Set(collection, key, value),
-                            write_consistency as usize - 1,
-                            |res| {
-                                response_to_empty_result!(
-                                    res,
-                                    ShardResponse::Set
-                                )
-                            },
-                        );
+                    let local_future = tree.set(key.clone(), value.clone());
+                    let remote_future = my_shard.send_request_to_replicas(
+                        ShardRequest::Set(collection, key, value),
+                        write_consistency as usize - 1,
+                        |res| {
+                            response_to_empty_result!(res, ShardResponse::Set)
+                        },
+                    );
                     timeout(
                         write_timeout,
-                        try_join(local_write_future, remote_write_future),
+                        try_join(local_future, remote_future),
                     )
                     .await?;
                 } else {
