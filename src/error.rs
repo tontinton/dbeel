@@ -28,7 +28,7 @@ pub enum Error {
     #[error("timed out")]
     Timeout,
 
-    #[error("request id not found in waiting list")]
+    #[error("response type not expected")]
     ResponseWrongType,
     #[error("no remote shards received from asking all seed nodes")]
     NoRemoteShardsFoundInSeedNodes,
