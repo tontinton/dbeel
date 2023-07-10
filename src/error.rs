@@ -30,6 +30,8 @@ pub enum Error {
 
     #[error("response type not expected")]
     ResponseWrongType,
+    #[error("response failed with: '{0}'")]
+    ResponseError(String),
     #[error("no remote shards received from asking all seed nodes")]
     NoRemoteShardsFoundInSeedNodes,
 
