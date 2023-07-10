@@ -1,6 +1,6 @@
-use std::{any::Any, rc::Rc};
+use std::{any::Any, rc::Rc, time::Duration};
 
-use glommio::{net::UdpSocket, spawn_local, Task};
+use glommio::{enclose, net::UdpSocket, spawn_local, timer::sleep, Task};
 use log::{error, trace};
 
 use crate::{
@@ -8,6 +8,7 @@ use crate::{
 };
 
 const UDP_PACKET_BUFFER_SIZE: usize = 65536;
+const GOSSIP_REQUEST_EXPIRATION_TIME: Duration = Duration::from_secs(30);
 
 async fn handle_gossip_packet(
     my_shard: Rc<MyShard>,
@@ -19,11 +20,23 @@ async fn handle_gossip_packet(
     let seen_first_time = {
         let mut requests = my_shard.gossip_requests.borrow_mut();
         let seen_count = requests
-            .entry((message.source, message.event.type_id()))
+            .entry((message.source.clone(), message.event.type_id()))
             .or_insert(0);
 
-        // TODO: delete entries.
         if *seen_count >= my_shard.args.gossip_max_seen_count {
+            if *seen_count == my_shard.args.gossip_max_seen_count {
+                spawn_local(
+                    enclose!((my_shard.clone() => my_shard) async move {
+                        sleep(GOSSIP_REQUEST_EXPIRATION_TIME).await;
+                        my_shard
+                            .gossip_requests
+                            .borrow_mut()
+                            .remove(&(message.source, message.event.type_id()));
+                    }),
+                )
+                .detach();
+                *seen_count += 1;
+            }
             return Ok(());
         }
 
