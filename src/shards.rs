@@ -1,5 +1,6 @@
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
@@ -14,7 +15,7 @@ use rand::thread_rng;
 use regex::Regex;
 
 use crate::gossip::{serialize_gossip_message, GossipEvent, GossipMessage};
-use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
+use crate::messages::{GetValue, NodeMetadata, ShardRequest, ShardResponse};
 use crate::utils::get_first_capture;
 use crate::{
     args::Args,
@@ -399,10 +400,10 @@ impl MyShard {
                 let existing_tree =
                     self.trees.borrow().get(&collection).cloned();
                 if let Some(tree) = existing_tree {
-                    tree.set(key, value).await?;
+                    tree.set(key.into(), value.into()).await?;
                 } else {
                     let tree = self.create_lsm_tree(collection.clone()).await?;
-                    tree.clone().set(key, value).await?;
+                    tree.clone().set(key.into(), value.into()).await?;
                     self.trees.borrow_mut().insert(collection, tree);
                 };
 
@@ -412,7 +413,7 @@ impl MyShard {
                 let existing_tree =
                     self.trees.borrow().get(&collection).cloned();
                 if let Some(tree) = existing_tree {
-                    tree.delete(key).await?;
+                    tree.delete(key.into()).await?;
                 };
                 ShardResponse::Delete
             }
@@ -420,7 +421,10 @@ impl MyShard {
                 let existing_tree =
                     self.trees.borrow().get(&collection).cloned();
                 let value = if let Some(tree) = existing_tree {
-                    tree.get_entry(&key).await?
+                    tree.get_entry(&key.into()).await?.map(|v| GetValue {
+                        data: v.data.deref().clone(),
+                        timestamp: v.timestamp,
+                    })
                 } else {
                     None
                 };

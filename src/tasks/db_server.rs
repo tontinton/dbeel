@@ -1,4 +1,4 @@
-use std::{cmp::min, rc::Rc, time::Duration};
+use std::{cmp::min, ops::Deref, rc::Rc, time::Duration};
 
 use futures::{future::try_join, AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::{enclose, net::TcpListener, spawn_local, Task};
@@ -11,8 +11,10 @@ use rmpv::{
 
 use crate::{
     error::{Error, Result},
-    lsm_tree::TOMBSTONE,
+    length_tracker::LengthTracker,
+    lsm_tree::{EntryValue, TOMBSTONE},
     messages::{ShardEvent, ShardMessage, ShardRequest, ShardResponse},
+    rc_bytes::RcBytes,
     read_exactly::read_exactly,
     response_to_empty_result, response_to_result,
     shards::MyShard,
@@ -45,13 +47,16 @@ fn extract_field_as_u64(map: &Value, field_name: &str) -> Result<u64> {
         .ok_or_else(|| Error::MissingField(field_name.to_string()))
 }
 
-fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
+fn extract_field_encoded(map: &Value, field_name: &str) -> Result<RcBytes> {
     let field = extract_field(map, field_name)?;
 
-    let mut field_encoded: Vec<u8> = Vec::new();
+    let mut tracker = LengthTracker::new();
+    write_value(&mut tracker, field)?;
+
+    let mut field_encoded = Vec::with_capacity(tracker.len());
     write_value(&mut field_encoded, field)?;
 
-    Ok(field_encoded)
+    Ok(field_encoded.into())
 }
 
 fn broadcast_message_to_local_shards_in_background(
@@ -71,7 +76,7 @@ fn broadcast_message_to_local_shards_in_background(
 async fn handle_request(
     my_shard: Rc<MyShard>,
     buffer: Vec<u8>,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<Option<RcBytes>> {
     let msgpack_request = read_value_ref(&mut &buffer[..])?.to_owned();
     if let Some(map_vec) = msgpack_request.as_map() {
         let map = Value::Map(map_vec.to_vec());
@@ -116,7 +121,11 @@ async fn handle_request(
                 if my_shard.args.replication_factor > 1 {
                     let local_future = tree.set(key.clone(), value.clone());
                     let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Set(collection, key, value),
+                        ShardRequest::Set(
+                            collection,
+                            key.deref().clone(),
+                            value.deref().clone(),
+                        ),
                         write_consistency as usize - 1,
                         |res| {
                             response_to_empty_result!(res, ShardResponse::Set)
@@ -147,7 +156,7 @@ async fn handle_request(
                 if my_shard.args.replication_factor > 1 {
                     let local_future = tree.delete(key.clone());
                     let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Delete(collection, key),
+                        ShardRequest::Delete(collection, key.deref().clone()),
                         delete_consistency as usize - 1,
                         |res| {
                             response_to_empty_result!(
@@ -182,9 +191,18 @@ async fn handle_request(
                 return if my_shard.args.replication_factor > 1 {
                     let local_future = tree.get_entry(&key);
                     let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Get(collection, key.clone()),
+                        ShardRequest::Get(collection, key.deref().clone()),
                         read_consistency as usize - 1,
-                        |res| response_to_result!(res, ShardResponse::Get),
+                        |res| {
+                            response_to_result!(res, ShardResponse::Get).map(
+                                |v| {
+                                    v.map(|v| EntryValue {
+                                        data: v.data.into(),
+                                        timestamp: v.timestamp,
+                                    })
+                                },
+                            )
+                        },
                     );
                     let (local_value, mut values) = timeout(
                         read_timeout,
@@ -200,12 +218,16 @@ async fn handle_request(
                         .max_by_key(|v| v.timestamp)
                         .map(|v| v.data)
                     {
-                        Some(value) if value != TOMBSTONE => Ok(Some(value)),
+                        Some(value) if value.deref() != &TOMBSTONE => {
+                            Ok(Some(value))
+                        }
                         _ => Err(Error::KeyNotFound),
                     }
                 } else {
                     match timeout(read_timeout, tree.get(&key)).await? {
-                        Some(value) if value != TOMBSTONE => Ok(Some(value)),
+                        Some(value) if value.deref() != &TOMBSTONE => {
+                            Ok(Some(value))
+                        }
                         _ => Err(Error::KeyNotFound),
                     }
                 };

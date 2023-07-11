@@ -1,7 +1,8 @@
 use async_channel::Sender;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
-use crate::lsm_tree::EntryValue;
+use crate::timestamp_nanos;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
@@ -27,12 +28,19 @@ pub struct NodeMetadata {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct GetValue {
+    pub data: Vec<u8>,
+    #[serde(with = "timestamp_nanos")]
+    pub timestamp: OffsetDateTime,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub enum ShardResponse {
     Pong,
     GetMetadata(Vec<NodeMetadata>),
     Set,
     Delete,
-    Get(Option<EntryValue>),
+    Get(Option<GetValue>),
     Error(String),
 }
 

@@ -2,6 +2,7 @@ use crate::{
     cached_file_reader::{CachedFileReader, FileId},
     error::{Error, Result},
     page_cache::{Page, PartitionPageCache, PAGE_SIZE},
+    rc_bytes::RcBytes,
     timestamp_nanos,
     utils::get_first_capture,
 };
@@ -25,6 +26,7 @@ use once_cell::sync::Lazy;
 use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::{
     cell::{Cell, RefCell},
     cmp::Ordering,
@@ -50,17 +52,17 @@ const COMPACT_DATA_FILE_EXT: &str = "compact_data";
 const COMPACT_INDEX_FILE_EXT: &str = "compact_index";
 const COMPACT_ACTION_FILE_EXT: &str = "compact_action";
 
-type MemTable = RedBlackTree<Vec<u8>, EntryValue>;
+type MemTable = RedBlackTree<RcBytes, EntryValue>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EntryValue {
-    pub data: Vec<u8>,
+    pub data: RcBytes,
     #[serde(with = "timestamp_nanos")]
     pub timestamp: OffsetDateTime,
 }
 
 impl EntryValue {
-    fn new(data: Vec<u8>) -> Self {
+    fn new(data: RcBytes) -> Self {
         Self {
             data,
             timestamp: OffsetDateTime::now_utc(),
@@ -70,7 +72,7 @@ impl EntryValue {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Entry {
-    key: Vec<u8>,
+    key: RcBytes,
     value: EntryValue,
 }
 
@@ -538,7 +540,7 @@ impl LSMTree {
     }
 
     async fn binary_search(
-        key: &Vec<u8>,
+        key: &RcBytes,
         data_file: &CachedFileReader,
         index_file: &CachedFileReader,
         index_offset_start: u64,
@@ -594,7 +596,7 @@ impl LSMTree {
 
     /// Get the value together with the metadata saved for a key.
     /// If you only want the raw value, use get().
-    pub async fn get_entry(&self, key: &Vec<u8>) -> Result<Option<EntryValue>> {
+    pub async fn get_entry(&self, key: &RcBytes) -> Result<Option<EntryValue>> {
         // Query the active tree first.
         if let Some(result) = self.active_memtable.borrow().get(key) {
             return Ok(Some(result.clone()));
@@ -643,14 +645,14 @@ impl LSMTree {
 
     /// Get the raw value saved for a key.
     /// If you prefer to also get metadata of the value, use get_entry().
-    pub async fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
+    pub async fn get(&self, key: &RcBytes) -> Result<Option<RcBytes>> {
         Ok(self.get_entry(key).await?.map(|v| v.data))
     }
 
     pub async fn set(
         self: Rc<Self>,
-        key: Vec<u8>,
-        value: Vec<u8>,
+        key: RcBytes,
+        value: RcBytes,
     ) -> Result<Option<EntryValue>> {
         let value = EntryValue::new(value);
 
@@ -683,9 +685,9 @@ impl LSMTree {
 
     pub async fn delete(
         self: Rc<Self>,
-        key: Vec<u8>,
+        key: RcBytes,
     ) -> Result<Option<EntryValue>> {
-        self.set(key, TOMBSTONE).await
+        self.set(key, TOMBSTONE.into()).await
     }
 
     async fn write_to_wal(&self, entry: &Entry) -> Result<()> {
@@ -789,7 +791,7 @@ impl LSMTree {
     }
 
     async fn flush_memtable_to_disk(
-        memtable: Vec<(Vec<u8>, EntryValue)>,
+        memtable: Vec<(RcBytes, EntryValue)>,
         data_file: DmaFile,
         index_file: DmaFile,
         files_index: usize,
@@ -884,8 +886,8 @@ impl LSMTree {
             if let Some(next) = heap.peek() {
                 should_write_current &= next.entry.key != current.entry.key;
             }
-            should_write_current &=
-                !remove_tombstones || current.entry.value.data != TOMBSTONE;
+            should_write_current &= !remove_tombstones
+                || current.entry.value.data.deref() != &TOMBSTONE;
 
             if should_write_current {
                 entry_writer.write(&current.entry).await?;
@@ -1012,6 +1014,15 @@ mod tests {
 
     use super::*;
 
+    macro_rules! rb {
+        () => (
+            $crate::rc_bytes::RcBytes::new()
+        );
+        ($($x:expr),+ $(,)?) => (
+            $crate::rc_bytes::RcBytes(Rc::new(vec![$($x),+]))
+        );
+    }
+
     #[ctor]
     fn init_color_backtrace() {
         color_backtrace::install();
@@ -1019,11 +1030,10 @@ mod tests {
 
     type GlobalCache = Rc<RefCell<PageCache<FileId>>>;
 
-    fn run_with_glommio<G, F, T>(fut_gen: G) -> Result<()>
+    fn run_with_glommio<G, F>(fut_gen: G) -> Result<()>
     where
         G: FnOnce(PathBuf, GlobalCache) -> F + Send + 'static,
-        F: Future<Output = T> + 'static,
-        T: Send + 'static,
+        F: Future<Output = Result<()>> + 'static,
     {
         let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
         let handle = builder.name("test").spawn(|| async move {
@@ -1031,9 +1041,9 @@ mod tests {
             let cache = Rc::new(RefCell::new(PageCache::new(1024, 1024)));
             let result = fut_gen(dir.clone(), cache).await;
             std::fs::remove_dir_all(dir).unwrap();
-            result
+            result.is_ok()
         })?;
-        handle.join()?;
+        assert!(handle.join()?);
         Ok(())
     }
 
@@ -1051,17 +1061,17 @@ mod tests {
                 LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
                     .await?,
             );
-            tree.clone().set(vec![100], vec![200]).await?;
-            assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
-            assert_eq!(tree.get(&vec![0]).await?, None);
+            tree.clone().set(rb![100], rb![200]).await?;
+            assert_eq!(tree.get(&rb![100]).await?, Some(rb![200]));
+            assert_eq!(tree.get(&rb![0]).await?, None);
         }
 
         // Reopening the tree.
         {
             let tree =
                 LSMTree::open_or_create(dir, partitioned_cache(&cache)).await?;
-            assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
-            assert_eq!(tree.get(&vec![0]).await?, None);
+            assert_eq!(tree.get(&rb![100]).await?, Some(rb![200]));
+            assert_eq!(tree.get(&rb![0]).await?, None);
         }
 
         Ok(())
@@ -1084,8 +1094,8 @@ mod tests {
             );
             assert_eq!(tree.write_sstable_index.get(), 0);
 
-            let values: Vec<Vec<u8>> = (0..TREE_CAPACITY as u16)
-                .map(|n| n.to_le_bytes().to_vec())
+            let values: Vec<RcBytes> = (0..TREE_CAPACITY as u16)
+                .map(|n| n.to_le_bytes().to_vec().into())
                 .collect();
 
             for v in values {
@@ -1095,9 +1105,9 @@ mod tests {
 
             assert_eq!(tree.active_memtable.borrow().len(), 0);
             assert_eq!(tree.write_sstable_index.get(), 2);
-            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+            assert_eq!(tree.get(&rb![0, 0]).await?, Some(rb![0, 0]));
+            assert_eq!(tree.get(&rb![100, 1]).await?, Some(rb![100, 1]));
+            assert_eq!(tree.get(&rb![200, 2]).await?, Some(rb![200, 2]));
         }
 
         // Reopening the tree.
@@ -1107,9 +1117,9 @@ mod tests {
                     .await?;
             assert_eq!(tree.active_memtable.borrow().len(), 0);
             assert_eq!(tree.write_sstable_index.get(), 2);
-            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+            assert_eq!(tree.get(&rb![0, 0]).await?, Some(rb![0, 0]));
+            assert_eq!(tree.get(&rb![100, 1]).await?, Some(rb![100, 1]));
+            assert_eq!(tree.get(&rb![200, 2]).await?, Some(rb![200, 2]));
         }
 
         Ok(())
@@ -1133,15 +1143,15 @@ mod tests {
             assert_eq!(tree.write_sstable_index.get(), 0);
             assert_eq!(*tree.sstable_indices(), vec![]);
 
-            let values: Vec<Vec<u8>> = (0..((TREE_CAPACITY as u16) * 3) - 2)
-                .map(|n| n.to_le_bytes().to_vec())
+            let values: Vec<RcBytes> = (0..((TREE_CAPACITY as u16) * 3) - 2)
+                .map(|n| n.to_le_bytes().to_vec().into())
                 .collect();
 
             for v in values {
                 tree.clone().set(v.clone(), v).await?;
             }
-            tree.clone().delete(vec![0, 1]).await?;
-            tree.clone().delete(vec![100, 2]).await?;
+            tree.clone().delete(rb![0, 1]).await?;
+            tree.clone().delete(rb![100, 2]).await?;
             tree.clone().flush().await?;
 
             assert_eq!(*tree.sstable_indices(), vec![0, 2, 4]);
@@ -1150,11 +1160,11 @@ mod tests {
 
             assert_eq!(*tree.sstable_indices(), vec![5]);
             assert_eq!(tree.write_sstable_index.get(), 6);
-            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
-            assert_eq!(tree.get(&vec![0, 1]).await?, None);
-            assert_eq!(tree.get(&vec![100, 2]).await?, None);
+            assert_eq!(tree.get(&rb![0, 0]).await?, Some(rb![0, 0]));
+            assert_eq!(tree.get(&rb![100, 1]).await?, Some(rb![100, 1]));
+            assert_eq!(tree.get(&rb![200, 2]).await?, Some(rb![200, 2]));
+            assert_eq!(tree.get(&rb![0, 1]).await?, None);
+            assert_eq!(tree.get(&rb![100, 2]).await?, None);
         }
 
         // Reopening the tree.
@@ -1164,11 +1174,11 @@ mod tests {
                     .await?;
             assert_eq!(*tree.sstable_indices(), vec![5]);
             assert_eq!(tree.write_sstable_index.get(), 6);
-            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
-            assert_eq!(tree.get(&vec![0, 1]).await?, None);
-            assert_eq!(tree.get(&vec![100, 2]).await?, None);
+            assert_eq!(tree.get(&rb![0, 0]).await?, Some(rb![0, 0]));
+            assert_eq!(tree.get(&rb![100, 1]).await?, Some(rb![100, 1]));
+            assert_eq!(tree.get(&rb![200, 2]).await?, Some(rb![200, 2]));
+            assert_eq!(tree.get(&rb![0, 1]).await?, None);
+            assert_eq!(tree.get(&rb![100, 2]).await?, None);
         }
 
         Ok(())
@@ -1232,8 +1242,8 @@ mod tests {
         );
 
         let entries = (0..TREE_CAPACITY)
-            .map(|x| x.to_le_bytes().to_vec())
-            .map(|x| Entry {
+            .map(|x| x.to_le_bytes().to_vec().into())
+            .map(|x: RcBytes| Entry {
                 key: x.clone(),
                 value: EntryValue::new(x),
             })
