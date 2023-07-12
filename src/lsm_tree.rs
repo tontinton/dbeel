@@ -1025,7 +1025,7 @@ mod tests {
         F: Future<Output = T> + 'static,
         T: Send + 'static,
     {
-        let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
+        let builder = LocalExecutorBuilder::new(Placement::Unbound);
         let handle = builder.name("test").spawn(|| async move {
             let dir = tempdir().unwrap().into_path();
             let cache = Rc::new(RefCell::new(PageCache::new(1024, 1024)));
