@@ -1,5 +1,5 @@
 use dbeel::{
-    args::{get_args, Args},
+    args::{parse_args, Args},
     error::{Error, Result},
     gossip::GossipEvent,
     local_shard::LocalShardConnection,
@@ -186,7 +186,7 @@ fn main() -> Result<()> {
     );
     log_builder.try_init().unwrap();
 
-    let args = get_args();
+    let args = parse_args();
 
     let cpu_set = CpuSet::online()?;
     assert!(!cpu_set.is_empty());

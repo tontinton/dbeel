@@ -117,6 +117,6 @@ retransmitting the event again.",
     pub page_cache_size: usize,
 }
 
-pub fn get_args() -> Args {
+pub fn parse_args() -> Args {
     Args::parse()
 }
