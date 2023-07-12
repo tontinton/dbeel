@@ -95,6 +95,7 @@ async fn run_shard(
     args: Args,
     id: usize,
     local_connections: Vec<LocalShardConnection>,
+    is_node_managing: bool,
 ) -> Result<()> {
     info!("Starting shard of id: {}", id);
 
@@ -148,7 +149,7 @@ async fn run_shard(
     ];
 
     // Tasks that only one shard of a node runs.
-    if id == 0 {
+    if is_node_managing {
         tasks.push(spawn_gossip_server_task(my_shard.clone()));
         tasks.push(spawn_failure_detector_task(my_shard.clone()));
 
@@ -161,7 +162,7 @@ async fn run_shard(
     // Await all, returns when first fails, cancels all others.
     try_join_all(tasks).await?;
 
-    if id == 0 {
+    if is_node_managing {
         // Notify all nodes that we are now dead.
         my_shard
             .gossip(GossipEvent::Dead(my_shard.args.name.clone()))
@@ -199,12 +200,15 @@ fn main() -> Result<()> {
     let handles = cpu_set
         .into_iter()
         .map(|x| x.cpu)
-        .map(|cpu| {
+        .enumerate()
+        .map(|(i, cpu)| {
             LocalExecutorBuilder::new(Placement::Fixed(cpu))
                 .name(format!("executor({})", cpu).as_str())
                 .spawn(enclose!((local_connections.clone() => connections,
                                 args.clone() => args) move || async move {
-                    if let Err(e) = run_shard(args, cpu, connections).await {
+                    if let Err(e) =
+                        run_shard(args, cpu, connections, i == 0).await
+                    {
                         error!("Failed to start shard {}: {}", cpu, e);
                     }
                 }))
