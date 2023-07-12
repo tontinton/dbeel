@@ -8,6 +8,7 @@ pub mod messages;
 pub mod page_cache;
 pub mod read_exactly;
 pub mod remote_shard_connection;
+pub mod run_shard;
 pub mod shards;
 pub mod tasks;
 pub mod timeout;
