@@ -88,30 +88,15 @@ pub async fn run_shard(
     is_node_managing: bool,
 ) -> Result<()> {
     info!("Starting shard of id: {}", my_shard.id);
-
     discover_collections(&my_shard).await?;
-
-    // Start listening for other shards messages to be able to receive
-    // responses to requests, for example receiving all remote shards from the
-    // seed nodes.
-    let remote_shard_server_task =
-        spawn_remote_shard_server_task(my_shard.clone());
-
     discover_nodes(&my_shard).await?;
-
-    let shard_messages_receiver_task =
-        spawn_local_shard_server_task(my_shard.clone());
-
-    let compaction_task = spawn_compaction_task(my_shard.clone());
-
-    let server_task = spawn_db_server(my_shard.clone());
 
     // Tasks that all shards run.
     let mut tasks = vec![
-        remote_shard_server_task,
-        shard_messages_receiver_task,
-        compaction_task,
-        server_task,
+        spawn_remote_shard_server_task(my_shard.clone()),
+        spawn_local_shard_server_task(my_shard.clone()),
+        spawn_compaction_task(my_shard.clone()),
+        spawn_db_server(my_shard.clone()),
     ];
 
     // Tasks that only one shard of a node runs.
