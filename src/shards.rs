@@ -70,38 +70,38 @@ impl OtherShard {
     }
 }
 
-// Holder of state to the shard running on the current thread.
-// To share the state between all coroutines, async methods get Rc<Self>.
+/// Holder of state to the shard running on the current thread.
+/// To share the state between all coroutines, async methods get Rc<Self>.
 pub struct MyShard {
-    // Input config from the user.
+    /// Input config from the user.
     pub args: Args,
 
-    // Current shard's cpu id.
+    /// Current shard's cpu id.
     pub id: usize,
 
-    // Shard unique name, if you want the node unique name, it's in args.name.
+    /// Shard unique name, if you want the node unique name, it's in args.name.
     pub shard_name: String,
 
-    // The shard's hash.
+    /// The shard's hash.
     pub hash: u32,
 
-    // The consistent hash ring (shards sorted by hash).
-    // Starts with the first hash that has a greaater hash than our shard.
+    /// The consistent hash ring (shards sorted by hash).
+    /// Starts with the first hash that has a greaater hash than our shard.
     pub shards: RefCell<Vec<OtherShard>>,
 
-    // All known nodes other than this node, key is node unique name.
+    /// All known nodes other than this node, key is node unique name.
     pub nodes: RefCell<HashMap<String, NodeMetadata>>,
 
-    // Holds the counts of gossip requests.
+    /// Holds the counts of gossip requests.
     pub gossip_requests: RefCell<HashMap<(String, TypeId), u8>>,
 
-    // Collections to the lsm tree on disk.
+    /// Collections to the lsm tree on disk.
     pub trees: RefCell<HashMap<String, Rc<LSMTree>>>,
 
-    // The shard's page cache.
+    /// The shard's page cache.
     cache: Rc<RefCell<PageCache<FileId>>>,
 
-    // The packet receiver from other local shards.
+    /// The packet receiver from other local shards.
     pub local_shards_packet_receiver: Receiver<ShardPacket>,
 }
 
