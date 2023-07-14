@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
+use async_channel::Receiver;
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
 use glommio::net::UdpSocket;
@@ -99,6 +100,9 @@ pub struct MyShard {
 
     // The shard's page cache.
     cache: Rc<RefCell<PageCache<FileId>>>,
+
+    // The packet receiver from other local shards.
+    pub local_shards_packet_receiver: Receiver<ShardPacket>,
 }
 
 impl MyShard {
@@ -107,6 +111,7 @@ impl MyShard {
         id: usize,
         shards: Vec<OtherShard>,
         cache: PageCache<FileId>,
+        local_shards_packet_receiver: Receiver<ShardPacket>,
     ) -> Self {
         let shard_name = format!("{}-{}", args.name, id);
         let hash =
@@ -122,6 +127,7 @@ impl MyShard {
             gossip_requests: RefCell::new(HashMap::new()),
             trees: RefCell::new(HashMap::new()),
             cache: Rc::new(RefCell::new(cache)),
+            local_shards_packet_receiver,
         }
     }
 

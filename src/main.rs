@@ -2,7 +2,7 @@ use dbeel::{
     args::parse_args,
     error::{Error, Result},
     local_shard::LocalShardConnection,
-    run_shard::run_shard,
+    run_shard::{create_shard, run_shard},
 };
 use glommio::{enclose, CpuSet, LocalExecutorBuilder, Placement};
 use pretty_env_logger::formatted_timed_builder;
@@ -48,9 +48,8 @@ fn main() -> Result<()> {
                 .name(format!("executor({})", cpu).as_str())
                 .spawn(enclose!((local_connections.clone() => connections,
                                 args.clone() => args) move || async move {
-                    if let Err(e) =
-                        run_shard(args, cpu, connections, i == 0).await
-                    {
+                    let shard = create_shard(args, cpu, connections);
+                    if let Err(e) = run_shard(shard, i == 0).await {
                         error!("Failed to start shard {}: {}", cpu, e);
                     }
                 }))

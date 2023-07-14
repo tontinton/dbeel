@@ -84,36 +84,10 @@ async fn discover_nodes(my_shard: &MyShard) -> Result<()> {
 }
 
 pub async fn run_shard(
-    args: Args,
-    id: usize,
-    local_connections: Vec<LocalShardConnection>,
+    my_shard: Rc<MyShard>,
     is_node_managing: bool,
 ) -> Result<()> {
-    info!("Starting shard of id: {}", id);
-
-    let receiver = local_connections
-        .iter()
-        .filter(|c| c.id == id)
-        .map(|c| c.receiver.clone())
-        .next()
-        .unwrap();
-
-    let shard_name = format!("{}-{}", args.name, id);
-    let shards = local_connections
-        .into_iter()
-        .map(|c| {
-            OtherShard::new(
-                args.name.clone(),
-                shard_name.clone(),
-                ShardConnection::Local(c),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let cache_len = args.page_cache_size / PAGE_SIZE / shards.len();
-    let cache = PageCache::new(cache_len, cache_len / 16);
-
-    let my_shard = Rc::new(MyShard::new(args, id, shards, cache));
+    info!("Starting shard of id: {}", my_shard.id);
 
     discover_collections(&my_shard).await?;
 
@@ -126,7 +100,7 @@ pub async fn run_shard(
     discover_nodes(&my_shard).await?;
 
     let shard_messages_receiver_task =
-        spawn_local_shard_server_task(my_shard.clone(), receiver);
+        spawn_local_shard_server_task(my_shard.clone());
 
     let compaction_task = spawn_compaction_task(my_shard.clone());
 
@@ -162,4 +136,34 @@ pub async fn run_shard(
     }
 
     Ok(())
+}
+
+pub fn create_shard(
+    args: Args,
+    id: usize,
+    local_connections: Vec<LocalShardConnection>,
+) -> Rc<MyShard> {
+    let receiver = local_connections
+        .iter()
+        .filter(|c| c.id == id)
+        .map(|c| c.receiver.clone())
+        .next()
+        .unwrap();
+
+    let shard_name = format!("{}-{}", args.name, id);
+    let shards = local_connections
+        .into_iter()
+        .map(|c| {
+            OtherShard::new(
+                args.name.clone(),
+                shard_name.clone(),
+                ShardConnection::Local(c),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let cache_len = args.page_cache_size / PAGE_SIZE / shards.len();
+    let cache = PageCache::new(cache_len, cache_len / 16);
+
+    Rc::new(MyShard::new(args, id, shards, cache, receiver))
 }
