@@ -1,13 +1,21 @@
+use std::sync::Once;
+
 use dbeel::{
     args::{parse_args_from, Args},
     error::Result,
 };
 use dbeel_client::create_collection;
 use rstest::{fixture, rstest};
-use test_utils::test_shard;
+use test_utils::{install_logger, test_shard};
+
+static ONCE: Once = Once::new();
 
 #[fixture]
 fn args() -> Args {
+    ONCE.call_once(|| {
+        install_logger();
+    });
+
     // Remove the test directory if it exists.
     let _ = std::fs::remove_dir("/tmp/test");
     parse_args_from(["", "--dir", "/tmp/test"])
