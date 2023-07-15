@@ -14,6 +14,7 @@ use rand::seq::IteratorRandom;
 use rand::thread_rng;
 use regex::Regex;
 
+use crate::flow_events::FlowEvent;
 use crate::gossip::{serialize_gossip_message, GossipEvent, GossipMessage};
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
 use crate::utils::get_first_capture;
@@ -490,7 +491,7 @@ impl MyShard {
         Ok(())
     }
 
-    pub fn handle_dead_node(&self, node_name: &String) {
+    pub async fn handle_dead_node(&self, node_name: &String) {
         self.nodes.borrow_mut().remove(node_name);
         trace!(
             "After death: holding {} number of nodes",
@@ -499,6 +500,8 @@ impl MyShard {
         self.shards
             .borrow_mut()
             .retain(|shard| &shard.node_name != node_name);
+        self.notify_flow_event(FlowEvent::DeadNodeRemoved.into())
+            .await;
     }
 
     pub async fn handle_gossip_event(
@@ -529,7 +532,7 @@ impl MyShard {
                         .await?;
                     true
                 } else {
-                    self.handle_dead_node(&node_name);
+                    self.handle_dead_node(&node_name).await;
                     false
                 }
             }

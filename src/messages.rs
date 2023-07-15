@@ -18,7 +18,7 @@ pub enum ShardRequest {
     Get(String, Vec<u8>),
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct NodeMetadata {
     pub name: String,
     pub ip: String,

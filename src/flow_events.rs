@@ -3,6 +3,7 @@
 /// Useful for integration test to never sleep.
 pub enum FlowEvent {
     StartTasks = 0,
+    DeadNodeRemoved = 1,
 }
 
 impl From<FlowEvent> for u8 {
