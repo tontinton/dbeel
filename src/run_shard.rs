@@ -125,6 +125,8 @@ pub async fn run_shard(
             .await?;
     }
 
+    info!("Exiting shard of id: {}", my_shard.id);
+
     Ok(())
 }
 
