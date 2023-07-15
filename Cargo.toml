@@ -37,3 +37,4 @@ ctor = "0.2.3"
 tempfile = "3.4.0"
 test_utils = { path = "test_utils" }
 dbeel_client = { path = "dbeel_client" }
+rstest = "0.18.1"
