@@ -4,7 +4,7 @@ use dbeel::{
 };
 use dbeel_client::create_collection;
 use rstest::{fixture, rstest};
-use test_utils::test_shard_with_args;
+use test_utils::test_shard;
 
 #[fixture]
 fn args() -> Args {
@@ -15,14 +15,14 @@ fn args() -> Args {
 
 #[rstest]
 fn clean_state(args: Args) -> Result<()> {
-    test_shard_with_args(args, |shard| async move {
+    test_shard(args, |shard| async move {
         assert!(shard.trees.borrow().is_empty());
     })
 }
 
 #[rstest]
 fn find_collections_after_rerun(args: Args) -> Result<()> {
-    test_shard_with_args(args.clone(), |shard| async move {
+    test_shard(args.clone(), |shard| async move {
         create_collection("test", &(shard.args.ip.clone(), shard.args.port))
             .await
             .unwrap();
@@ -31,7 +31,7 @@ fn find_collections_after_rerun(args: Args) -> Result<()> {
         assert!(shard.trees.borrow().get(&"test".to_string()).is_some());
     })?;
 
-    test_shard_with_args(args.clone(), |shard| async move {
+    test_shard(args, |shard| async move {
         assert_eq!(shard.trees.borrow().len(), 1);
         assert!(shard.trees.borrow().get(&"test".to_string()).is_some());
     })?;

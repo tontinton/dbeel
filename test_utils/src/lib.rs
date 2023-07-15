@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use dbeel::{
-    args::{parse_args_from, Args},
+    args::Args,
     error::Result,
     flow_events::FlowEvent,
     local_shard::LocalShardConnection,
@@ -11,7 +11,7 @@ use dbeel::{
 use futures_lite::Future;
 use glommio::{enclose, spawn_local, LocalExecutorBuilder, Placement};
 
-pub fn test_shard_with_args<G, F, T>(args: Args, test_future: G) -> Result<()>
+pub fn test_shard<G, F, T>(args: Args, test_future: G) -> Result<()>
 where
     G: FnOnce(Rc<MyShard>) -> F + Send + 'static,
     F: Future<Output = T> + 'static,
@@ -37,13 +37,4 @@ where
     })?;
     handle.join()?;
     Ok(())
-}
-
-pub fn test_shard<G, F, T>(test_future: G) -> Result<()>
-where
-    G: FnOnce(Rc<MyShard>) -> F + Send + 'static,
-    F: Future<Output = T> + 'static,
-    T: Send + 'static,
-{
-    test_shard_with_args(parse_args_from([""]), test_future)
 }
