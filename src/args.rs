@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -119,4 +121,12 @@ retransmitting the event again.",
 
 pub fn parse_args() -> Args {
     Args::parse()
+}
+
+pub fn parse_args_from<I, T>(itr: I) -> Args
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    Args::parse_from(itr)
 }
