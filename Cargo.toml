@@ -35,3 +35,4 @@ wtinylfu = "0.1.0"
 color-backtrace = "0.5.1"
 ctor = "0.2.3"
 tempfile = "3.4.0"
+test_utils = { path = "test_utils" }
