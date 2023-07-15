@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
-use async_channel::Receiver;
+use async_channel::{Receiver, Sender};
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
 use glommio::net::UdpSocket;
@@ -103,6 +103,9 @@ pub struct MyShard {
 
     /// The packet receiver from other local shards.
     pub local_shards_packet_receiver: Receiver<ShardPacket>,
+
+    /// All registered flow event listeners (key is flow event type).
+    flow_event_listeners: RefCell<HashMap<u8, Vec<Sender<()>>>>,
 }
 
 impl MyShard {
@@ -128,6 +131,7 @@ impl MyShard {
             trees: RefCell::new(HashMap::new()),
             cache: Rc::new(RefCell::new(cache)),
             local_shards_packet_receiver,
+            flow_event_listeners: RefCell::new(HashMap::new()),
         }
     }
 
@@ -533,5 +537,23 @@ impl MyShard {
         };
 
         Ok(sent_event)
+    }
+
+    pub fn subscribe_to_flow_event(&self, event: u8) -> Receiver<()> {
+        let (sender, receiver) = async_channel::bounded(1);
+        self.flow_event_listeners
+            .borrow_mut()
+            .entry(event)
+            .or_insert(vec![])
+            .push(sender);
+        receiver
+    }
+
+    pub async fn notify_flow_event(&self, event: u8) {
+        let maybe_removed =
+            self.flow_event_listeners.borrow_mut().remove(&event);
+        if let Some(senders) = maybe_removed {
+            join_all(senders.iter().map(|s| s.send(()))).await;
+        }
     }
 }

@@ -1,6 +1,7 @@
 use crate::{
     args::Args,
     error::{Error, Result},
+    flow_events::FlowEvent,
     gossip::GossipEvent,
     local_shard::LocalShardConnection,
     messages::NodeMetadata,
@@ -109,6 +110,10 @@ pub async fn run_shard(
             .gossip(GossipEvent::Alive(my_shard.get_node_metadata()))
             .await?;
     }
+
+    my_shard
+        .notify_flow_event(FlowEvent::StartTasks.into())
+        .await;
 
     // Await all, returns when first fails, cancels all others.
     try_join_all(tasks).await?;
