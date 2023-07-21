@@ -17,7 +17,7 @@ fn args() -> Args {
     });
 
     // Remove the test directory if it exists.
-    let _ = std::fs::remove_dir("/tmp/test");
+    let _ = std::fs::remove_dir_all("/tmp/test");
     parse_args_from(["", "--dir", "/tmp/test"])
 }
 
