@@ -10,15 +10,20 @@ pub struct LocalShardConnection {
     pub id: usize,
     pub sender: Sender<ShardPacket>,
     pub receiver: Receiver<ShardPacket>,
+    pub stop_sender: Sender<()>,
+    pub stop_receiver: Receiver<()>,
 }
 
 impl LocalShardConnection {
     pub fn new(id: usize) -> Self {
         let (sender, receiver) = async_channel::unbounded();
+        let (stop_sender, stop_receiver) = async_channel::bounded(1);
         Self {
             id,
             sender,
             receiver,
+            stop_sender,
+            stop_receiver,
         }
     }
 

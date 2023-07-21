@@ -107,6 +107,12 @@ pub struct MyShard {
 
     /// All registered flow event listeners (key is flow event type).
     flow_event_listeners: RefCell<HashMap<u8, Vec<Sender<()>>>>,
+
+    /// An event receiver to stop the shard from running.
+    pub stop_receiver: Receiver<()>,
+
+    /// An event sender to stop the shard from running.
+    stop_sender: Sender<()>,
 }
 
 impl MyShard {
@@ -116,6 +122,8 @@ impl MyShard {
         shards: Vec<OtherShard>,
         cache: PageCache<FileId>,
         local_shards_packet_receiver: Receiver<ShardPacket>,
+        stop_receiver: Receiver<()>,
+        stop_sender: Sender<()>,
     ) -> Self {
         let shard_name = format!("{}-{}", args.name, id);
         let hash =
@@ -133,7 +141,14 @@ impl MyShard {
             cache: Rc::new(RefCell::new(cache)),
             local_shards_packet_receiver,
             flow_event_listeners: RefCell::new(HashMap::new()),
+            stop_receiver,
+            stop_sender,
         }
+    }
+
+    pub async fn stop(&self) -> Result<()> {
+        self.stop_sender.send(()).await?;
+        Ok(())
     }
 
     pub fn get_collection(&self, name: &String) -> Result<Rc<LSMTree>> {
@@ -196,6 +211,22 @@ impl MyShard {
             .ok_or_else(|| Error::CollectionNotFound(name.clone()))?
             .purge()?;
         Ok(())
+    }
+
+    pub fn try_to_stop_local_shards(&self) {
+        let senders = self
+            .shards
+            .borrow()
+            .iter()
+            .flat_map(|p| match &p.connection {
+                ShardConnection::Local(c) => Some(c.stop_sender.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for sender in senders {
+            let _ = sender.try_send(());
+        }
     }
 
     pub async fn broadcast_message_to_local_shards(

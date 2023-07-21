@@ -24,9 +24,13 @@ pub enum Error {
     ShardReceiverError(#[from] RecvError),
     #[error(transparent)]
     ShardPacketSenderError(#[from] SendError<ShardPacket>),
+    #[error(transparent)]
+    ShardEmptySenderError(#[from] SendError<()>),
 
     #[error("timed out")]
     Timeout,
+    #[error("shard stopped")]
+    ShardStopped,
 
     #[error("response type not expected")]
     ResponseWrongType,

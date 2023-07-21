@@ -109,10 +109,14 @@ where
         wait_for_flow_events(start_event_receivers).await.unwrap();
 
         // Test start
-        test_future(node_shard, shards).await;
+        test_future(node_shard.clone(), shards.clone()).await;
         // Test end
 
-        shard_run_handle.cancel().await;
+        node_shard.stop().await.unwrap();
+        for s in shards {
+            s.stop().await.unwrap();
+        }
+        shard_run_handle.await;
     })?;
 
     Ok(handle)

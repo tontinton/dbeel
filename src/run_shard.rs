@@ -14,6 +14,7 @@ use crate::{
         gossip_server::spawn_gossip_server_task,
         local_shard_server::spawn_local_shard_server_task,
         remote_shard_server::spawn_remote_shard_server_task,
+        stop_event_waiter::spawn_stop_event_waiter_task,
     },
 };
 use futures::future::try_join_all;
@@ -98,6 +99,7 @@ pub async fn run_shard(
         spawn_local_shard_server_task(my_shard.clone()),
         spawn_compaction_task(my_shard.clone()),
         spawn_db_server(my_shard.clone()),
+        spawn_stop_event_waiter_task(my_shard.clone()),
     ];
 
     // Tasks that only one shard of a node runs.
@@ -116,7 +118,13 @@ pub async fn run_shard(
         .await;
 
     // Await all, returns when first fails, cancels all others.
-    try_join_all(tasks).await?;
+    let result = try_join_all(tasks).await;
+
+    if matches!(result, Err(Error::ShardStopped)) {
+        trace!("Shard of id {} got stopped", my_shard.id);
+    }
+
+    my_shard.try_to_stop_local_shards();
 
     if is_node_managing {
         // Notify all nodes that we are now dead.
@@ -127,6 +135,10 @@ pub async fn run_shard(
 
     info!("Exiting shard of id: {}", my_shard.id);
 
+    if !matches!(result, Err(Error::ShardStopped)) {
+        result?;
+    }
+
     Ok(())
 }
 
@@ -135,10 +147,16 @@ pub fn create_shard(
     id: usize,
     local_connections: Vec<LocalShardConnection>,
 ) -> Rc<MyShard> {
-    let receiver = local_connections
+    let (receiver, stop_receiver, stop_sender) = local_connections
         .iter()
         .filter(|c| c.id == id)
-        .map(|c| c.receiver.clone())
+        .map(|c| {
+            (
+                c.receiver.clone(),
+                c.stop_receiver.clone(),
+                c.stop_sender.clone(),
+            )
+        })
         .next()
         .unwrap();
 
@@ -157,5 +175,13 @@ pub fn create_shard(
     let cache_len = args.page_cache_size / PAGE_SIZE / shards.len();
     let cache = PageCache::new(cache_len, cache_len / 16);
 
-    Rc::new(MyShard::new(args, id, shards, cache, receiver))
+    Rc::new(MyShard::new(
+        args,
+        id,
+        shards,
+        cache,
+        receiver,
+        stop_receiver,
+        stop_sender,
+    ))
 }
