@@ -5,8 +5,11 @@ use log::{error, info};
 use rand::{seq::IteratorRandom, thread_rng};
 
 use crate::{
-    error::Result, gossip::GossipEvent,
-    remote_shard_connection::RemoteShardConnection, shards::MyShard,
+    error::Result,
+    gossip::GossipEvent,
+    messages::{ShardEvent, ShardMessage},
+    remote_shard_connection::RemoteShardConnection,
+    shards::MyShard,
 };
 
 async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
@@ -43,8 +46,22 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
                 connection.address, e
             );
 
-            if let Err(e) = my_shard.gossip(GossipEvent::Dead(node.name)).await
+            let gossip_event = GossipEvent::Dead(node.name);
+
+            if let Err(e) = my_shard
+                .clone()
+                .broadcast_message_to_local_shards(&ShardMessage::Event(
+                    ShardEvent::Gossip(gossip_event.clone()),
+                ))
+                .await
             {
+                error!(
+                    "Failed to broadcast to local shards, node death event: {}",
+                    e
+                );
+            }
+
+            if let Err(e) = my_shard.gossip(gossip_event).await {
                 error!("Failed to gossip node death event: {}", e);
             }
         }
