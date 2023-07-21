@@ -14,6 +14,15 @@ pub enum GossipEvent {
     Dead(String),
 }
 
+impl From<&GossipEvent> for u8 {
+    fn from(value: &GossipEvent) -> Self {
+        match value {
+            GossipEvent::Alive(_) => 0,
+            GossipEvent::Dead(_) => 1,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct GossipMessage {
     pub source: String,

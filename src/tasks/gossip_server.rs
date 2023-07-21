@@ -1,4 +1,4 @@
-use std::{any::Any, rc::Rc, time::Duration};
+use std::{rc::Rc, time::Duration};
 
 use glommio::{enclose, net::UdpSocket, spawn_local, timer::sleep, Task};
 use log::{error, trace};
@@ -23,7 +23,7 @@ async fn handle_gossip_packet(
     let seen_first_time = {
         let mut requests = my_shard.gossip_requests.borrow_mut();
         let seen_count = requests
-            .entry((message.source.clone(), message.event.type_id()))
+            .entry((message.source.clone(), (&message.event).into()))
             .or_insert(0);
 
         if *seen_count >= my_shard.args.gossip_max_seen_count {
@@ -34,7 +34,7 @@ async fn handle_gossip_packet(
                         my_shard
                             .gossip_requests
                             .borrow_mut()
-                            .remove(&(message.source, message.event.type_id()));
+                            .remove(&(message.source, (&message.event).into()));
                     }),
                 )
                 .detach();

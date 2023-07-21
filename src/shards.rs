@@ -1,4 +1,4 @@
-use std::any::{Any, TypeId};
+use std::any::Any;
 use std::collections::HashSet;
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
@@ -94,7 +94,7 @@ pub struct MyShard {
     pub nodes: RefCell<HashMap<String, NodeMetadata>>,
 
     /// Holds the counts of gossip requests.
-    pub gossip_requests: RefCell<HashMap<(String, TypeId), u8>>,
+    pub gossip_requests: RefCell<HashMap<(String, u8), u8>>,
 
     /// Collections to the lsm tree on disk.
     pub trees: RefCell<HashMap<String, Rc<LSMTree>>>,
