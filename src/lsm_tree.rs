@@ -1254,7 +1254,7 @@ mod tests {
         let cache_pages = (0..data_written).step_by(PAGE_SIZE).map(|address| {
             test_partition_cache
                 .get((DATA_FILE_EXT, 0), address as u64)
-                .expect(format!("No cache on address: {}", address).as_str())
+                .unwrap_or_else(|| panic!("No cache on address: {}", address))
         });
 
         for (cache_page, chunk) in
@@ -1267,9 +1267,9 @@ mod tests {
             (0..index_written).step_by(PAGE_SIZE).map(|address| {
                 test_partition_cache
                     .get((INDEX_FILE_EXT, 0), address as u64)
-                    .expect(
-                        format!("No cache on address: {}", address).as_str(),
-                    )
+                    .unwrap_or_else(|| {
+                        panic!("No cache on address: {}", address)
+                    })
             });
 
         for (cache_page, chunk) in
