@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{error::Result, messages::NodeMetadata};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GossipEvent {
     Alive(NodeMetadata),
     Dead(String),

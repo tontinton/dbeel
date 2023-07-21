@@ -4,7 +4,10 @@ use glommio::{enclose, net::UdpSocket, spawn_local, timer::sleep, Task};
 use log::{error, trace};
 
 use crate::{
-    error::Result, gossip::deserialize_gossip_message, shards::MyShard,
+    error::Result,
+    gossip::deserialize_gossip_message,
+    messages::{ShardEvent, ShardMessage},
+    shards::MyShard,
 };
 
 const UDP_PACKET_BUFFER_SIZE: usize = 65536;
@@ -46,6 +49,12 @@ async fn handle_gossip_packet(
 
     let continue_with_gossip = if seen_first_time {
         trace!("Gossip: {:?}", message.event);
+        my_shard
+            .clone()
+            .broadcast_message_to_local_shards(&ShardMessage::Event(
+                ShardEvent::Gossip(message.event.clone()),
+            ))
+            .await?;
         my_shard.handle_gossip_event(message.event).await?
     } else {
         true

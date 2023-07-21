@@ -319,6 +319,9 @@ impl MyShard {
                     }
                 }
             }
+            ShardEvent::Gossip(event) => {
+                self.handle_gossip_event(event).await?;
+            }
         };
 
         Ok(())

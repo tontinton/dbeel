@@ -1,12 +1,13 @@
 use async_channel::Sender;
 use serde::{Deserialize, Serialize};
 
-use crate::lsm_tree::EntryValue;
+use crate::{gossip::GossipEvent, lsm_tree::EntryValue};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
     CreateCollection(String),
     DropCollection(String),
+    Gossip(GossipEvent),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
