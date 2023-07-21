@@ -4,18 +4,29 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
-#[proc_macro_derive(ToU8)]
-pub fn to_u8(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(EnumToNum)]
+pub fn enum_to_num(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let name = &input.ident;
     let variants = if let syn::Data::Enum(data_enum) = &input.data {
         &data_enum.variants
     } else {
-        panic!("ToU8 can only be derived for enums.");
+        panic!("EnumToNum can only be derived for enums.");
     };
 
     let has_values = variants.iter().any(|v| !v.fields.is_empty());
+
+    let to_type = match variants.len() {
+        0..=255 => quote! {u8},
+        256..=65535 => quote! {u16},
+        65536..=4294967295 => quote! {u32},
+        _ => panic!(
+            "Whoah there cowboy, how did you manage to get {} values in {}?",
+            variants.len(),
+            name
+        ),
+    };
 
     let arms = variants.iter().enumerate().map(|(index, variant)| {
         let variant_name = &variant.ident;
@@ -34,7 +45,7 @@ pub fn to_u8(input: TokenStream) -> TokenStream {
     let arms_cloned = arms.clone();
 
     let mut expanded = quote! {
-        impl From<&#name> for u8 {
+        impl From<&#name> for #to_type {
             fn from(value: &#name) -> Self {
                 match value {
                     #(#arms)*
@@ -47,7 +58,7 @@ pub fn to_u8(input: TokenStream) -> TokenStream {
         expanded = quote! {
             #expanded
 
-            impl From<#name> for u8 {
+            impl From<#name> for #to_type {
                 fn from(value: #name) -> Self {
                     match value {
                         #(#arms_cloned)*

@@ -4,12 +4,12 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
-use enum_to_num::ToU8;
+use enum_to_num::EnumToNum;
 use serde::{Deserialize, Serialize};
 
 use crate::{error::Result, messages::NodeMetadata};
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToU8)]
+#[derive(Serialize, Deserialize, Debug, Clone, EnumToNum)]
 pub enum GossipEvent {
     Alive(NodeMetadata),
     Dead(String),
