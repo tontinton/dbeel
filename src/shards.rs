@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
@@ -337,15 +336,17 @@ impl MyShard {
         // All events should be idempotent.
         match event {
             ShardEvent::CreateCollection(name) => {
-                if let Err(e) = self.create_collection(name).await {
-                    if e.type_id() != Error::CollectionAlreadyExists.type_id() {
+                match self.create_collection(name).await {
+                    Ok(()) | Err(Error::CollectionAlreadyExists(_)) => {}
+                    Err(e) => {
                         return Err(e);
                     }
                 }
             }
             ShardEvent::DropCollection(name) => {
-                if let Err(e) = self.drop_collection(&name) {
-                    if e.type_id() != Error::CollectionNotFound.type_id() {
+                match self.drop_collection(&name) {
+                    Ok(()) | Err(Error::CollectionNotFound(_)) => {}
+                    Err(e) => {
                         return Err(e);
                     }
                 }
