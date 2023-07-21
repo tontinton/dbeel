@@ -7,7 +7,10 @@ use dbeel::{
     messages::NodeMetadata,
 };
 use rstest::{fixture, rstest};
-use test_utils::{install_logger, test_node, test_shard};
+use test_utils::{
+    install_logger, subscribe_to_flow_events, test_node, test_shard,
+    wait_for_flow_events,
+};
 
 static ONCE: Once = Once::new();
 
@@ -50,13 +53,25 @@ fn find_nodes(args: Args) -> Result<()> {
     let mut second_args = args.clone();
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
     let (second_up_sender, second_up_receiver) = async_channel::bounded(1);
+    let (first_test_done_sender, first_test_done_receiver) =
+        async_channel::bounded(1);
 
     let first_handle = test_node(
         number_of_shards_first_node.into(),
         args.clone(),
-        move |node_shard, _| async move {
-            let second_dead_event = node_shard
-                .subscribe_to_flow_event(FlowEvent::DeadNodeRemoved.into());
+        move |node_shard, other_shards| async move {
+            let mut all_shards = other_shards.clone();
+            all_shards.push(node_shard.clone());
+
+            let other_shards_alive_node_gossip_events =
+                subscribe_to_flow_events(
+                    &other_shards,
+                    FlowEvent::AliveNodeGossip,
+                );
+            let all_second_node_dead_events = subscribe_to_flow_events(
+                &all_shards,
+                FlowEvent::DeadNodeRemoved,
+            );
 
             seed_sender
                 .send(vec![format!(
@@ -66,14 +81,30 @@ fn find_nodes(args: Args) -> Result<()> {
                 )])
                 .await
                 .unwrap();
-            let second_args: Args = second_up_receiver.recv().await.unwrap();
-            assert_eq!(node_shard.nodes.borrow().len(), 1);
-            assert_eq!(
-                node_shard.nodes.borrow().get(&second_args.name).unwrap(),
-                &create_metadata_from_args(second_args, 1)
-            );
-            second_dead_event.recv().await.unwrap();
-            assert!(node_shard.nodes.borrow().is_empty());
+
+            let second_args = second_up_receiver.recv().await.unwrap();
+            wait_for_flow_events(other_shards_alive_node_gossip_events)
+                .await
+                .unwrap();
+
+            let second_node = create_metadata_from_args(second_args, 1);
+
+            for shard in &all_shards {
+                assert_eq!(shard.nodes.borrow().len(), 1);
+                assert_eq!(
+                    shard.nodes.borrow().get(&second_node.name).unwrap(),
+                    &second_node
+                );
+            }
+
+            first_test_done_sender.send(()).await.unwrap();
+            wait_for_flow_events(all_second_node_dead_events)
+                .await
+                .unwrap();
+
+            for shard in &all_shards {
+                assert!(shard.nodes.borrow().is_empty());
+            }
         },
     )?;
 
@@ -92,6 +123,7 @@ fn find_nodes(args: Args) -> Result<()> {
                 node_shard.nodes.borrow().get(&args.name).unwrap(),
                 &create_metadata_from_args(args, number_of_shards_first_node)
             );
+            first_test_done_receiver.recv().await.unwrap();
         })?;
 
     second_handle.join()?;

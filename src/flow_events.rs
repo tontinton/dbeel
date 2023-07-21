@@ -4,6 +4,7 @@
 pub enum FlowEvent {
     StartTasks = 0,
     DeadNodeRemoved = 1,
+    AliveNodeGossip = 2,
 }
 
 impl From<FlowEvent> for u8 {

@@ -524,6 +524,8 @@ impl MyShard {
                     self.nodes.borrow().len()
                 );
                 self.add_shards_of_nodes(vec![node]);
+                self.notify_flow_event(FlowEvent::AliveNodeGossip.into())
+                    .await;
                 false
             }
             GossipEvent::Dead(node_name) => {

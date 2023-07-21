@@ -9,6 +9,7 @@ use dbeel::{
     shards::MyShard,
 };
 
+use async_channel::Receiver;
 use futures::future::try_join_all;
 use futures_lite::Future;
 use glommio::{
@@ -20,6 +21,24 @@ pub fn install_logger() {
     let mut log_builder = formatted_timed_builder();
     log_builder.parse_filters("trace");
     log_builder.try_init().unwrap();
+}
+
+pub fn subscribe_to_flow_events(
+    shards: &Vec<Rc<MyShard>>,
+    event: FlowEvent,
+) -> Vec<Receiver<()>> {
+    let event_id = event.into();
+    shards
+        .iter()
+        .map(|s| s.subscribe_to_flow_event(event_id))
+        .collect::<Vec<_>>()
+}
+
+pub async fn wait_for_flow_events(receivers: Vec<Receiver<()>>) -> Result<()> {
+    for receiver in receivers {
+        receiver.recv().await?;
+    }
+    Ok(())
 }
 
 pub fn test_shard<G, F, T>(args: Args, test_future: G) -> Result<()>
