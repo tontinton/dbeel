@@ -24,7 +24,7 @@ pub fn install_logger() {
 }
 
 pub fn subscribe_to_flow_events(
-    shards: &Vec<Rc<MyShard>>,
+    shards: &[Rc<MyShard>],
     event: FlowEvent,
 ) -> Vec<Receiver<()>> {
     let event_id = event.into();
