@@ -688,6 +688,7 @@ dependencies = [
  "color-backtrace",
  "ctor",
  "dbeel_client",
+ "enum_to_num",
  "futures",
  "futures-lite",
  "glommio",
@@ -883,6 +884,14 @@ dependencies = [
  "num-traits",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "enum_to_num"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.27",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ authors = ["Tony Solomonik"]
 async-channel = "1.8.0"
 bincode = "1.3.3"
 clap = { version = "4.2.7", features = ["derive"] }
+enum_to_num = { path = "enum_to_num" }
 futures = "0.3.28"
 futures-lite = "1.12.0"
 glommio = "0.8.0"

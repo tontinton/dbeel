@@ -4,23 +4,15 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
+use enum_to_num::ToU8;
 use serde::{Deserialize, Serialize};
 
 use crate::{error::Result, messages::NodeMetadata};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToU8)]
 pub enum GossipEvent {
     Alive(NodeMetadata),
     Dead(String),
-}
-
-impl From<&GossipEvent> for u8 {
-    fn from(value: &GossipEvent) -> Self {
-        match value {
-            GossipEvent::Alive(_) => 0,
-            GossipEvent::Dead(_) => 1,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize)]

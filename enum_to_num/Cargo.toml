@@ -1,0 +1,13 @@
+[package]
+name = "enum_to_num"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0.31"
+syn = "2.0.27"
