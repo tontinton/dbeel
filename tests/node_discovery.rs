@@ -22,7 +22,6 @@ fn create_metadata_from_args(
         name: args.name,
         ip: args.ip,
         shard_ports: (0..number_of_shards)
-            .into_iter()
             .map(|x| x + args.remote_shard_port)
             .collect::<Vec<_>>(),
         gossip_port: args.gossip_port,
