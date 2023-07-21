@@ -35,9 +35,7 @@ pub fn subscribe_to_flow_events(
 }
 
 pub async fn wait_for_flow_events(receivers: Vec<Receiver<()>>) -> Result<()> {
-    for receiver in receivers {
-        receiver.recv().await?;
-    }
+    try_join_all(receivers.iter().map(|receiver| receiver.recv())).await?;
     Ok(())
 }
 
@@ -94,10 +92,8 @@ where
             .rev()
             .collect::<Vec<_>>();
 
-        let start_event_receivers = shards
-            .iter()
-            .map(|s| s.subscribe_to_flow_event(FlowEvent::StartTasks.into()))
-            .collect::<Vec<_>>();
+        let start_event_receivers =
+            subscribe_to_flow_events(&shards, FlowEvent::StartTasks);
 
         let node_shard = shards.pop().unwrap();
         let shard_run_handle =
@@ -110,11 +106,7 @@ where
                     .map(|shard| run_shard(shard, false)));
                 try_join_all(futures).await.unwrap();
             }));
-        try_join_all(
-            start_event_receivers.iter().map(|receiver| receiver.recv()),
-        )
-        .await
-        .unwrap();
+        wait_for_flow_events(start_event_receivers).await.unwrap();
 
         // Test start
         test_future(node_shard, shards).await;
