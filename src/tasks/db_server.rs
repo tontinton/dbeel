@@ -285,7 +285,7 @@ async fn run_server(my_shard: Rc<MyShard>) -> Result<()> {
     }
 }
 
-pub fn spawn_db_server(my_shard: Rc<MyShard>) -> Task<Result<()>> {
+pub fn spawn_db_server_task(my_shard: Rc<MyShard>) -> Task<Result<()>> {
     spawn_local(async move {
         let result = run_server(my_shard).await;
         if let Err(e) = &result {

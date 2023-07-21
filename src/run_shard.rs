@@ -9,7 +9,7 @@ use crate::{
     remote_shard_connection::RemoteShardConnection,
     shards::{MyShard, OtherShard, ShardConnection},
     tasks::{
-        compaction::spawn_compaction_task, db_server::spawn_db_server,
+        compaction::spawn_compaction_task, db_server::spawn_db_server_task,
         failure_detector::spawn_failure_detector_task,
         gossip_server::spawn_gossip_server_task,
         local_shard_server::spawn_local_shard_server_task,
@@ -98,7 +98,7 @@ pub async fn run_shard(
         spawn_remote_shard_server_task(my_shard.clone()),
         spawn_local_shard_server_task(my_shard.clone()),
         spawn_compaction_task(my_shard.clone()),
-        spawn_db_server(my_shard.clone()),
+        spawn_db_server_task(my_shard.clone()),
         spawn_stop_event_waiter_task(my_shard.clone()),
     ];
 
