@@ -50,6 +50,8 @@ fn clean_state(args: Args) -> Result<()> {
 #[rstest]
 fn find_nodes(args: Args) -> Result<()> {
     let number_of_shards_first_node = 2u16;
+    let number_of_shards_second_node = 2u16;
+
     let mut second_args = args.clone();
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
     let (second_up_sender, second_up_receiver) = async_channel::bounded(1);
@@ -87,7 +89,10 @@ fn find_nodes(args: Args) -> Result<()> {
                 .await
                 .unwrap();
 
-            let second_node = create_metadata_from_args(second_args, 1);
+            let second_node = create_metadata_from_args(
+                second_args,
+                number_of_shards_second_node,
+            );
 
             for shard in &all_shards {
                 assert_eq!(shard.nodes.borrow().len(), 1);
@@ -115,16 +120,29 @@ fn find_nodes(args: Args) -> Result<()> {
     second_args.gossip_port += number_of_shards_first_node;
     second_args.name = "second".to_string();
 
-    let second_handle =
-        test_node(1, second_args.clone(), move |node_shard, _| async move {
+    let second_handle = test_node(
+        number_of_shards_second_node.into(),
+        second_args.clone(),
+        move |node_shard, other_shards| async move {
+            let mut all_shards = other_shards.clone();
+            all_shards.push(node_shard.clone());
+
             second_up_sender.send(second_args).await.unwrap();
-            assert_eq!(node_shard.nodes.borrow().len(), 1);
-            assert_eq!(
-                node_shard.nodes.borrow().get(&args.name).unwrap(),
-                &create_metadata_from_args(args, number_of_shards_first_node)
-            );
+
+            let first_node =
+                create_metadata_from_args(args, number_of_shards_first_node);
+
+            for shard in &all_shards {
+                assert_eq!(shard.nodes.borrow().len(), 1);
+                assert_eq!(
+                    shard.nodes.borrow().get(&first_node.name).unwrap(),
+                    &first_node
+                );
+            }
+
             first_test_done_receiver.recv().await.unwrap();
-        })?;
+        },
+    )?;
 
     second_handle.join()?;
     first_handle.join()?;
