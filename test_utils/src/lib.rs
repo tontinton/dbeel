@@ -67,9 +67,10 @@ where
     Ok(())
 }
 
-pub fn test_node<G, F, T>(
+pub fn test_node_ex<G, F, T>(
     number_of_shards: usize,
     args: Args,
+    crash_at_shutdown: bool,
     test_future: G,
 ) -> Result<ExecutorJoinHandle<()>>
 where
@@ -110,12 +111,41 @@ where
         test_future(node_shard.clone(), shards.clone()).await;
         // Test end
 
-        node_shard.stop().await.unwrap();
-        for s in shards {
-            s.stop().await.unwrap();
+        if crash_at_shutdown {
+            shard_run_handle.cancel().await;
+        } else {
+            node_shard.stop().await.unwrap();
+            let futures = shards.iter().map(|s| s.stop()).collect::<Vec<_>>();
+            try_join_all(futures).await.unwrap();
+            shard_run_handle.await;
         }
-        shard_run_handle.await;
     })?;
 
     Ok(handle)
+}
+
+pub fn test_node<G, F, T>(
+    number_of_shards: usize,
+    args: Args,
+    test_future: G,
+) -> Result<ExecutorJoinHandle<()>>
+where
+    G: FnOnce(Rc<MyShard>, Vec<Rc<MyShard>>) -> F + Send + 'static,
+    F: Future<Output = T> + 'static,
+    T: Send + 'static,
+{
+    test_node_ex(number_of_shards, args, false, test_future)
+}
+
+pub fn test_node_with_crash_at_end<G, F, T>(
+    number_of_shards: usize,
+    args: Args,
+    test_future: G,
+) -> Result<ExecutorJoinHandle<()>>
+where
+    G: FnOnce(Rc<MyShard>, Vec<Rc<MyShard>>) -> F + Send + 'static,
+    F: Future<Output = T> + 'static,
+    T: Send + 'static,
+{
+    test_node_ex(number_of_shards, args, true, test_future)
 }

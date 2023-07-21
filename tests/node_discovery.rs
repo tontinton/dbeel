@@ -8,8 +8,8 @@ use dbeel::{
 };
 use rstest::{fixture, rstest};
 use test_utils::{
-    install_logger, subscribe_to_flow_events, test_node, test_shard,
-    wait_for_flow_events,
+    install_logger, subscribe_to_flow_events, test_node, test_node_ex,
+    test_shard, wait_for_flow_events,
 };
 
 static ONCE: Once = Once::new();
@@ -46,8 +46,10 @@ fn clean_state(args: Args) -> Result<()> {
     })
 }
 
-#[rstest]
-fn find_nodes(args: Args) -> Result<()> {
+fn node_discovery_and_shutdown_detect_(
+    args: Args,
+    crash_at_shutdown: bool,
+) -> Result<()> {
     let number_of_shards_first_node = 2u16;
     let number_of_shards_second_node = 2u16;
 
@@ -119,9 +121,10 @@ fn find_nodes(args: Args) -> Result<()> {
     second_args.gossip_port += number_of_shards_first_node;
     second_args.name = "second".to_string();
 
-    let second_handle = test_node(
+    let second_handle = test_node_ex(
         number_of_shards_second_node.into(),
         second_args.clone(),
+        crash_at_shutdown,
         move |node_shard, other_shards| async move {
             let mut all_shards = other_shards.clone();
             all_shards.push(node_shard.clone());
@@ -147,4 +150,15 @@ fn find_nodes(args: Args) -> Result<()> {
     first_handle.join()?;
 
     Ok(())
+}
+
+#[rstest]
+fn node_discovery_and_shutdown_detect(args: Args) -> Result<()> {
+    node_discovery_and_shutdown_detect_(args, false)
+}
+
+#[rstest]
+fn node_discovery_and_crash_detect(mut args: Args) -> Result<()> {
+    args.failure_detection_interval = 10;
+    node_discovery_and_shutdown_detect_(args, true)
 }
