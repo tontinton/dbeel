@@ -8,7 +8,7 @@ use rmpv::{decode::read_value, encode::write_value, Utf8String, Value};
 async fn send_request<A: ToSocketAddrs>(
     request: Value,
     address: A,
-) -> Result<Value> {
+) -> Result<Vec<u8>> {
     let mut data_encoded: Vec<u8> = Vec::new();
     write_value(&mut data_encoded, &request).unwrap();
 
@@ -21,7 +21,7 @@ async fn send_request<A: ToSocketAddrs>(
     let mut response_buffer = Vec::new();
     stream.read_to_end(&mut response_buffer).await?;
 
-    Ok(read_value(&mut &response_buffer[..])?)
+    Ok(response_buffer)
 }
 
 pub async fn create_collection<S, A>(name: S, address: A) -> Result<()>
@@ -29,21 +29,46 @@ where
     S: Into<Utf8String>,
     A: ToSocketAddrs,
 {
-    let response = send_request(
-        Value::Map(vec![
-            (
-                Value::String("type".into()),
-                Value::String("create_collection".into()),
-            ),
-            (Value::String("name".into()), Value::String(name.into())),
-        ]),
-        address,
-    )
-    .await?;
+    let response = read_value(
+        &mut &send_request(
+            Value::Map(vec![
+                (
+                    Value::String("type".into()),
+                    Value::String("create_collection".into()),
+                ),
+                (Value::String("name".into()), Value::String(name.into())),
+            ]),
+            address,
+        )
+        .await?[..],
+    )?;
 
     if response != Value::String("OK".into()) {
         return Err(Error::ResponseError("not OK".to_string()));
     }
 
     Ok(())
+}
+
+pub async fn get<S, A>(
+    key: S,
+    collection_name: S,
+    address: A,
+) -> Result<Vec<u8>>
+where
+    S: Into<Utf8String>,
+    A: ToSocketAddrs,
+{
+    send_request(
+        Value::Map(vec![
+            (Value::String("type".into()), Value::String("get".into())),
+            (Value::String("key".into()), Value::String(key.into())),
+            (
+                Value::String("collection".into()),
+                Value::String(collection_name.into()),
+            ),
+        ]),
+        address,
+    )
+    .await
 }
