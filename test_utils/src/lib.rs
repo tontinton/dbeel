@@ -82,12 +82,10 @@ where
     let builder = LocalExecutorBuilder::new(Placement::Unbound);
     let handle = builder.name("test").spawn(move || async move {
         let local_connections = (0..number_of_shards)
-            .into_iter()
             .map(LocalShardConnection::new)
             .collect::<Vec<_>>();
 
         let mut shards = (0..number_of_shards)
-            .into_iter()
             .map(|id| create_shard(args.clone(), id, local_connections.clone()))
             .rev()
             .collect::<Vec<_>>();
