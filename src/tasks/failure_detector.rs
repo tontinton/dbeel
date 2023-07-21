@@ -2,7 +2,10 @@ use std::{rc::Rc, time::Duration};
 
 use glommio::{spawn_local, timer::sleep, Task};
 use log::{error, info};
-use rand::{seq::IteratorRandom, thread_rng};
+use rand::{
+    seq::{IteratorRandom, SliceRandom},
+    thread_rng,
+};
 
 use crate::{
     error::Result,
@@ -34,7 +37,11 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
         };
 
         let connection = RemoteShardConnection::new(
-            format!("{}:{}", node.ip, node.shard_ports[0]),
+            format!(
+                "{}:{}",
+                node.ip,
+                node.shard_ports.choose(&mut rng).unwrap()
+            ),
             Duration::from_millis(my_shard.args.remote_shard_connect_timeout),
         );
 
