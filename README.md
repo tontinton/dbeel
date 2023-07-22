@@ -1,3 +1,5 @@
+<img src="./logo.svg">
+
 ## Introduction
 dbeel is an attempt to learn modern database architecture.
 
