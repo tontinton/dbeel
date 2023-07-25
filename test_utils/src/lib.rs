@@ -58,10 +58,11 @@ where
         start_event_receiver.recv().await.unwrap();
 
         // Test start
-        test_future(shard).await;
+        test_future(shard.clone()).await;
         // Test end
 
-        shard_run_handle.cancel().await;
+        shard.stop().await.unwrap();
+        shard_run_handle.await.unwrap();
     })?;
     handle.join()?;
     Ok(())
