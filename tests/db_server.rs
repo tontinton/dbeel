@@ -7,6 +7,7 @@ use dbeel::{
 use dbeel_client::get;
 use rmpv::{decode::read_value_ref, ValueRef};
 use rstest::{fixture, rstest};
+use serial_test::serial;
 use test_utils::{install_logger, test_shard};
 
 static ONCE: Once = Once::new();
@@ -36,6 +37,7 @@ fn args() -> Args {
 }
 
 #[rstest]
+#[serial]
 fn get_non_existing_collection(args: Args) -> Result<()> {
     test_shard(args.clone(), |shard| async move {
         let response =

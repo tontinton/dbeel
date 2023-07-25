@@ -7,6 +7,7 @@ use dbeel::{
     messages::NodeMetadata,
 };
 use rstest::{fixture, rstest};
+use serial_test::serial;
 use test_utils::{
     install_logger, subscribe_to_flow_events, test_node, test_node_ex,
     test_shard, wait_for_flow_events,
@@ -40,6 +41,7 @@ fn args() -> Args {
 }
 
 #[rstest]
+#[serial]
 fn clean_state(args: Args) -> Result<()> {
     test_shard(args, |shard| async move {
         assert!(shard.nodes.borrow().is_empty());
@@ -153,11 +155,13 @@ fn node_discovery_and_shutdown_detect_(
 }
 
 #[rstest]
+#[serial]
 fn node_discovery_and_shutdown_detect(args: Args) -> Result<()> {
     node_discovery_and_shutdown_detect_(args, false)
 }
 
 #[rstest]
+#[serial]
 fn node_discovery_and_crash_detect(mut args: Args) -> Result<()> {
     args.failure_detection_interval = 10;
     node_discovery_and_shutdown_detect_(args, true)

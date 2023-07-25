@@ -6,6 +6,7 @@ use dbeel::{
 };
 use dbeel_client::create_collection;
 use rstest::{fixture, rstest};
+use serial_test::serial;
 use test_utils::{install_logger, test_shard};
 
 static ONCE: Once = Once::new();
@@ -22,6 +23,7 @@ fn args() -> Args {
 }
 
 #[rstest]
+#[serial]
 fn clean_state(args: Args) -> Result<()> {
     test_shard(args, |shard| async move {
         assert!(shard.trees.borrow().is_empty());
@@ -29,6 +31,7 @@ fn clean_state(args: Args) -> Result<()> {
 }
 
 #[rstest]
+#[serial]
 fn find_collections_after_rerun(args: Args) -> Result<()> {
     test_shard(args.clone(), |shard| async move {
         create_collection("test", &(shard.args.ip.clone(), shard.args.port))
