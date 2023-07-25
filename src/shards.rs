@@ -57,7 +57,7 @@ pub struct OtherShard {
     pub connection: ShardConnection,
 }
 
-fn hash_string(s: &String) -> std::io::Result<u32> {
+pub fn hash_string(s: &String) -> std::io::Result<u32> {
     murmur3_32(&mut std::io::Cursor::new(s), 0)
 }
 
