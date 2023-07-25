@@ -39,7 +39,7 @@ pub const TOMBSTONE: Vec<u8> = vec![];
 // Whether to ensure full durability against system crashes.
 const SYNC_WAL_FILE: bool = false;
 
-const TREE_CAPACITY: usize = 4096;
+const DEFAULT_TREE_CAPACITY: usize = 4096;
 const INDEX_PADDING: usize = 20; // Number of integers in max u64.
 const DMA_STREAM_NUMBER_OF_BUFFERS: usize = 16;
 
@@ -331,6 +331,19 @@ impl LSMTree {
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<Self> {
+        Self::open_or_create_with_tree_capacity(
+            dir,
+            page_cache,
+            DEFAULT_TREE_CAPACITY,
+        )
+        .await
+    }
+
+    pub async fn open_or_create_with_tree_capacity(
+        dir: PathBuf,
+        page_cache: PartitionPageCache<FileId>,
+        tree_capacity: usize,
+    ) -> Result<Self> {
         if !dir.is_dir() {
             trace!("Creating new tree in: {:?}", dir);
             std::fs::create_dir_all(&dir)?;
@@ -415,9 +428,11 @@ impl LSMTree {
                 );
                 let (data_file_path, index_file_path) =
                     Self::get_data_file_paths(&dir, unflashed_file_index);
-                let memtable =
-                    Self::read_memtable_from_wal_file(&unflashed_file_path)
-                        .await?;
+                let memtable = Self::read_memtable_from_wal_file(
+                    &unflashed_file_path,
+                    tree_capacity,
+                )
+                .await?;
                 let (data_file, index_file) = try_join!(
                     DmaFile::open(&data_file_path),
                     DmaFile::open(&index_file_path)
@@ -442,13 +457,13 @@ impl LSMTree {
             .create(true)
             .dma_open(&wal_path)
             .await?;
-        wal_file.hint_extent_size(PAGE_SIZE * TREE_CAPACITY).await?;
+        wal_file.hint_extent_size(PAGE_SIZE * tree_capacity).await?;
         let wal_offset = wal_file.file_size().await?;
 
         let active_memtable = if wal_path.exists() {
-            Self::read_memtable_from_wal_file(&wal_path).await?
+            Self::read_memtable_from_wal_file(&wal_path, tree_capacity).await?
         } else {
-            RedBlackTree::with_capacity(TREE_CAPACITY)
+            RedBlackTree::with_capacity(tree_capacity)
         };
 
         Ok(Self {
@@ -471,8 +486,9 @@ impl LSMTree {
 
     async fn read_memtable_from_wal_file(
         wal_path: &PathBuf,
+        tree_capacity: usize,
     ) -> Result<MemTable> {
-        let mut memtable = RedBlackTree::with_capacity(TREE_CAPACITY);
+        let mut memtable = RedBlackTree::with_capacity(tree_capacity);
         let wal_file = DmaFile::open(wal_path).await?;
         let mut reader = DmaStreamReaderBuilder::new(wal_file)
             .with_buffer_size(PAGE_SIZE)
@@ -1012,12 +1028,30 @@ mod tests {
 
     use super::*;
 
+    const TEST_TREE_CAPACITY: usize = 32;
+
     #[ctor]
     fn init_color_backtrace() {
         color_backtrace::install();
     }
 
     type GlobalCache = Rc<RefCell<PageCache<FileId>>>;
+
+    async fn test_lsm_tree(
+        dir: PathBuf,
+        page_cache: PartitionPageCache<FileId>,
+    ) -> Result<LSMTree> {
+        LSMTree::open_or_create_with_tree_capacity(
+            dir,
+            page_cache,
+            TEST_TREE_CAPACITY,
+        )
+        .await
+    }
+
+    fn partitioned_cache(cache: &GlobalCache) -> PartitionPageCache<FileId> {
+        PartitionPageCache::new("test".to_string(), cache.clone())
+    }
 
     fn run_with_glommio<G, F, T>(fut_gen: G) -> Result<()>
     where
@@ -1037,10 +1071,6 @@ mod tests {
         Ok(())
     }
 
-    fn partitioned_cache(cache: &GlobalCache) -> PartitionPageCache<FileId> {
-        PartitionPageCache::new("test".to_string(), cache.clone())
-    }
-
     async fn _set_and_get_memtable(
         dir: PathBuf,
         cache: GlobalCache,
@@ -1048,8 +1078,7 @@ mod tests {
         // New tree.
         {
             let tree = Rc::new(
-                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?,
+                test_lsm_tree(dir.clone(), partitioned_cache(&cache)).await?,
             );
             tree.clone().set(vec![100], vec![200]).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
@@ -1058,8 +1087,7 @@ mod tests {
 
         // Reopening the tree.
         {
-            let tree =
-                LSMTree::open_or_create(dir, partitioned_cache(&cache)).await?;
+            let tree = test_lsm_tree(dir, partitioned_cache(&cache)).await?;
             assert_eq!(tree.get(&vec![100]).await?, Some(vec![200]));
             assert_eq!(tree.get(&vec![0]).await?, None);
         }
@@ -1079,12 +1107,11 @@ mod tests {
         // New tree.
         {
             let tree = Rc::new(
-                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?,
+                test_lsm_tree(dir.clone(), partitioned_cache(&cache)).await?,
             );
             assert_eq!(tree.write_sstable_index.get(), 0);
 
-            let values: Vec<Vec<u8>> = (0..TREE_CAPACITY as u16)
+            let values: Vec<Vec<u8>> = (0..TEST_TREE_CAPACITY as u16)
                 .map(|n| n.to_le_bytes().to_vec())
                 .collect();
 
@@ -1096,20 +1123,19 @@ mod tests {
             assert_eq!(tree.active_memtable.borrow().len(), 0);
             assert_eq!(tree.write_sstable_index.get(), 2);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+            assert_eq!(tree.get(&vec![1, 0]).await?, Some(vec![1, 0]));
+            assert_eq!(tree.get(&vec![10, 0]).await?, Some(vec![10, 0]));
         }
 
         // Reopening the tree.
         {
             let tree =
-                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?;
+                test_lsm_tree(dir.clone(), partitioned_cache(&cache)).await?;
             assert_eq!(tree.active_memtable.borrow().len(), 0);
             assert_eq!(tree.write_sstable_index.get(), 2);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
+            assert_eq!(tree.get(&vec![1, 0]).await?, Some(vec![1, 0]));
+            assert_eq!(tree.get(&vec![10, 0]).await?, Some(vec![10, 0]));
         }
 
         Ok(())
@@ -1127,21 +1153,21 @@ mod tests {
         // New tree.
         {
             let tree = Rc::new(
-                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?,
+                test_lsm_tree(dir.clone(), partitioned_cache(&cache)).await?,
             );
             assert_eq!(tree.write_sstable_index.get(), 0);
             assert_eq!(*tree.sstable_indices(), vec![]);
 
-            let values: Vec<Vec<u8>> = (0..((TREE_CAPACITY as u16) * 3) - 2)
+            let values: Vec<Vec<u8>> = (0..((TEST_TREE_CAPACITY as u16) * 3)
+                - 2)
                 .map(|n| n.to_le_bytes().to_vec())
                 .collect();
 
             for v in values {
                 tree.clone().set(v.clone(), v).await?;
             }
-            tree.clone().delete(vec![0, 1]).await?;
-            tree.clone().delete(vec![100, 2]).await?;
+            tree.clone().delete(vec![1, 0]).await?;
+            tree.clone().delete(vec![4, 0]).await?;
             tree.clone().flush().await?;
 
             assert_eq!(*tree.sstable_indices(), vec![0, 2, 4]);
@@ -1151,24 +1177,23 @@ mod tests {
             assert_eq!(*tree.sstable_indices(), vec![5]);
             assert_eq!(tree.write_sstable_index.get(), 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
-            assert_eq!(tree.get(&vec![0, 1]).await?, None);
-            assert_eq!(tree.get(&vec![100, 2]).await?, None);
+            assert_eq!(tree.get(&vec![2, 0]).await?, Some(vec![2, 0]));
+            assert_eq!(tree.get(&vec![10, 0]).await?, Some(vec![10, 0]));
+            assert_eq!(tree.get(&vec![1, 0]).await?, None);
+            assert_eq!(tree.get(&vec![4, 0]).await?, None);
         }
 
         // Reopening the tree.
         {
             let tree =
-                LSMTree::open_or_create(dir.clone(), partitioned_cache(&cache))
-                    .await?;
+                test_lsm_tree(dir.clone(), partitioned_cache(&cache)).await?;
             assert_eq!(*tree.sstable_indices(), vec![5]);
             assert_eq!(tree.write_sstable_index.get(), 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![100, 1]).await?, Some(vec![100, 1]));
-            assert_eq!(tree.get(&vec![200, 2]).await?, Some(vec![200, 2]));
-            assert_eq!(tree.get(&vec![0, 1]).await?, None);
-            assert_eq!(tree.get(&vec![100, 2]).await?, None);
+            assert_eq!(tree.get(&vec![2, 0]).await?, Some(vec![2, 0]));
+            assert_eq!(tree.get(&vec![10, 0]).await?, Some(vec![10, 0]));
+            assert_eq!(tree.get(&vec![1, 0]).await?, None);
+            assert_eq!(tree.get(&vec![4, 0]).await?, None);
         }
 
         Ok(())
@@ -1231,7 +1256,7 @@ mod tests {
             test_partition_cache.clone(),
         );
 
-        let entries = (0..TREE_CAPACITY)
+        let entries = (0..TEST_TREE_CAPACITY)
             .map(|x| x.to_le_bytes().to_vec())
             .map(|x| Entry {
                 key: x.clone(),
