@@ -733,8 +733,11 @@ dependencies = [
  "dbeel",
  "futures-lite",
  "glommio",
+ "rmp-serde",
  "rmpv",
  "rpm",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

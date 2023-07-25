@@ -26,6 +26,7 @@ fn create_metadata_from_args(
             .map(|x| x + args.remote_shard_port)
             .collect::<Vec<_>>(),
         gossip_port: args.gossip_port,
+        db_port: args.port,
     }
 }
 

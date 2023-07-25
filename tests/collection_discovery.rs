@@ -4,7 +4,7 @@ use dbeel::{
     args::{parse_args_from, Args},
     error::Result,
 };
-use dbeel_client::create_collection;
+use dbeel_client::DbeelClient;
 use rstest::{fixture, rstest};
 use serial_test::serial;
 use test_utils::{install_logger, test_shard};
@@ -34,9 +34,13 @@ fn clean_state(args: Args) -> Result<()> {
 #[serial]
 fn find_collections_after_rerun(args: Args) -> Result<()> {
     test_shard(args.clone(), |shard| async move {
-        create_collection("test", &(shard.args.ip.clone(), shard.args.port))
-            .await
-            .unwrap();
+        let client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+        client.create_collection("test").await.unwrap();
 
         assert_eq!(shard.trees.borrow().len(), 1);
         assert!(shard.trees.borrow().get(&"test".to_string()).is_some());
