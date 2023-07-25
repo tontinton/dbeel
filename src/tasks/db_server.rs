@@ -3,11 +3,13 @@ use std::{cmp::min, rc::Rc, time::Duration};
 use futures::{future::try_join, AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::{enclose, net::TcpListener, spawn_local, Task};
 use log::{error, trace};
+use rmp_serde::Serializer;
 use rmpv::{
     decode::read_value_ref,
     encode::{write_value, write_value_ref},
     Value, ValueRef,
 };
+use serde::Serialize;
 
 use crate::{
     error::{Error, Result},
@@ -76,6 +78,13 @@ async fn handle_request(
     if let Some(map_vec) = msgpack_request.as_map() {
         let map = Value::Map(map_vec.to_vec());
         match map["type"].as_str() {
+            Some("get_cluster_metadata") => {
+                let mut response = Vec::new();
+                my_shard
+                    .get_cluster_metadata()
+                    .serialize(&mut Serializer::new(&mut response))?;
+                return Ok(Some(response));
+            }
             Some("create_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
 

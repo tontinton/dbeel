@@ -12,6 +12,7 @@ use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 use crate::flow_events::FlowEvent;
 use crate::gossip::{serialize_gossip_message, GossipEvent, GossipMessage};
@@ -27,6 +28,12 @@ use crate::{
     page_cache::{PageCache, PartitionPageCache},
     remote_shard_connection::RemoteShardConnection,
 };
+
+#[derive(Serialize, Deserialize)]
+pub struct ClusterMetadata {
+    pub nodes: Vec<NodeMetadata>,
+    pub replication_factor: u32,
+}
 
 #[derive(Debug)]
 pub enum ShardConnection {
@@ -266,7 +273,7 @@ impl MyShard {
         spawn_local(async move {
             // Filter out remote shards of nodes we already collected.
             let mut nodes =
-                HashSet::with_capacity(my_shard.args.replication_factor);
+                HashSet::with_capacity(my_shard.args.replication_factor as usize);
 
             let connections = my_shard.shards.borrow()
                 .iter()
@@ -279,7 +286,7 @@ impl MyShard {
                     }
                     _ => None,
                 })
-                .take(my_shard.args.replication_factor)
+                .take(my_shard.args.replication_factor as usize)
                 .cloned()
                 .collect::<Vec<_>>();
 
@@ -377,6 +384,7 @@ impl MyShard {
             ip: self.args.ip.clone(),
             shard_ports,
             gossip_port: self.args.gossip_port,
+            db_port: self.args.port,
         }
     }
 
@@ -424,6 +432,24 @@ impl MyShard {
         });
     }
 
+    pub fn get_nodes(&self) -> Vec<NodeMetadata> {
+        let mut nodes = self
+            .nodes
+            .borrow()
+            .iter()
+            .map(|(_, n)| n.clone())
+            .collect::<Vec<_>>();
+        nodes.push(self.get_node_metadata());
+        nodes
+    }
+
+    pub fn get_cluster_metadata(&self) -> ClusterMetadata {
+        ClusterMetadata {
+            nodes: self.get_nodes(),
+            replication_factor: self.args.replication_factor,
+        }
+    }
+
     async fn handle_shard_request(
         &self,
         request: ShardRequest,
@@ -431,15 +457,7 @@ impl MyShard {
         let response = match request {
             ShardRequest::Ping => ShardResponse::Pong,
             ShardRequest::GetMetadata => {
-                let mut nodes = self
-                    .nodes
-                    .borrow()
-                    .iter()
-                    .map(|(_, n)| n.clone())
-                    .collect::<Vec<_>>();
-                nodes.push(self.get_node_metadata());
-
-                ShardResponse::GetMetadata(nodes)
+                ShardResponse::GetMetadata(self.get_nodes())
             }
             ShardRequest::Set(collection, key, value) => {
                 let existing_tree =

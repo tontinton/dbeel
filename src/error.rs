@@ -55,6 +55,10 @@ pub enum Error {
     MsgpackDecodeError(#[from] rmpv::decode::Error),
     #[error("msgpack encode failed")]
     MsgpackEncodeError(#[from] rmpv::encode::Error),
+    #[error("msgpack serde decode failed")]
+    MsgpackSerdeDecodeError(#[from] rmp_serde::decode::Error),
+    #[error("msgpack serde encode failed")]
+    MsgpackSerdeEncodeError(#[from] rmp_serde::encode::Error),
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;

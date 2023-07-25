@@ -25,6 +25,7 @@ pub struct NodeMetadata {
     pub ip: String,
     pub shard_ports: Vec<u16>,
     pub gossip_port: u16,
+    pub db_port: u16,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

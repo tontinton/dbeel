@@ -58,7 +58,7 @@ This port is for listening on client requests.",
 for tunable availability.",
         default_value = "1"
     )]
-    pub replication_factor: usize,
+    pub replication_factor: u32,
 
     #[clap(
         long,
