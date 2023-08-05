@@ -229,4 +229,19 @@ impl Collection {
             .send_sharded_request(&(key.into_str().unwrap()), request)
             .await
     }
+
+    pub async fn delete<S: Into<Utf8String>>(&self, key: S) -> Result<Vec<u8>> {
+        let key = to_utf8string(key)?;
+        let request = Value::Map(vec![
+            (Value::String("type".into()), Value::String("delete".into())),
+            (Value::String("key".into()), Value::String(key.clone())),
+            (
+                Value::String("collection".into()),
+                Value::String(self.name.clone()),
+            ),
+        ]);
+        self.client
+            .send_sharded_request(&(key.into_str().unwrap()), request)
+            .await
+    }
 }
