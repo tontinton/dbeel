@@ -29,6 +29,16 @@ pub struct Collection {
     name: Utf8String,
 }
 
+fn to_utf8string<S: Into<Utf8String>>(
+    maybe_utf8string: S,
+) -> Result<Utf8String> {
+    let utf8 = maybe_utf8string.into();
+    if !utf8.is_str() {
+        return Err(Error::InvalidUtf8String(utf8));
+    }
+    Ok(utf8)
+}
+
 impl DbeelClient {
     pub async fn from_seed_nodes<A>(addresses: &[A]) -> Result<Arc<Self>>
     where
@@ -147,43 +157,32 @@ impl DbeelClient {
         self: Arc<Self>,
         name: S,
     ) -> Result<Collection> {
-        let utf8_name = name.into();
-        if !utf8_name.is_str() {
-            return Err(Error::InvalidUtf8String(utf8_name));
-        }
-
+        let name = to_utf8string(name)?;
         let request = Value::Map(vec![
             (
                 Value::String("type".into()),
                 Value::String("create_collection".into()),
             ),
-            (
-                Value::String("name".into()),
-                Value::String(utf8_name.clone()),
-            ),
+            (Value::String("name".into()), Value::String(name.clone())),
         ]);
         Self::send_request(&self.seed_shards, request).await?;
 
-        Ok(self.collection(utf8_name))
+        Ok(self.collection(name))
     }
 }
 
 impl Collection {
     pub async fn get<S: Into<Utf8String>>(&self, key: S) -> Result<Vec<u8>> {
-        let utf8_key = key.into();
-        if !utf8_key.is_str() {
-            return Err(Error::InvalidUtf8String(utf8_key));
-        }
-
+        let key = to_utf8string(key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("get".into())),
-            (Value::String("key".into()), Value::String(utf8_key.clone())),
+            (Value::String("key".into()), Value::String(key.clone())),
             (
                 Value::String("collection".into()),
                 Value::String(self.name.clone()),
             ),
         ]);
-        let hash = hash_string(&(utf8_key.into_str().unwrap()))
+        let hash = hash_string(&(key.into_str().unwrap()))
             .map_err(Error::HashShardName)?;
         let position = self
             .client
