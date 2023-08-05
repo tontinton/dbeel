@@ -200,7 +200,6 @@ impl Collection {
             }
             owning_shards.push(self.client.hash_ring[index].address);
         }
-        dbg!(&owning_shards);
         Ok(DbeelClient::send_request(&owning_shards, request).await?)
     }
 }
