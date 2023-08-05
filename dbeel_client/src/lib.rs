@@ -80,8 +80,14 @@ impl DbeelClient {
         }))
     }
 
-    pub fn collection(self: Arc<Self>, name: Utf8String) -> Collection {
-        Collection { client: self, name }
+    pub fn collection<S: Into<Utf8String>>(
+        self: Arc<Self>,
+        name: S,
+    ) -> Collection {
+        Collection {
+            client: self,
+            name: name.into(),
+        }
     }
 
     async fn send_buffer(

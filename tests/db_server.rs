@@ -46,7 +46,7 @@ fn get_non_existing_collection(args: Args) -> Result<()> {
         )])
         .await
         .unwrap();
-        let collection = client.collection("test".into());
+        let collection = client.collection("test");
         let response = collection.get("non_existing_key").await.unwrap();
         assert!(response_contains_error(
             response,
