@@ -115,8 +115,9 @@ where
         if crash_at_shutdown {
             shard_run_handle.cancel().await;
         } else {
-            node_shard.stop().await.unwrap();
-            let futures = shards.iter().map(|s| s.stop()).collect::<Vec<_>>();
+            let mut futures =
+                shards.iter().map(|s| s.stop()).collect::<Vec<_>>();
+            futures.push(node_shard.stop());
             try_join_all(futures).await.unwrap();
             shard_run_handle.await;
         }
