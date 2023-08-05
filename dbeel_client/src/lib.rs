@@ -192,6 +192,22 @@ impl DbeelClient {
 
         Ok(self.collection(name))
     }
+
+    pub(crate) async fn drop_collection<S: Into<Utf8String>>(
+        self: Arc<Self>,
+        name: S,
+    ) -> Result<()> {
+        let name = to_utf8string(name)?;
+        let request = Value::Map(vec![
+            (
+                Value::String("type".into()),
+                Value::String("drop_collection".into()),
+            ),
+            (Value::String("name".into()), Value::String(name.clone())),
+        ]);
+        Self::send_request(&self.seed_shards, request).await?;
+        Ok(())
+    }
 }
 
 impl Collection {
@@ -243,5 +259,9 @@ impl Collection {
         self.client
             .send_sharded_request(&(key.into_str().unwrap()), request)
             .await
+    }
+
+    pub async fn drop(self) -> Result<()> {
+        self.client.drop_collection(self.name).await
     }
 }
