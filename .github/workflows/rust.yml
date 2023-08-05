@@ -24,6 +24,25 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: Test
+        run: |
+          cat << EOF > "run.sh"
+          PATH=$PATH:/usr/share/rust/.cargo/bin
+          cargo test
+          EOF
+          sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run.sh"
+
   lint:
     name: rustfmt + clippy
     runs-on: ubuntu-latest
