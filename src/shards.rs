@@ -93,7 +93,7 @@ pub struct MyShard {
     pub hash: u32,
 
     /// The consistent hash ring (shards sorted by hash).
-    /// Starts with the first hash that has a greaater hash than our shard.
+    /// Starts with the first hash that has a greater hash than our shard.
     pub shards: RefCell<Vec<OtherShard>>,
 
     /// All known nodes other than this node, key is node unique name.
