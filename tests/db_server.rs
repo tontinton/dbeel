@@ -12,6 +12,8 @@ use rstest::{fixture, rstest};
 use serial_test::serial;
 use test_utils::{install_logger, test_shard};
 
+const ASSERT_AMOUNT_OF_TIMES: usize = 3;
+
 static ONCE: Once = Once::new();
 
 fn response_equals_error(response: Vec<u8>, e: Error) -> Result<bool> {
@@ -120,9 +122,11 @@ fn set_and_get_key(args: Args) -> Result<()> {
         let response = collection.set("key", Value::F32(100.0)).await.unwrap();
         assert!(response_ok(response).unwrap());
 
-        let response = collection.get("key").await.unwrap();
-        let value = read_value_ref(&mut &response[..]).unwrap();
-        assert_eq!(value, ValueRef::F32(100.0));
+        for _ in 0..ASSERT_AMOUNT_OF_TIMES {
+            let response = collection.get("key").await.unwrap();
+            let value = read_value_ref(&mut &response[..]).unwrap();
+            assert_eq!(value, ValueRef::F32(100.0));
+        }
     })?;
 
     Ok(())
@@ -148,8 +152,12 @@ fn delete_and_get_key(args: Args) -> Result<()> {
         let response = collection.delete("key").await.unwrap();
         assert!(response_ok(response).unwrap());
 
-        let response = collection.get("key").await.unwrap();
-        assert!(response_equals_error(response, Error::KeyNotFound).unwrap());
+        for _ in 0..ASSERT_AMOUNT_OF_TIMES {
+            let response = collection.get("key").await.unwrap();
+            assert!(
+                response_equals_error(response, Error::KeyNotFound).unwrap()
+            );
+        }
     })?;
 
     Ok(())
