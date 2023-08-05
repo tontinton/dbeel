@@ -153,6 +153,29 @@ impl DbeelClient {
         Err(Error::SendRequestToCluster(errors))
     }
 
+    pub(crate) async fn send_sharded_request(
+        &self,
+        shard_key: &String,
+        request: Value,
+    ) -> Result<Vec<u8>> {
+        let hash = hash_string(shard_key).map_err(Error::HashShardName)?;
+        let position = self
+            .hash_ring
+            .iter()
+            .position(|s| s.hash >= hash)
+            .unwrap_or(0);
+
+        let mut owning_shards = Vec::new();
+        for i in 0..self.replication_factor {
+            let index = (position + i as usize) % self.hash_ring.len();
+            if i > 0 && index == position {
+                break;
+            }
+            owning_shards.push(self.hash_ring[index].address);
+        }
+        Ok(DbeelClient::send_request(&owning_shards, request).await?)
+    }
+
     pub async fn create_collection<S: Into<Utf8String>>(
         self: Arc<Self>,
         name: S,
@@ -182,23 +205,28 @@ impl Collection {
                 Value::String(self.name.clone()),
             ),
         ]);
-        let hash = hash_string(&(key.into_str().unwrap()))
-            .map_err(Error::HashShardName)?;
-        let position = self
-            .client
-            .hash_ring
-            .iter()
-            .position(|s| s.hash >= hash)
-            .unwrap_or(0);
+        self.client
+            .send_sharded_request(&(key.into_str().unwrap()), request)
+            .await
+    }
 
-        let mut owning_shards = Vec::new();
-        for i in 0..self.client.replication_factor {
-            let index = (position + i as usize) % self.client.hash_ring.len();
-            if i > 0 && index == position {
-                break;
-            }
-            owning_shards.push(self.client.hash_ring[index].address);
-        }
-        Ok(DbeelClient::send_request(&owning_shards, request).await?)
+    pub async fn set<S: Into<Utf8String>>(
+        &self,
+        key: S,
+        value: Value,
+    ) -> Result<Vec<u8>> {
+        let key = to_utf8string(key)?;
+        let request = Value::Map(vec![
+            (Value::String("type".into()), Value::String("set".into())),
+            (Value::String("key".into()), Value::String(key.clone())),
+            (Value::String("value".into()), value),
+            (
+                Value::String("collection".into()),
+                Value::String(self.name.clone()),
+            ),
+        ]);
+        self.client
+            .send_sharded_request(&(key.into_str().unwrap()), request)
+            .await
     }
 }
