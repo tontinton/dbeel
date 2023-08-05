@@ -9,7 +9,7 @@ use rmpv::{
     encode::{write_value, write_value_ref},
     Value, ValueRef,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Error, Result},
@@ -23,6 +23,25 @@ use crate::{
 
 const DEFAULT_SET_TIMEOUT_MS: u64 = 15000;
 const DEFAULT_GET_TIMEOUT_MS: u64 = 15000;
+
+#[derive(Serialize, Deserialize)]
+pub struct ResponseError {
+    text: String,
+    number: u8,
+}
+
+impl ResponseError {
+    fn new(e: &Error) -> Self {
+        Self {
+            text: format!("{}", e),
+            number: e.into(),
+        }
+    }
+
+    pub fn same_as(&self, e: &Error) -> bool {
+        self.text == format!("{}", e) && self.number == e.into()
+    }
+}
 
 fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
     let field = &map[field_name];
@@ -251,17 +270,12 @@ async fn handle_client(
             client.write_all(&buf).await?;
         }
         Err(e) => {
-            let error_string =
-                format!("Error while handling request: {0:?}, '{0}'", e);
             if !matches!(e, Error::KeyNotFound) {
-                error!("{}", error_string);
+                error!("Error while handling request: {0:?}, '{0}'", e);
             }
 
             let mut buf: Vec<u8> = Vec::new();
-            write_value_ref(
-                &mut buf,
-                &ValueRef::String(error_string.as_str().into()),
-            )?;
+            ResponseError::new(&e).serialize(&mut Serializer::new(&mut buf))?;
             client.write_all(&buf).await?;
         }
     }
