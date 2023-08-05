@@ -3,26 +3,25 @@ use std::sync::Once;
 use dbeel::{
     args::{parse_args_from, Args},
     error::{Error, Result},
+    tasks::db_server::ResponseError,
 };
 use dbeel_client::DbeelClient;
-use rmpv::{decode::read_value_ref, ValueRef};
+use rmp_serde::from_slice;
+use rmpv::{decode::read_value_ref, Value, ValueRef};
 use rstest::{fixture, rstest};
 use serial_test::serial;
 use test_utils::{install_logger, test_shard};
 
 static ONCE: Once = Once::new();
 
-fn response_contains_error(response: Vec<u8>, e: Error) -> bool {
-    if let Ok(ValueRef::String(response_str)) =
-        read_value_ref(&mut &response[..])
-    {
-        response_str
-            .into_str()
-            .unwrap()
-            .contains(format!("{}", e).as_str())
-    } else {
-        panic!("Not a string.");
-    }
+fn response_equals_error(response: Vec<u8>, e: Error) -> Result<bool> {
+    let error: ResponseError = from_slice(&response)?;
+    Ok(error.same_as(&e))
+}
+
+fn response_ok(response: Vec<u8>) -> Result<bool> {
+    let value = read_value_ref(&mut &response[..])?;
+    Ok(value == ValueRef::String("OK".into()))
 }
 
 #[fixture]
@@ -48,10 +47,55 @@ fn get_non_existing_collection(args: Args) -> Result<()> {
         .unwrap();
         let collection = client.collection("test");
         let response = collection.get("non_existing_key").await.unwrap();
-        assert!(response_contains_error(
+        assert!(response_equals_error(
             response,
             Error::CollectionNotFound("test".to_string())
-        ));
+        )
+        .unwrap());
+    })?;
+
+    Ok(())
+}
+
+#[rstest]
+#[serial]
+fn get_non_existing_key(args: Args) -> Result<()> {
+    test_shard(args, |shard| async move {
+        let client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+        client.clone().create_collection("test").await.unwrap();
+        let collection = client.collection("test");
+        let response = collection.get("key").await.unwrap();
+        assert!(response_equals_error(response, Error::KeyNotFound).unwrap());
+    })?;
+
+    Ok(())
+}
+
+#[rstest]
+#[serial]
+fn set_and_get_key(args: Args) -> Result<()> {
+    test_shard(args, |shard| async move {
+        let client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+
+        let collection =
+            client.clone().create_collection("test").await.unwrap();
+
+        let response = collection.set("key", Value::F32(100.0)).await.unwrap();
+        assert!(response_ok(response).unwrap());
+
+        let response = collection.get("key").await.unwrap();
+        let value = read_value_ref(&mut &response[..]).unwrap();
+        assert_eq!(value, ValueRef::F32(100.0));
     })?;
 
     Ok(())
