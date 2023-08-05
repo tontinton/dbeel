@@ -36,8 +36,16 @@ pub fn enum_to_num(input: TokenStream) -> TokenStream {
                 #name::#variant_name => #to_value,
             }
         } else {
-            quote! {
-                #name::#variant_name(..) => #to_value,
+            match variant.fields {
+                syn::Fields::Named(_) => quote! {
+                    #name::#variant_name{..} => #to_value,
+                },
+                syn::Fields::Unnamed(_) => quote! {
+                    #name::#variant_name(..) => #to_value,
+                },
+                _ => quote! {
+                    #name::#variant_name => #to_value,
+                },
             }
         }
     });
