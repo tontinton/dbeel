@@ -59,6 +59,33 @@ fn get_non_existing_collection(args: Args) -> Result<()> {
 
 #[rstest]
 #[serial]
+fn drop_collection(args: Args) -> Result<()> {
+    test_shard(args, |shard| async move {
+        let client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+
+        let collection =
+            client.clone().create_collection("test").await.unwrap();
+        collection.drop().await.unwrap();
+
+        let collection = client.collection("test");
+        let response = collection.get("non_existing_key").await.unwrap();
+        assert!(response_equals_error(
+            response,
+            Error::CollectionNotFound("test".to_string())
+        )
+        .unwrap());
+    })?;
+
+    Ok(())
+}
+
+#[rstest]
+#[serial]
 fn get_non_existing_key(args: Args) -> Result<()> {
     test_shard(args, |shard| async move {
         let client = DbeelClient::from_seed_nodes(&[(
@@ -67,8 +94,8 @@ fn get_non_existing_key(args: Args) -> Result<()> {
         )])
         .await
         .unwrap();
-        client.clone().create_collection("test").await.unwrap();
-        let collection = client.collection("test");
+        let collection =
+            client.clone().create_collection("test").await.unwrap();
         let response = collection.get("key").await.unwrap();
         assert!(response_equals_error(response, Error::KeyNotFound).unwrap());
     })?;
