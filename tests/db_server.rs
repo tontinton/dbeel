@@ -134,6 +134,43 @@ fn set_and_get_key(args: Args) -> Result<()> {
 
 #[rstest]
 #[serial]
+fn set_and_get_key_after_restart(args: Args) -> Result<()> {
+    test_shard(args.clone(), |shard| async move {
+        let client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+
+        let collection =
+            client.clone().create_collection("test").await.unwrap();
+
+        let response = collection.set("key", Value::F32(100.0)).await.unwrap();
+        assert!(response_ok(response).unwrap());
+    })?;
+
+    test_shard(args, |shard| async move {
+        let client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+
+        let collection = client.collection("test");
+        for _ in 0..ASSERT_AMOUNT_OF_TIMES {
+            let response = collection.get("key").await.unwrap();
+            let value = read_value_ref(&mut &response[..]).unwrap();
+            assert_eq!(value, ValueRef::F32(100.0));
+        }
+    })?;
+
+    Ok(())
+}
+
+#[rstest]
+#[serial]
 fn delete_and_get_key(args: Args) -> Result<()> {
     test_shard(args, |shard| async move {
         let client = DbeelClient::from_seed_nodes(&[(
