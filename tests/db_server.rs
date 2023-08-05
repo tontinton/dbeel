@@ -154,3 +154,52 @@ fn delete_and_get_key(args: Args) -> Result<()> {
 
     Ok(())
 }
+
+#[rstest]
+#[serial]
+fn multiple_collections(args: Args) -> Result<()> {
+    test_shard(args, |shard| async move {
+        let client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+
+        let collections = vec![
+            client.clone().create_collection("test1").await.unwrap(),
+            client.clone().create_collection("test2").await.unwrap(),
+        ];
+
+        for collection in &collections {
+            let response =
+                collection.set("key", Value::F32(100.0)).await.unwrap();
+            assert!(response_ok(response).unwrap());
+        }
+
+        for collection in &collections {
+            let response = collection.get("key").await.unwrap();
+            let value = read_value_ref(&mut &response[..]).unwrap();
+            assert_eq!(value, ValueRef::F32(100.0));
+        }
+
+        collections[0].delete("key").await.unwrap();
+
+        let response = collections[0].get("key").await.unwrap();
+        assert!(response_equals_error(response, Error::KeyNotFound).unwrap());
+        let response = collections[1].get("key").await.unwrap();
+        let value = read_value_ref(&mut &response[..]).unwrap();
+        assert_eq!(value, ValueRef::F32(100.0));
+
+        collections[1].delete("key").await.unwrap();
+
+        for collection in &collections {
+            let response = collection.get("key").await.unwrap();
+            assert!(
+                response_equals_error(response, Error::KeyNotFound).unwrap()
+            );
+        }
+    })?;
+
+    Ok(())
+}
