@@ -14,7 +14,6 @@ use rand::thread_rng;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::flow_events::FlowEvent;
 use crate::gossip::{serialize_gossip_message, GossipEvent, GossipMessage};
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
 use crate::utils::get_first_capture;
@@ -28,6 +27,17 @@ use crate::{
     page_cache::{PageCache, PartitionPageCache},
     remote_shard_connection::RemoteShardConnection,
 };
+
+#[cfg(feature = "flow-events")]
+use crate::flow_events::FlowEvent;
+
+#[macro_export]
+macro_rules! notify_flow_event {
+    ($self:expr, $flow_event:expr) => {
+        #[cfg(feature = "flow-events")]
+        $self.notify_flow_event($flow_event.into()).await;
+    };
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct ClusterMetadata {
@@ -111,14 +121,15 @@ pub struct MyShard {
     /// The packet receiver from other local shards.
     pub local_shards_packet_receiver: Receiver<ShardPacket>,
 
-    /// All registered flow event listeners (key is flow event type).
-    flow_event_listeners: RefCell<HashMap<u8, Vec<Sender<()>>>>,
-
     /// An event receiver to stop the shard from running.
     pub stop_receiver: Receiver<()>,
 
     /// An event sender to stop the shard from running.
     stop_sender: Sender<()>,
+
+    /// All registered flow event listeners (key is flow event type).
+    #[cfg(feature = "flow-events")]
+    flow_event_listeners: RefCell<HashMap<u8, Vec<Sender<()>>>>,
 }
 
 impl MyShard {
@@ -146,9 +157,10 @@ impl MyShard {
             trees: RefCell::new(HashMap::new()),
             cache: Rc::new(RefCell::new(cache)),
             local_shards_packet_receiver,
-            flow_event_listeners: RefCell::new(HashMap::new()),
             stop_receiver,
             stop_sender,
+            #[cfg(feature = "flow-events")]
+            flow_event_listeners: RefCell::new(HashMap::new()),
         }
     }
 
@@ -553,8 +565,7 @@ impl MyShard {
         self.shards
             .borrow_mut()
             .retain(|shard| &shard.node_name != node_name);
-        self.notify_flow_event(FlowEvent::DeadNodeRemoved.into())
-            .await;
+        notify_flow_event!(self, FlowEvent::DeadNodeRemoved);
     }
 
     pub async fn handle_gossip_event(
@@ -574,8 +585,9 @@ impl MyShard {
                     self.nodes.borrow().len()
                 );
                 self.add_shards_of_nodes(vec![node]);
-                self.notify_flow_event(FlowEvent::AliveNodeGossip.into())
-                    .await;
+
+                notify_flow_event!(self, FlowEvent::AliveNodeGossip);
+
                 false
             }
             GossipEvent::Dead(node_name) => {
@@ -597,6 +609,7 @@ impl MyShard {
         Ok(sent_event)
     }
 
+    #[cfg(feature = "flow-events")]
     pub fn subscribe_to_flow_event(&self, event: u8) -> Receiver<()> {
         let (sender, receiver) = async_channel::bounded(1);
         self.flow_event_listeners
@@ -607,6 +620,7 @@ impl MyShard {
         receiver
     }
 
+    #[cfg(feature = "flow-events")]
     pub async fn notify_flow_event(&self, event: u8) {
         let maybe_removed =
             self.flow_event_listeners.borrow_mut().remove(&event);

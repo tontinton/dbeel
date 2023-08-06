@@ -1,10 +1,10 @@
 use crate::{
     args::Args,
     error::{Error, Result},
-    flow_events::FlowEvent,
     gossip::GossipEvent,
     local_shard::LocalShardConnection,
     messages::NodeMetadata,
+    notify_flow_event,
     page_cache::{PageCache, PAGE_SIZE},
     remote_shard_connection::RemoteShardConnection,
     shards::{MyShard, OtherShard, ShardConnection},
@@ -21,6 +21,9 @@ use futures::future::try_join_all;
 use log::{error, info, trace};
 use std::rc::Rc;
 use std::time::Duration;
+
+#[cfg(feature = "flow-events")]
+use crate::flow_events::FlowEvent;
 
 async fn discover_collections(my_shard: &MyShard) -> Result<()> {
     for name in my_shard.get_collection_names_from_disk()? {
@@ -113,9 +116,7 @@ pub async fn run_shard(
             .await?;
     }
 
-    my_shard
-        .notify_flow_event(FlowEvent::StartTasks.into())
-        .await;
+    notify_flow_event!(my_shard, FlowEvent::StartTasks);
 
     // Await all, returns when first fails, cancels all others.
     let result = try_join_all(tasks).await;

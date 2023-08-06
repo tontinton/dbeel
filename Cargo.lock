@@ -700,6 +700,7 @@ dependencies = [
  "clap",
  "color-backtrace",
  "ctor",
+ "dbeel",
  "dbeel_client",
  "enum_to_num",
  "futures",

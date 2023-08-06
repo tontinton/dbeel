@@ -1,7 +1,6 @@
 pub mod args;
 pub mod cached_file_reader;
 pub mod error;
-pub mod flow_events;
 pub mod gossip;
 pub mod local_shard;
 pub mod lsm_tree;
@@ -15,3 +14,6 @@ pub mod tasks;
 pub mod timeout;
 pub mod timestamp_nanos;
 pub mod utils;
+
+#[cfg(feature = "flow-events")]
+pub mod flow_events;
