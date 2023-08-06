@@ -9,8 +9,8 @@ use dbeel::{
 use rstest::{fixture, rstest};
 use serial_test::serial;
 use test_utils::{
-    install_logger, subscribe_to_flow_events, test_node, test_node_ex,
-    test_shard, wait_for_flow_events,
+    install_logger, next_node_args, subscribe_to_flow_events, test_node,
+    test_node_ex, test_shard, wait_for_flow_events,
 };
 
 static ONCE: Once = Once::new();
@@ -56,7 +56,6 @@ fn node_discovery_and_shutdown_detect_(
     let number_of_shards_first_node = 2u16;
     let number_of_shards_second_node = 2u16;
 
-    let mut second_args = args.clone();
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
     let (second_up_sender, second_up_receiver) = async_channel::bounded(1);
     let (first_test_done_sender, first_test_done_receiver) =
@@ -118,11 +117,13 @@ fn node_discovery_and_shutdown_detect_(
     )?;
 
     let seed_nodes = seed_receiver.recv_blocking()?;
+
+    let mut second_args = next_node_args(
+        args.clone(),
+        "second".to_string(),
+        number_of_shards_first_node,
+    );
     second_args.seed_nodes = seed_nodes;
-    second_args.remote_shard_port += number_of_shards_first_node;
-    second_args.port += number_of_shards_first_node;
-    second_args.gossip_port += number_of_shards_first_node;
-    second_args.name = "second".to_string();
 
     let second_handle = test_node_ex(
         number_of_shards_second_node.into(),

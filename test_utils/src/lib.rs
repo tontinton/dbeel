@@ -151,3 +151,15 @@ where
 {
     test_node_ex(number_of_shards, args, true, test_future)
 }
+
+pub fn next_node_args(
+    mut args: Args,
+    name: String,
+    number_of_shards: u16,
+) -> Args {
+    args.remote_shard_port += number_of_shards;
+    args.port += number_of_shards;
+    args.gossip_port += number_of_shards;
+    args.name = name;
+    args
+}
