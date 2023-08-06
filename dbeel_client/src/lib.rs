@@ -9,7 +9,7 @@ use dbeel::shards::{hash_string, ClusterMetadata};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::net::TcpStream;
 use rmp_serde::from_slice;
-use rmpv::{encode::write_value, Utf8String, Value};
+use rmpv::{encode::write_value, Integer, Utf8String, Value};
 
 use crate::error::{Error, Result};
 
@@ -211,7 +211,15 @@ impl DbeelClient {
 }
 
 impl Collection {
-    pub async fn get<S: Into<Utf8String>>(&self, key: S) -> Result<Vec<u8>> {
+    pub async fn get_consistent<S, I>(
+        &self,
+        key: S,
+        consistency: I,
+    ) -> Result<Vec<u8>>
+    where
+        S: Into<Utf8String>,
+        I: Into<Integer>,
+    {
         let key = to_utf8string(key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("get".into())),
@@ -219,6 +227,46 @@ impl Collection {
             (
                 Value::String("collection".into()),
                 Value::String(self.name.clone()),
+            ),
+            (
+                Value::String("consistency".into()),
+                Value::Integer(consistency.into()),
+            ),
+        ]);
+        self.client
+            .send_sharded_request(&(key.into_str().unwrap()), request)
+            .await
+    }
+
+    pub async fn get<S>(&self, key: S) -> Result<Vec<u8>>
+    where
+        S: Into<Utf8String>,
+    {
+        self.get_consistent(key, 1).await
+    }
+
+    pub async fn set_consistent<S, I>(
+        &self,
+        key: S,
+        value: Value,
+        consistency: I,
+    ) -> Result<Vec<u8>>
+    where
+        S: Into<Utf8String>,
+        I: Into<Integer>,
+    {
+        let key = to_utf8string(key)?;
+        let request = Value::Map(vec![
+            (Value::String("type".into()), Value::String("set".into())),
+            (Value::String("key".into()), Value::String(key.clone())),
+            (Value::String("value".into()), value),
+            (
+                Value::String("collection".into()),
+                Value::String(self.name.clone()),
+            ),
+            (
+                Value::String("consistency".into()),
+                Value::Integer(consistency.into()),
             ),
         ]);
         self.client
@@ -231,19 +279,7 @@ impl Collection {
         key: S,
         value: Value,
     ) -> Result<Vec<u8>> {
-        let key = to_utf8string(key)?;
-        let request = Value::Map(vec![
-            (Value::String("type".into()), Value::String("set".into())),
-            (Value::String("key".into()), Value::String(key.clone())),
-            (Value::String("value".into()), value),
-            (
-                Value::String("collection".into()),
-                Value::String(self.name.clone()),
-            ),
-        ]);
-        self.client
-            .send_sharded_request(&(key.into_str().unwrap()), request)
-            .await
+        self.set_consistent(key, value, 1).await
     }
 
     pub async fn delete<S: Into<Utf8String>>(&self, key: S) -> Result<Vec<u8>> {
