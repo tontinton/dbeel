@@ -17,7 +17,7 @@ pub enum Error {
 
     /// Failed to connect to a shard.
     #[error("Failed to connect to a shard")]
-    ConnectToShard(#[from] glommio::GlommioError<()>),
+    ConnectToShard(glommio::GlommioError<()>),
 
     /// Failed to communicate with a shard.
     #[error("Failed to communicate with a shard")]
@@ -48,6 +48,10 @@ pub enum Error {
     /// Failed to encode to a msgpack buffer.
     #[error("Failed to encode to a msgpack buffer")]
     MsgpackSerdeEncodeError(#[from] rmp_serde::encode::Error),
+
+    /// Failed to set timeout on a socket.
+    #[error("Failed to set timeout on a socket")]
+    SetTimeout(glommio::GlommioError<()>),
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
