@@ -482,6 +482,8 @@ impl MyShard {
                     self.trees.borrow_mut().insert(collection, tree);
                 };
 
+                notify_flow_event!(self, FlowEvent::ItemSetFromRemoteShard);
+
                 ShardResponse::Set
             }
             ShardRequest::Delete(collection, key) => {

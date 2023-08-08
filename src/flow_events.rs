@@ -7,4 +7,5 @@ pub enum FlowEvent {
     StartTasks,
     DeadNodeRemoved,
     AliveNodeGossip,
+    ItemSetFromRemoteShard,
 }
