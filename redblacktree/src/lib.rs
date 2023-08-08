@@ -502,7 +502,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         }
 
         loop {
-            let mut node = unsafe { &mut *node_ptr.0 };
+            let node = unsafe { &mut *node_ptr.0 };
             let (left, next_ptr) = match key.cmp(&node.key) {
                 Ordering::Less => (true, node.left),
                 Ordering::Greater => (false, node.right),
@@ -538,13 +538,13 @@ impl<K: Ord, V> RedBlackTree<K, V> {
         while node_ptr != self.root {
             let node = &*node_ptr.0;
             let parent_ptr = node.parent;
-            let mut parent = &mut *parent_ptr.0;
+            let parent = &mut *parent_ptr.0;
             if parent.color == Color::Black {
                 break;
             }
 
             let grand_parent_ptr = parent.parent;
-            let mut grand_parent = &mut *grand_parent_ptr.0;
+            let grand_parent = &mut *grand_parent_ptr.0;
 
             if parent_ptr == grand_parent.left {
                 let uncle_ptr = grand_parent.right;
@@ -594,9 +594,9 @@ impl<K: Ord, V> RedBlackTree<K, V> {
     }
 
     unsafe fn rotate_left(&mut self, node_ptr: NodePtr<K, V>) {
-        let mut node = &mut *node_ptr.0;
+        let node = &mut *node_ptr.0;
         let right_ptr = node.right;
-        let mut right = &mut *right_ptr.0;
+        let right = &mut *right_ptr.0;
 
         node.right = right.left;
         if let Some(left) = right.left.as_option_mut() {
@@ -621,9 +621,9 @@ impl<K: Ord, V> RedBlackTree<K, V> {
     }
 
     unsafe fn rotate_right(&mut self, node_ptr: NodePtr<K, V>) {
-        let mut node = &mut *node_ptr.0;
+        let node = &mut *node_ptr.0;
         let left_ptr = node.left;
-        let mut left = &mut *left_ptr.0;
+        let left = &mut *left_ptr.0;
 
         node.left = left.right;
         if let Some(right) = left.right.as_option_mut() {
