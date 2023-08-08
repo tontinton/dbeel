@@ -2,6 +2,7 @@ pub mod error;
 
 use std::{
     net::{SocketAddr, ToSocketAddrs},
+    time::Duration,
 };
 
 use dbeel::shards::{hash_string, ClusterMetadata};
@@ -12,6 +13,10 @@ use rmpv::{encode::write_value, Integer, Utf8String, Value};
 
 use crate::error::{Error, Result};
 
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 struct Shard {
     hash: u32,
     address: SocketAddr,
@@ -21,6 +26,9 @@ pub struct DbeelClient {
     seed_shards: Vec<SocketAddr>,
     hash_ring: Vec<Shard>,
     replication_factor: u32,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
 }
 
 pub struct Collection<'a> {
@@ -55,7 +63,16 @@ impl DbeelClient {
             Value::String("type".into()),
             Value::String("get_cluster_metadata".into()),
         )]);
-        let buf = Self::send_request(&seed_addresses, request).await?;
+
+        let buf = Self::send_request_ex(
+            &seed_addresses,
+            request,
+            DEFAULT_CONNECT_TIMEOUT,
+            Some(DEFAULT_READ_TIMEOUT),
+            Some(DEFAULT_WRITE_TIMEOUT),
+        )
+        .await?;
+
         let metadata: ClusterMetadata = from_slice(&buf)?;
         let flatten_shards = metadata
             .nodes
@@ -86,7 +103,22 @@ impl DbeelClient {
             seed_shards: seed_addresses,
             hash_ring,
             replication_factor: metadata.replication_factor,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            read_timeout: DEFAULT_READ_TIMEOUT,
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
         })
+    }
+
+    pub fn set_connect_timeout(&mut self, timeout: Duration) {
+        self.connect_timeout = timeout;
+    }
+
+    pub fn set_read_timeout(&mut self, timeout: Duration) {
+        self.read_timeout = timeout;
+    }
+
+    pub fn set_write_timeout(&mut self, timeout: Duration) {
+        self.write_timeout = timeout;
     }
 
     pub fn collection<S: Into<Utf8String>>(&self, name: S) -> Collection {
@@ -99,10 +131,19 @@ impl DbeelClient {
     async fn send_buffer(
         address: &SocketAddr,
         buffer: &Vec<u8>,
+        connect_timeout: Duration,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
     ) -> Result<Vec<u8>> {
-        let mut stream = TcpStream::connect(address)
+        let mut stream = TcpStream::connect_timeout(address, connect_timeout)
             .await
             .map_err(Error::ConnectToShard)?;
+        stream
+            .set_read_timeout(read_timeout)
+            .map_err(Error::SetTimeout)?;
+        stream
+            .set_write_timeout(write_timeout)
+            .map_err(Error::SetTimeout)?;
 
         let size_buffer = (buffer.len() as u16).to_le_bytes();
         stream
@@ -124,8 +165,26 @@ impl DbeelClient {
     }
 
     pub(crate) async fn send_request(
+        &self,
         addresses: &[SocketAddr],
         request: Value,
+    ) -> Result<Vec<u8>> {
+        Self::send_request_ex(
+            addresses,
+            request,
+            self.connect_timeout,
+            Some(self.read_timeout),
+            Some(self.write_timeout),
+        )
+        .await
+    }
+
+    async fn send_request_ex(
+        addresses: &[SocketAddr],
+        request: Value,
+        connect_timeout: Duration,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
     ) -> Result<Vec<u8>> {
         if addresses.is_empty() {
             return Err(Error::NoAddresses);
@@ -136,7 +195,15 @@ impl DbeelClient {
 
         let mut errors = vec![];
         for address in addresses {
-            match Self::send_buffer(address, &data_encoded).await {
+            match Self::send_buffer(
+                address,
+                &data_encoded,
+                connect_timeout,
+                read_timeout,
+                write_timeout,
+            )
+            .await
+            {
                 Ok(response_encoded) => {
                     return Ok(response_encoded);
                 }
@@ -169,7 +236,7 @@ impl DbeelClient {
             }
             owning_shards.push(self.hash_ring[index].address);
         }
-        Ok(DbeelClient::send_request(&owning_shards, request).await?)
+        Ok(self.send_request(&owning_shards, request).await?)
     }
 
     pub async fn create_collection<S: Into<Utf8String>>(
@@ -184,7 +251,7 @@ impl DbeelClient {
             ),
             (Value::String("name".into()), Value::String(name.clone())),
         ]);
-        Self::send_request(&self.seed_shards, request).await?;
+        self.send_request(&self.seed_shards, request).await?;
 
         Ok(self.collection(name))
     }
@@ -201,7 +268,7 @@ impl DbeelClient {
             ),
             (Value::String("name".into()), Value::String(name.clone())),
         ]);
-        Self::send_request(&self.seed_shards, request).await?;
+        self.send_request(&self.seed_shards, request).await?;
         Ok(())
     }
 }
