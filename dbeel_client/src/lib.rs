@@ -2,7 +2,6 @@ pub mod error;
 
 use std::{
     net::{SocketAddr, ToSocketAddrs},
-    sync::Arc,
 };
 
 use dbeel::shards::{hash_string, ClusterMetadata};
@@ -24,8 +23,8 @@ pub struct DbeelClient {
     replication_factor: u32,
 }
 
-pub struct Collection {
-    client: Arc<DbeelClient>,
+pub struct Collection<'a> {
+    client: &'a DbeelClient,
     name: Utf8String,
 }
 
@@ -40,7 +39,7 @@ fn to_utf8string<S: Into<Utf8String>>(
 }
 
 impl DbeelClient {
-    pub async fn from_seed_nodes<A>(addresses: &[A]) -> Result<Arc<Self>>
+    pub async fn from_seed_nodes<A>(addresses: &[A]) -> Result<Self>
     where
         A: ToSocketAddrs,
     {
@@ -83,17 +82,14 @@ impl DbeelClient {
         }
         hash_ring.sort_unstable_by_key(|s| s.hash);
 
-        Ok(Arc::new(Self {
+        Ok(Self {
             seed_shards: seed_addresses,
             hash_ring,
             replication_factor: metadata.replication_factor,
-        }))
+        })
     }
 
-    pub fn collection<S: Into<Utf8String>>(
-        self: Arc<Self>,
-        name: S,
-    ) -> Collection {
+    pub fn collection<S: Into<Utf8String>>(&self, name: S) -> Collection {
         Collection {
             client: self,
             name: name.into(),
@@ -177,7 +173,7 @@ impl DbeelClient {
     }
 
     pub async fn create_collection<S: Into<Utf8String>>(
-        self: Arc<Self>,
+        &self,
         name: S,
     ) -> Result<Collection> {
         let name = to_utf8string(name)?;
@@ -194,7 +190,7 @@ impl DbeelClient {
     }
 
     pub(crate) async fn drop_collection<S: Into<Utf8String>>(
-        self: Arc<Self>,
+        &self,
         name: S,
     ) -> Result<()> {
         let name = to_utf8string(name)?;
@@ -210,7 +206,7 @@ impl DbeelClient {
     }
 }
 
-impl Collection {
+impl<'a> Collection<'a> {
     pub async fn get_consistent<S, I>(
         &self,
         key: S,

@@ -70,8 +70,7 @@ fn drop_collection(args: Args) -> Result<()> {
         .await
         .unwrap();
 
-        let collection =
-            client.clone().create_collection("test").await.unwrap();
+        let collection = client.create_collection("test").await.unwrap();
         collection.drop().await.unwrap();
 
         let collection = client.collection("test");
@@ -96,8 +95,7 @@ fn get_non_existing_key(args: Args) -> Result<()> {
         )])
         .await
         .unwrap();
-        let collection =
-            client.clone().create_collection("test").await.unwrap();
+        let collection = client.create_collection("test").await.unwrap();
         let response = collection.get("key").await.unwrap();
         assert!(response_equals_error(response, Error::KeyNotFound).unwrap());
     })?;
@@ -116,8 +114,7 @@ fn set_and_get_key(args: Args) -> Result<()> {
         .await
         .unwrap();
 
-        let collection =
-            client.clone().create_collection("test").await.unwrap();
+        let collection = client.create_collection("test").await.unwrap();
 
         let response = collection.set("key", Value::F32(100.0)).await.unwrap();
         assert!(response_ok(response).unwrap());
@@ -143,8 +140,7 @@ fn set_and_get_key_after_restart(args: Args) -> Result<()> {
         .await
         .unwrap();
 
-        let collection =
-            client.clone().create_collection("test").await.unwrap();
+        let collection = client.create_collection("test").await.unwrap();
 
         let response = collection.set("key", Value::F32(100.0)).await.unwrap();
         assert!(response_ok(response).unwrap());
@@ -180,8 +176,7 @@ fn delete_and_get_key(args: Args) -> Result<()> {
         .await
         .unwrap();
 
-        let collection =
-            client.clone().create_collection("test").await.unwrap();
+        let collection = client.create_collection("test").await.unwrap();
 
         let response = collection.set("key", Value::F32(100.0)).await.unwrap();
         assert!(response_ok(response).unwrap());
@@ -212,8 +207,8 @@ fn multiple_collections(args: Args) -> Result<()> {
         .unwrap();
 
         let collections = vec![
-            client.clone().create_collection("test1").await.unwrap(),
-            client.clone().create_collection("test2").await.unwrap(),
+            client.create_collection("test1").await.unwrap(),
+            client.create_collection("test2").await.unwrap(),
         ];
 
         for collection in &collections {
