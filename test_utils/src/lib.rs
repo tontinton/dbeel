@@ -19,7 +19,7 @@ use pretty_env_logger::formatted_timed_builder;
 
 pub fn install_logger() {
     let mut log_builder = formatted_timed_builder();
-    log_builder.parse_filters("trace");
+    log_builder.parse_filters("trace,glommio=info");
     log_builder.try_init().unwrap();
 }
 
