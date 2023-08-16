@@ -32,10 +32,9 @@ fn three_nodes_replication_test(
     get_consistency: usize,
 ) -> Result<()> {
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
+    let (done_sender, done_receiver) = async_channel::bounded(1);
 
-    let mut handles = Vec::new();
-
-    handles.push(test_node(1, args.clone(), move |shard, _| async move {
+    let main_handle = test_node(1, args.clone(), move |shard, _| async move {
         seed_sender
             .send(vec![format!(
                 "{}:{}",
@@ -60,7 +59,10 @@ fn three_nodes_replication_test(
             .set_consistent("key", Value::F32(42.0), set_consistency)
             .await
             .unwrap();
-    })?);
+
+        // Wait for all other nodes to finish their tests.
+        done_receiver.recv().await.unwrap();
+    })?;
 
     let seed_nodes = seed_receiver.recv_blocking()?;
 
@@ -69,6 +71,8 @@ fn three_nodes_replication_test(
     args1.seed_nodes = seed_nodes;
     let mut args2 = next_node_args(args1.clone(), "second".to_string(), 1);
     args2.dir = "/tmp/test2".to_string();
+
+    let mut handles = Vec::new();
 
     for node_args in vec![args1, args2] {
         handles.push(test_node(1, node_args, move |shard, _| async move {
@@ -102,6 +106,8 @@ fn three_nodes_replication_test(
     for handle in handles {
         handle.join()?;
     }
+    done_sender.send_blocking(())?;
+    main_handle.join()?;
 
     Ok(())
 }
