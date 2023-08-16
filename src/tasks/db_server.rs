@@ -26,20 +26,20 @@ const DEFAULT_GET_TIMEOUT_MS: u64 = 15000;
 
 #[derive(Serialize, Deserialize)]
 pub struct ResponseError {
-    text: String,
-    number: u8,
+    message: String,
+    name: String,
 }
 
 impl ResponseError {
     fn new(e: &Error) -> Self {
         Self {
-            text: format!("{}", e),
-            number: e.into(),
+            message: format!("{}", e),
+            name: e.kind().to_string(),
         }
     }
 
     pub fn same_as(&self, e: &Error) -> bool {
-        self.text == format!("{}", e) && self.number == e.into()
+        self.message == format!("{}", e) && self.name == e.kind().to_string()
     }
 }
 

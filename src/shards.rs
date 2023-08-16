@@ -13,7 +13,9 @@ use rand::thread_rng;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::gossip::{serialize_gossip_message, GossipEvent, GossipMessage};
+use crate::gossip::{
+    serialize_gossip_message, GossipEvent, GossipEventKind, GossipMessage,
+};
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
 use crate::utils::get_first_capture;
 use crate::{
@@ -28,13 +30,13 @@ use crate::{
 };
 
 #[cfg(feature = "flow-events")]
-use crate::flow_events::FlowEvent;
+use crate::flow_events::{FlowEvent, FlowEventKind};
 
 #[macro_export]
 macro_rules! notify_flow_event {
     ($self:expr, $flow_event:expr) => {
         #[cfg(feature = "flow-events")]
-        $self.notify_flow_event($flow_event.into()).await;
+        $self.notify_flow_event($flow_event.kind()).await;
     };
 }
 
@@ -109,7 +111,7 @@ pub struct MyShard {
     pub nodes: RefCell<HashMap<String, NodeMetadata>>,
 
     /// Holds the counts of gossip requests.
-    pub gossip_requests: RefCell<HashMap<(String, u8), u8>>,
+    pub gossip_requests: RefCell<HashMap<(String, GossipEventKind), u8>>,
 
     /// Collections to the lsm tree on disk.
     pub trees: RefCell<HashMap<String, Rc<LSMTree>>>,
@@ -128,7 +130,7 @@ pub struct MyShard {
 
     /// All registered flow event listeners (key is flow event type).
     #[cfg(feature = "flow-events")]
-    flow_event_listeners: RefCell<HashMap<u8, Vec<Sender<()>>>>,
+    flow_event_listeners: RefCell<HashMap<FlowEventKind, Vec<Sender<()>>>>,
 }
 
 impl MyShard {
@@ -610,7 +612,10 @@ impl MyShard {
     }
 
     #[cfg(feature = "flow-events")]
-    pub fn subscribe_to_flow_event(&self, event: u8) -> Receiver<()> {
+    pub fn subscribe_to_flow_event(
+        &self,
+        event: FlowEventKind,
+    ) -> Receiver<()> {
         let (sender, receiver) = async_channel::bounded(1);
         self.flow_event_listeners
             .borrow_mut()
@@ -621,7 +626,7 @@ impl MyShard {
     }
 
     #[cfg(feature = "flow-events")]
-    pub async fn notify_flow_event(&self, event: u8) {
+    pub async fn notify_flow_event(&self, event: FlowEventKind) {
         let maybe_removed =
             self.flow_event_listeners.borrow_mut().remove(&event);
         if let Some(senders) = maybe_removed {

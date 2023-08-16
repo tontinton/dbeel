@@ -1,8 +1,9 @@
-use enum_to_num::EnumToNum;
+use kinded::Kinded;
 
 /// Events for notifying that a specific flow in the code has reached.
 /// Useful for integration test to never sleep.
-#[derive(EnumToNum)]
+#[derive(Kinded)]
+#[kinded(derive(Hash))]
 pub enum FlowEvent {
     StartTasks,
     DeadNodeRemoved,

@@ -1,10 +1,11 @@
 use async_channel::{RecvError, SendError};
-use enum_to_num::EnumToNum;
+use kinded::Kinded;
 use thiserror::Error;
 
 use crate::messages::ShardPacket;
 
-#[derive(Error, Debug, EnumToNum)]
+#[derive(Error, Debug, Kinded)]
+#[kinded(display = "snake_case")]
 pub enum Error {
     #[error("creating the '{pattern}' regex failed")]
     RegexCreationError {

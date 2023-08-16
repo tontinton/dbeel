@@ -16,10 +16,10 @@ flow-events = []
 async-channel = "1.8.0"
 bincode = "1.3.3"
 clap = { version = "4.2.7", features = ["derive"] }
-enum_to_num = { path = "enum_to_num" }
 futures = "0.3.28"
 futures-lite = "1.12.0"
 glommio = "0.8.0"
+kinded = "0.3.0"
 log = "0.4.17"
 murmur3 = "0.5.2"
 once_cell = "1.17.1"
