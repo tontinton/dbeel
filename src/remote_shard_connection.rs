@@ -10,6 +10,7 @@ use futures_lite::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::net::TcpStream;
 
 use crate::{
+    args::Args,
     error::{Error, Result},
     messages::{NodeMetadata, ShardMessage, ShardRequest, ShardResponse},
     read_exactly::read_exactly,
@@ -21,21 +22,41 @@ pub struct RemoteShardConnection {
     // The address to use to connect to the remote shard.
     pub address: String,
     connect_timeout: Duration,
+    write_timeout: Duration,
+    read_timeout: Duration,
 }
 
 impl RemoteShardConnection {
-    pub fn new(address: String, connect_timeout: Duration) -> Self {
+    pub fn from_args(address: String, args: &Args) -> Self {
+        Self::new(
+            address,
+            Duration::from_millis(args.remote_shard_connect_timeout),
+            Duration::from_millis(args.remote_shard_write_timeout),
+            Duration::from_millis(args.remote_shard_read_timeout),
+        )
+    }
+
+    pub fn new(
+        address: String,
+        connect_timeout: Duration,
+        write_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Self {
         Self {
             address,
             connect_timeout,
+            write_timeout,
+            read_timeout,
         }
     }
 
     async fn connect(&self) -> Result<TcpStream> {
-        Ok(
+        let stream =
             TcpStream::connect_timeout(&self.address, self.connect_timeout)
-                .await?,
-        )
+                .await?;
+        stream.set_write_timeout(Some(self.write_timeout))?;
+        stream.set_read_timeout(Some(self.read_timeout))?;
+        Ok(stream)
     }
 
     pub async fn send_request(

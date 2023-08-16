@@ -78,6 +78,20 @@ This port is for listening for distributed messages from \
 
     #[clap(
         long,
+        help = "Remote shard write request timeout in milliseconds.",
+        default_value = "15000"
+    )]
+    pub remote_shard_write_timeout: u64,
+
+    #[clap(
+        long,
+        help = "Remote shard read request timeout in milliseconds.",
+        default_value = "15000"
+    )]
+    pub remote_shard_read_timeout: u64,
+
+    #[clap(
+        long,
         help = "Gossip UDP server port.
 This port is for listening for gossip messages from \
                 remote nodes.",

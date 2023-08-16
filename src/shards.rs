@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use async_channel::{Receiver, Sender};
@@ -416,12 +415,11 @@ impl MyShard {
                     OtherShard::new(
                         node_name,
                         address.clone(),
-                        ShardConnection::Remote(RemoteShardConnection::new(
-                            address,
-                            Duration::from_millis(
-                                self.args.remote_shard_connect_timeout,
+                        ShardConnection::Remote(
+                            RemoteShardConnection::from_args(
+                                address, &self.args,
                             ),
-                        )),
+                        ),
                     )
                 }),
         );

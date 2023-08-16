@@ -36,13 +36,13 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
             continue;
         };
 
-        let connection = RemoteShardConnection::new(
+        let connection = RemoteShardConnection::from_args(
             format!(
                 "{}:{}",
                 node.ip,
                 node.shard_ports.choose(&mut rng).unwrap()
             ),
-            Duration::from_millis(my_shard.args.remote_shard_connect_timeout),
+            &my_shard.args,
         );
 
         if let Err(e) = connection.ping().await {

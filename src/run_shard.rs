@@ -20,7 +20,6 @@ use crate::{
 use futures::future::try_join_all;
 use log::{error, info, trace};
 use std::rc::Rc;
-use std::time::Duration;
 
 #[cfg(feature = "flow-events")]
 use crate::flow_events::FlowEvent;
@@ -58,11 +57,9 @@ async fn discover_nodes(my_shard: &MyShard) -> Result<()> {
             .seed_nodes
             .iter()
             .map(|seed_node| {
-                RemoteShardConnection::new(
+                RemoteShardConnection::from_args(
                     seed_node.clone(),
-                    Duration::from_millis(
-                        my_shard.args.remote_shard_connect_timeout,
-                    ),
+                    &my_shard.args,
                 )
             })
             .collect::<Vec<_>>(),
