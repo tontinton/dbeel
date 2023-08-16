@@ -38,7 +38,17 @@ fn args() -> Args {
 
     // Remove the test directory if it exists.
     let _ = std::fs::remove_dir_all("/tmp/test");
-    parse_args_from(["", "--dir", "/tmp/test"])
+    parse_args_from([
+        "",
+        "--dir",
+        "/tmp/test",
+        "--remote-shard-connect-timeout",
+        "500",
+        "--remote-shard-read-timeout",
+        "500",
+        "--remote-shard-write-timeout",
+        "500",
+    ])
 }
 
 #[rstest]
