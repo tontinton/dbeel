@@ -60,10 +60,10 @@ pub struct EntryValue {
 }
 
 impl EntryValue {
-    fn new(data: Vec<u8>) -> Self {
+    fn new(data: Vec<u8>, timestamp: Option<OffsetDateTime>) -> Self {
         Self {
             data,
-            timestamp: OffsetDateTime::now_utc(),
+            timestamp: timestamp.unwrap_or_else(OffsetDateTime::now_utc),
         }
     }
 }
@@ -663,12 +663,13 @@ impl LSMTree {
         Ok(self.get_entry(key).await?.map(|v| v.data))
     }
 
-    pub async fn set(
+    async fn set_ex(
         self: Rc<Self>,
         key: Vec<u8>,
         value: Vec<u8>,
+        timestamp: Option<OffsetDateTime>,
     ) -> Result<Option<EntryValue>> {
-        let value = EntryValue::new(value);
+        let value = EntryValue::new(value, timestamp);
 
         // Wait until some flush happens.
         while self.memtable_full() {
@@ -695,6 +696,23 @@ impl LSMTree {
         self.write_to_wal(&Entry { key, value }).await?;
 
         Ok(result)
+    }
+
+    pub async fn set(
+        self: Rc<Self>,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> Result<Option<EntryValue>> {
+        self.set_ex(key, value, None).await
+    }
+
+    pub async fn set_with_timestamp(
+        self: Rc<Self>,
+        key: Vec<u8>,
+        value: Vec<u8>,
+        timestamp: OffsetDateTime,
+    ) -> Result<Option<EntryValue>> {
+        self.set_ex(key, value, Some(timestamp)).await
     }
 
     pub async fn delete(
@@ -1260,7 +1278,7 @@ mod tests {
             .map(|x| x.to_le_bytes().to_vec())
             .map(|x| Entry {
                 key: x.clone(),
-                value: EntryValue::new(x),
+                value: EntryValue::new(x, None),
             })
             .collect::<Vec<_>>();
 
