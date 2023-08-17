@@ -471,14 +471,16 @@ impl MyShard {
             ShardRequest::GetMetadata => {
                 ShardResponse::GetMetadata(self.get_nodes())
             }
-            ShardRequest::Set(collection, key, value) => {
+            ShardRequest::Set(collection, key, value, timestamp) => {
                 let existing_tree =
                     self.trees.borrow().get(&collection).cloned();
                 if let Some(tree) = existing_tree {
-                    tree.set(key, value).await?;
+                    tree.set_with_timestamp(key, value, timestamp).await?;
                 } else {
                     let tree = self.create_lsm_tree(collection.clone()).await?;
-                    tree.clone().set(key, value).await?;
+                    tree.clone()
+                        .set_with_timestamp(key, value, timestamp)
+                        .await?;
                     self.trees.borrow_mut().insert(collection, tree);
                 };
 

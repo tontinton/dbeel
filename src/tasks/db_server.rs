@@ -10,6 +10,7 @@ use rmpv::{
     Value, ValueRef,
 };
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{
     error::{Error, Result},
@@ -141,10 +142,16 @@ async fn handle_request(
                 );
 
                 let tree = my_shard.get_collection(&collection)?;
+                let timestamp = OffsetDateTime::now_utc();
+
                 if my_shard.args.replication_factor > 1 {
-                    let local_future = tree.set(key.clone(), value.clone());
+                    let local_future = tree.set_with_timestamp(
+                        key.clone(),
+                        value.clone(),
+                        timestamp,
+                    );
                     let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Set(collection, key, value),
+                        ShardRequest::Set(collection, key, value, timestamp),
                         write_consistency as usize - 1,
                         |res| {
                             response_to_empty_result!(res, ShardResponse::Set)
@@ -156,7 +163,11 @@ async fn handle_request(
                     )
                     .await?;
                 } else {
-                    timeout(write_timeout, tree.set(key, value)).await?;
+                    timeout(
+                        write_timeout,
+                        tree.set_with_timestamp(key, value, timestamp),
+                    )
+                    .await?;
                 }
             }
             Some("delete") => {

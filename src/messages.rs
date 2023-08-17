@@ -1,5 +1,6 @@
 use async_channel::Sender;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{gossip::GossipEvent, lsm_tree::EntryValue};
 
@@ -14,8 +15,8 @@ pub enum ShardEvent {
 pub enum ShardRequest {
     Ping,
     GetMetadata,
-    Set(String, Vec<u8>, Vec<u8>),
     Delete(String, Vec<u8>),
+    Set(String, Vec<u8>, Vec<u8>, OffsetDateTime),
     Get(String, Vec<u8>),
 }
 
