@@ -15,8 +15,8 @@ pub enum ShardEvent {
 pub enum ShardRequest {
     Ping,
     GetMetadata,
-    Delete(String, Vec<u8>),
     Set(String, Vec<u8>, Vec<u8>, OffsetDateTime),
+    Delete(String, Vec<u8>, OffsetDateTime),
     Get(String, Vec<u8>),
 }
 

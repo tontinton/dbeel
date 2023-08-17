@@ -488,11 +488,11 @@ impl MyShard {
 
                 ShardResponse::Set
             }
-            ShardRequest::Delete(collection, key) => {
+            ShardRequest::Delete(collection, key, timestamp) => {
                 let existing_tree =
                     self.trees.borrow().get(&collection).cloned();
                 if let Some(tree) = existing_tree {
-                    tree.delete(key).await?;
+                    tree.delete_with_timestamp(key, timestamp).await?;
                 };
                 ShardResponse::Delete
             }

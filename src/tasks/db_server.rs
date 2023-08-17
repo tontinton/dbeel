@@ -182,11 +182,14 @@ async fn handle_request(
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
                 );
 
+                let timestamp = OffsetDateTime::now_utc();
                 let tree = my_shard.get_collection(&collection)?;
+
                 if my_shard.args.replication_factor > 1 {
-                    let local_future = tree.delete(key.clone());
+                    let local_future =
+                        tree.delete_with_timestamp(key.clone(), timestamp);
                     let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Delete(collection, key),
+                        ShardRequest::Delete(collection, key, timestamp),
                         delete_consistency as usize - 1,
                         |res| {
                             response_to_empty_result!(
@@ -201,7 +204,11 @@ async fn handle_request(
                     )
                     .await?;
                 } else {
-                    timeout(delete_timeout, tree.delete(key)).await?;
+                    timeout(
+                        delete_timeout,
+                        tree.delete_with_timestamp(key, timestamp),
+                    )
+                    .await?;
                 }
             }
             Some("get") => {
