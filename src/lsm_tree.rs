@@ -722,6 +722,14 @@ impl LSMTree {
         self.set(key, TOMBSTONE).await
     }
 
+    pub async fn delete_with_timestamp(
+        self: Rc<Self>,
+        key: Vec<u8>,
+        timestamp: OffsetDateTime,
+    ) -> Result<Option<EntryValue>> {
+        self.set_with_timestamp(key, TOMBSTONE, timestamp).await
+    }
+
     async fn write_to_wal(&self, entry: &Entry) -> Result<()> {
         let file = self.wal_file.borrow().clone();
 
