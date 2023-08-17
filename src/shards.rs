@@ -559,7 +559,10 @@ impl MyShard {
     }
 
     pub async fn handle_dead_node(&self, node_name: &String) {
-        self.nodes.borrow_mut().remove(node_name);
+        if self.nodes.borrow_mut().remove(node_name).is_none() {
+            return;
+        }
+
         trace!(
             "After death: holding {} number of nodes",
             self.nodes.borrow().len()
