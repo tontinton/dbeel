@@ -78,11 +78,10 @@ fn node_discovery_and_shutdown_detect_(
             let mut all_shards = other_shards.clone();
             all_shards.push(node_shard.clone());
 
-            let other_shards_alive_node_gossip_events =
-                subscribe_to_flow_events(
-                    &other_shards,
-                    FlowEvent::AliveNodeGossip,
-                );
+            let all_shards_alive_node_gossip_events = subscribe_to_flow_events(
+                &all_shards,
+                FlowEvent::AliveNodeGossip,
+            );
             let all_second_node_dead_events = subscribe_to_flow_events(
                 &all_shards,
                 FlowEvent::DeadNodeRemoved,
@@ -98,7 +97,7 @@ fn node_discovery_and_shutdown_detect_(
                 .unwrap();
 
             let second_args = second_up_receiver.recv().await.unwrap();
-            wait_for_flow_events(other_shards_alive_node_gossip_events)
+            wait_for_flow_events(all_shards_alive_node_gossip_events)
                 .await
                 .unwrap();
 
