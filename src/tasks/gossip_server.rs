@@ -55,7 +55,7 @@ async fn handle_gossip_packet(
                 ShardEvent::Gossip(message.event.clone()),
             ))
             .await?;
-        my_shard.handle_gossip_event(message.event).await?
+        my_shard.clone().handle_gossip_event(message.event).await?
     } else {
         true
     };

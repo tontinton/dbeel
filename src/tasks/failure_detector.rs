@@ -47,7 +47,7 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
         );
 
         if let Err(e) = connection.ping().await {
-            my_shard.handle_dead_node(&node.name).await;
+            my_shard.clone().handle_dead_node(&node.name).await;
 
             info!(
                 "Notifying cluster that we failed to ping '{}': {}",
