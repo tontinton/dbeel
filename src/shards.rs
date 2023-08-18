@@ -52,9 +52,9 @@ pub enum ShardConnection {
     Remote(RemoteShardConnection),
 }
 
-// A struct to hold other shards to communicate with.
+// A struct to hold shard metadata + connection info to communicate with.
 #[derive(Debug)]
-pub struct OtherShard {
+pub struct Shard {
     // The unique node name.
     pub node_name: String,
 
@@ -72,7 +72,7 @@ pub fn hash_string(s: &String) -> std::io::Result<u32> {
     murmur3_32(&mut std::io::Cursor::new(s), 0)
 }
 
-impl OtherShard {
+impl Shard {
     pub fn new(
         node_name: String,
         name: String,
@@ -105,7 +105,7 @@ pub struct MyShard {
 
     /// The consistent hash ring (shards sorted by hash).
     /// Starts with the first hash that has a greater hash than our shard.
-    pub shards: RefCell<Vec<OtherShard>>,
+    pub shards: RefCell<Vec<Shard>>,
 
     /// All known nodes other than this node, key is node unique name.
     pub nodes: RefCell<HashMap<String, NodeMetadata>>,
@@ -137,7 +137,7 @@ impl MyShard {
     pub fn new(
         args: Args,
         id: usize,
-        shards: Vec<OtherShard>,
+        shards: Vec<Shard>,
         cache: PageCache<FileId>,
         local_shards_packet_receiver: Receiver<ShardPacket>,
         stop_receiver: Receiver<()>,
@@ -414,7 +414,7 @@ impl MyShard {
                         .collect::<Vec<_>>()
                 })
                 .map(|(node_name, address)| {
-                    OtherShard::new(
+                    Shard::new(
                         node_name,
                         address.clone(),
                         ShardConnection::Remote(

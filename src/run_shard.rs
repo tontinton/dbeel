@@ -7,7 +7,7 @@ use crate::{
     notify_flow_event,
     page_cache::{PageCache, PAGE_SIZE},
     remote_shard_connection::RemoteShardConnection,
-    shards::{MyShard, OtherShard, ShardConnection},
+    shards::{MyShard, Shard, ShardConnection},
     tasks::{
         compaction::spawn_compaction_task, db_server::spawn_db_server_task,
         failure_detector::spawn_failure_detector_task,
@@ -162,7 +162,7 @@ pub fn create_shard(
     let shards = local_connections
         .into_iter()
         .map(|c| {
-            OtherShard::new(
+            Shard::new(
                 args.name.clone(),
                 shard_name.clone(),
                 ShardConnection::Local(c),
