@@ -9,4 +9,5 @@ pub enum FlowEvent {
     DeadNodeRemoved,
     AliveNodeGossip,
     CollectionCreated,
+    DoneMigration,
 }

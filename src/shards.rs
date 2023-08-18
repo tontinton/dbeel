@@ -2,21 +2,24 @@ use std::collections::HashSet;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use async_channel::{Receiver, Sender};
-use futures::future::join_all;
-use futures::stream::{FuturesUnordered, StreamExt};
-use glommio::net::UdpSocket;
-use glommio::spawn_local;
+use futures::{
+    future::join_all,
+    stream::{FuturesUnordered, StreamExt},
+};
+use glommio::{net::UdpSocket, spawn_local};
 use log::{error, trace};
 use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::gossip::{
     serialize_gossip_message, GossipEvent, GossipEventKind, GossipMessage,
 };
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
+use crate::tasks::migration::spawn_migration_tasks;
 use crate::utils::get_first_capture;
 use crate::{
     args::Args,
@@ -45,7 +48,7 @@ pub struct ClusterMetadata {
     pub nodes: Vec<NodeMetadata>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ShardConnection {
     Local(LocalShardConnection),
     Remote(RemoteShardConnection),
@@ -73,6 +76,14 @@ pub fn hash_string(s: &str) -> std::io::Result<u32> {
 
 pub fn hash_bytes(bytes: &[u8]) -> std::io::Result<u32> {
     murmur3_32(&mut std::io::Cursor::new(bytes), 0)
+}
+
+fn is_between(item: u32, start: u32, end: u32) -> bool {
+    if end < start {
+        item >= end || item < start
+    } else {
+        item >= start && item < end
+    }
 }
 
 impl Shard {
@@ -354,7 +365,10 @@ impl MyShard {
         Ok(receiver.recv().await?)
     }
 
-    async fn handle_shard_event(&self, event: ShardEvent) -> Result<()> {
+    async fn handle_shard_event(
+        self: Rc<Self>,
+        event: ShardEvent,
+    ) -> Result<()> {
         // All events should be idempotent.
         match event {
             ShardEvent::Gossip(event) => {
@@ -521,7 +535,7 @@ impl MyShard {
     }
 
     pub async fn handle_shard_message(
-        &self,
+        self: Rc<Self>,
         message: ShardMessage,
     ) -> Result<Option<ShardResponse>> {
         Ok(match message {
@@ -569,23 +583,111 @@ impl MyShard {
         Ok(())
     }
 
-    pub async fn handle_dead_node(&self, node_name: &String) {
+    pub async fn handle_dead_node(self: Rc<Self>, node_name: &String) {
         if self.nodes.borrow_mut().remove(node_name).is_none() {
             return;
         }
 
+        let (removed, kept): (Vec<_>, Vec<_>) = self
+            .shards
+            .replace(Vec::new())
+            .into_iter()
+            .partition(|shard| &shard.node_name == node_name);
+        self.shards.replace(kept);
+
         trace!(
-            "After death: holding {} number of nodes",
-            self.nodes.borrow().len()
+            "After death of {}: holding {} nodes and {} shards",
+            node_name,
+            self.nodes.borrow().len(),
+            self.shards.borrow().len(),
         );
-        self.shards
-            .borrow_mut()
-            .retain(|shard| &shard.node_name != node_name);
+
         notify_flow_event!(self, FlowEvent::DeadNodeRemoved);
+
+        self.migrate_data_on_node_removal(&removed).await;
+    }
+
+    async fn migrate_data_on_node_removal(
+        self: Rc<Self>,
+        removed_shards: &[Shard],
+    ) {
+        assert!(!removed_shards.is_empty());
+
+        // No need to migrate data if no replication set.
+        if self.args.replication_factor <= 1 {
+            return;
+        }
+
+        // No need to migrate data if all nodes already contain all the data.
+        if self.nodes.borrow().len() + 1 < self.args.replication_factor as usize
+        {
+            return;
+        }
+
+        let (migrate_to_hash, migrate_to_connection) = {
+            let shards = self.shards.borrow();
+            let migrate_to_shard = Self::get_last_owning_shard(
+                &shards,
+                self.hash,
+                self.args.replication_factor as usize,
+            )
+            .unwrap();
+            (migrate_to_shard.hash, migrate_to_shard.connection.clone())
+        };
+
+        // No need to migrate if no removed shards in the ring between the
+        // current shard and the last owning shard.
+        if !removed_shards
+            .iter()
+            .map(|s| s.hash)
+            .any(|h| is_between(h, self.hash, migrate_to_hash))
+        {
+            return;
+        }
+
+        // The previous shard in the hash ring is the last one in the vector.
+        let start = self.shards.borrow()[self.shards.borrow().len() - 1].hash;
+
+        // The closest removed shard that is between the previous shard and
+        // this shard, or - this shard if no removed shard found between.
+        let end = removed_shards
+            .iter()
+            .map(|s| s.hash)
+            .filter(|h| is_between(*h, start, self.hash))
+            .min_by_key(|h| self.hash.wrapping_sub(*h))
+            .unwrap_or(self.hash);
+
+        spawn_migration_tasks(self, start, end, migrate_to_connection);
+    }
+
+    fn get_last_owning_shard(
+        shards: &[Shard],
+        hash: u32,
+        replication_factor: usize,
+    ) -> Option<&Shard> {
+        let position = shards.iter().position(|s| s.hash >= hash).unwrap_or(0);
+
+        let mut owning_shards_found = 0;
+        let mut nodes = HashSet::new();
+        let mut i = 0;
+        let mut index = position % shards.len();
+        while i == 0 || index != position {
+            let shard = &shards[index];
+            if !nodes.contains(&shard.node_name) {
+                owning_shards_found += 1;
+                if owning_shards_found == replication_factor {
+                    return Some(shard);
+                }
+                nodes.insert(&shard.node_name);
+            }
+            i += 1;
+            index = (position + i as usize) % shards.len();
+        }
+        None
     }
 
     pub async fn handle_gossip_event(
-        &self,
+        self: Rc<Self>,
         event: GossipEvent,
     ) -> Result<bool> {
         // All events must be handled idempotently, as gossip messages can be seen

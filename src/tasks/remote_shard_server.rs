@@ -19,7 +19,7 @@ async fn handle_remote_shard_client(
 ) -> Result<()> {
     loop {
         match get_message_from_stream(client).await {
-            Ok(msg) => match my_shard.handle_shard_message(msg).await {
+            Ok(msg) => match my_shard.clone().handle_shard_message(msg).await {
                 Ok(Some(response_msg)) => {
                     send_message_to_stream(
                         client,
