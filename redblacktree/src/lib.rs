@@ -427,7 +427,7 @@ impl<K: Ord, V> RedBlackTree<K, V> {
 
     pub fn clear(&mut self) {
         self.clear_no_dealloc();
-        self.arena = Vec::new();
+        self.arena.clear();
     }
 
     // Iterate using depth first search (minimum to maximum).
@@ -810,11 +810,13 @@ mod tests {
     #[test]
     fn clear() {
         let mut tree = RedBlackTree::with_capacity(4);
+        assert_eq!(tree.capacity(), 4);
         assert_eq!(tree.set(100, "c"), Ok(None));
         assert_eq!(tree.set(50, "a"), Ok(None));
         assert_eq!(tree.set(75, "b"), Ok(None));
         assert_eq!(tree.set(150, "d"), Ok(None));
         tree.clear();
+        assert_eq!(tree.capacity(), 4);
         assert_eq!(tree.len(), 0);
     }
 
