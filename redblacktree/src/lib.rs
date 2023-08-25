@@ -734,6 +734,27 @@ mod tests {
     }
 
     #[test]
+    fn iter_clone() {
+        let mut tree = RedBlackTree::with_capacity(4);
+        tree.set(100, "c").unwrap();
+        tree.set(50, "a").unwrap();
+        tree.set(75, "b").unwrap();
+        tree.set(150, "d").unwrap();
+        let mut iter = tree.iter();
+        assert_eq!(iter.next(), Some((&50, &"a")));
+        assert_eq!(iter.next(), Some((&75, &"b")));
+
+        let mut cloned_iter = iter.clone();
+
+        assert_eq!(iter.next(), Some((&100, &"c")));
+        assert_eq!(iter.next(), Some((&150, &"d")));
+        assert_eq!(cloned_iter.next(), Some((&100, &"c")));
+        assert_eq!(cloned_iter.next(), Some((&150, &"d")));
+        assert_eq!(iter.next(), None);
+        assert_eq!(cloned_iter.next(), None);
+    }
+
+    #[test]
     fn iter_reverse() {
         let mut tree = RedBlackTree::with_capacity(4);
         tree.set(100, "c").unwrap();
