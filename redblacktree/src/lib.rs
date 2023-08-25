@@ -52,7 +52,7 @@ struct NodePtr<K: Ord, V>(*mut Node<K, V>);
 
 impl<K: Ord, V> Clone for NodePtr<K, V> {
     fn clone(&self) -> NodePtr<K, V> {
-        NodePtr(self.0)
+        *self
     }
 }
 
