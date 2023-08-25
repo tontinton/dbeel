@@ -559,35 +559,32 @@ impl LSMTree {
         index_file: &CachedFileReader,
         index_offset_start: u64,
         index_offset_length: u64,
-    ) -> Result<Option<Entry>> {
+    ) -> Result<Option<(Entry, u64)>> {
         let mut half = index_offset_length / 2;
         let mut hind = index_offset_length - 1;
         let mut lind = 0;
 
+        let mut current_index_offset =
+            index_offset_start + half * *INDEX_ENTRY_SIZE;
         let mut current: EntryOffset = bincode_options().deserialize(
             &index_file
-                .read_at(
-                    index_offset_start + half * *INDEX_ENTRY_SIZE,
-                    *INDEX_ENTRY_SIZE as usize,
-                )
+                .read_at(current_index_offset, *INDEX_ENTRY_SIZE as usize)
                 .await?,
         )?;
 
         while lind <= hind {
-            let value: Entry = bincode_options().deserialize(
+            let entry: Entry = bincode_options().deserialize(
                 &data_file
                     .read_at(current.entry_offset, current.entry_size)
                     .await?,
             )?;
 
-            match value.key.cmp(key) {
-                std::cmp::Ordering::Equal => {
-                    return Ok(Some(value));
+            match entry.key.cmp(key) {
+                Ordering::Equal => {
+                    return Ok(Some((entry, current_index_offset)));
                 }
-                std::cmp::Ordering::Less => lind = half + 1,
-                std::cmp::Ordering::Greater => {
-                    hind = std::cmp::max(half, 1) - 1
-                }
+                Ordering::Less => lind = half + 1,
+                Ordering::Greater => hind = std::cmp::max(half, 1) - 1,
             }
 
             if half == 0 || half == index_offset_length {
@@ -595,12 +592,11 @@ impl LSMTree {
             }
 
             half = (hind + lind) / 2;
+            current_index_offset =
+                index_offset_start + half * *INDEX_ENTRY_SIZE;
             current = bincode_options().deserialize(
                 &index_file
-                    .read_at(
-                        index_offset_start + half * *INDEX_ENTRY_SIZE,
-                        *INDEX_ENTRY_SIZE as usize,
-                    )
+                    .read_at(current_index_offset, *INDEX_ENTRY_SIZE as usize)
                     .await?,
             )?;
         }
@@ -641,7 +637,7 @@ impl LSMTree {
                 self.page_cache.clone(),
             );
 
-            if let Some(result) = Self::binary_search(
+            if let Some((entry, _)) = Self::binary_search(
                 key,
                 &data_file,
                 &index_file,
@@ -650,7 +646,7 @@ impl LSMTree {
             )
             .await?
             {
-                return Ok(Some(result.value));
+                return Ok(Some(entry.value));
             }
         }
 
