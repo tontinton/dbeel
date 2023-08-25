@@ -5,6 +5,7 @@ use crate::{
     timestamp_nanos,
     utils::get_first_capture,
 };
+use async_recursion::async_recursion;
 use bincode::{
     config::{
         FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
@@ -69,7 +70,7 @@ impl EntryValue {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Entry {
+pub struct Entry {
     key: Vec<u8>,
     value: EntryValue,
 }
@@ -268,6 +269,138 @@ struct CompactionAction {
 struct SSTable {
     index: usize,
     size: u64,
+}
+
+enum IterState {
+    UnreadSSTable(usize),
+    ReadingSSTable(usize, CachedFileReader, CachedFileReader, u64, u64),
+    Memtable,
+}
+
+type IterFilterFn = dyn FnMut(&[u8], &EntryValue) -> bool;
+
+pub struct AsyncIter<'a> {
+    tree: &'a LSMTree,
+    sstables: Rc<Vec<SSTable>>,
+    memtable: std::vec::IntoIter<Entry>,
+    filter_fn: Box<IterFilterFn>,
+    state: IterState,
+}
+
+impl<'a> AsyncIter<'a> {
+    fn new(tree: &'a LSMTree, mut filter_fn: Box<IterFilterFn>) -> Self {
+        let mut memtable: Vec<Entry> = Vec::new();
+        if let Some(tree) = tree.flush_memtable.borrow().as_ref() {
+            memtable.extend(tree.iter().filter(|(k, v)| filter_fn(k, v)).map(
+                |(k, v)| Entry {
+                    key: k.clone(),
+                    value: v.clone(),
+                },
+            ));
+        }
+        memtable.extend(
+            tree.active_memtable
+                .borrow()
+                .iter()
+                .filter(|(k, v)| filter_fn(k, v))
+                .map(|(k, v)| Entry {
+                    key: k.clone(),
+                    value: v.clone(),
+                }),
+        );
+
+        // The sstable files we operate on will not be deleted until this
+        // object is dropped.
+        let sstables = tree.sstables.borrow().clone();
+
+        let state = if sstables.len() > 0 {
+            IterState::UnreadSSTable(0)
+        } else {
+            IterState::Memtable
+        };
+
+        Self {
+            tree,
+            sstables,
+            memtable: memtable.into_iter(),
+            filter_fn: Box::new(filter_fn),
+            state,
+        }
+    }
+}
+
+impl<'a> AsyncIter<'a> {
+    #[async_recursion(?Send)]
+    pub async fn next(&mut self) -> Result<Option<Entry>> {
+        Ok(match &mut self.state {
+            IterState::UnreadSSTable(i) => {
+                let i = *i;
+                let sstable = &self.sstables[i];
+
+                let (data_filename, index_filename) =
+                    LSMTree::get_data_file_paths(&self.tree.dir, sstable.index);
+
+                let data_file = CachedFileReader::new(
+                    (DATA_FILE_EXT, sstable.index),
+                    DmaFile::open(&data_filename).await?,
+                    self.tree.page_cache.clone(),
+                );
+
+                let index_file = DmaFile::open(&index_filename).await?;
+                let index_file_size = index_file.file_size().await?;
+                let index_file = CachedFileReader::new(
+                    (INDEX_FILE_EXT, sstable.index),
+                    index_file,
+                    self.tree.page_cache.clone(),
+                );
+
+                self.state = IterState::ReadingSSTable(
+                    i,
+                    data_file,
+                    index_file,
+                    0,
+                    index_file_size,
+                );
+                return self.next().await;
+            }
+            IterState::ReadingSSTable(
+                i,
+                data_file,
+                index_file,
+                index_offset,
+                index_file_size,
+            ) => {
+                let i = *i;
+
+                let entry_offset: EntryOffset = bincode_options().deserialize(
+                    &index_file
+                        .read_at(*index_offset, *INDEX_ENTRY_SIZE as usize)
+                        .await?,
+                )?;
+                let entry: Entry = bincode_options().deserialize(
+                    &data_file
+                        .read_at(entry_offset.offset, entry_offset.size)
+                        .await?,
+                )?;
+
+                *index_offset += *INDEX_ENTRY_SIZE;
+                if *index_offset >= *index_file_size {
+                    self.state = if i == self.sstables.len() - 1 {
+                        IterState::Memtable
+                    } else {
+                        IterState::UnreadSSTable(i + 1)
+                    };
+                };
+
+                if (self.filter_fn)(&entry.key, &entry.value) {
+                    Some(entry)
+                } else {
+                    return self.next().await;
+                }
+            }
+            IterState::Memtable => self.memtable.next(),
+        })
+    }
 }
 
 fn bincode_options() -> WithOtherIntEncoding<
@@ -1029,6 +1162,14 @@ impl LSMTree {
                 e
             );
         }
+    }
+
+    pub fn iter(&self) -> AsyncIter {
+        AsyncIter::new(self, Box::new(|_, _| true))
+    }
+
+    pub fn iter_filter(&self, filter_fn: Box<IterFilterFn>) -> AsyncIter {
+        AsyncIter::new(self, filter_fn)
     }
 }
 
