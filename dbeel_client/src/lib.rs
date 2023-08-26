@@ -1,6 +1,7 @@
 pub mod error;
 
 use std::{
+    collections::HashSet,
     net::{SocketAddr, ToSocketAddrs},
     time::Duration,
 };
@@ -20,6 +21,7 @@ const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 struct Shard {
     hash: u32,
     address: SocketAddr,
+    node_name: String,
 }
 
 pub struct DbeelClient {
@@ -77,24 +79,28 @@ impl DbeelClient {
         let flatten_shards = metadata
             .nodes
             .into_iter()
-            .map(|node| format!("{}:{}", node.ip, node.db_port))
-            .flat_map(|address| {
+            .map(|node| (node.name, format!("{}:{}", node.ip, node.db_port)))
+            .flat_map(|(node_name, address)| {
                 address
                     .to_socket_addrs()
                     .map(|socket_addr| {
                         let hash =
                             hash_string(&address).map_err(Error::HashShardName);
-                        (hash, socket_addr)
+                        (hash, socket_addr, node_name)
                     })
                     .map_err(Error::ParsingSocketAddress)
             })
-            .collect::<Vec<(Result<u32>, std::vec::IntoIter<SocketAddr>)>>();
+            .collect::<Vec<(Result<u32>, std::vec::IntoIter<SocketAddr>, String)>>();
 
         let mut hash_ring = Vec::new();
-        for (hash_result, socket_addrs) in flatten_shards {
+        for (hash_result, socket_addrs, node_name) in flatten_shards {
             let hash = hash_result?;
             for address in socket_addrs {
-                hash_ring.push(Shard { hash, address });
+                hash_ring.push(Shard {
+                    hash,
+                    address,
+                    node_name: node_name.clone(),
+                });
             }
         }
         hash_ring.sort_unstable_by_key(|s| s.hash);
@@ -229,13 +235,21 @@ impl DbeelClient {
             .unwrap_or(0);
 
         let mut owning_shards = Vec::new();
-        for i in 0..self.replication_factor {
-            let index = (position + i as usize) % self.hash_ring.len();
-            if i > 0 && index == position {
-                break;
+        let mut nodes = HashSet::new();
+        let mut i = 0;
+        let mut index = position % self.hash_ring.len();
+        while (i == 0 || index != position)
+            && owning_shards.len() < self.replication_factor as usize
+        {
+            let shard = &self.hash_ring[index];
+            if !nodes.contains(&shard.node_name) {
+                owning_shards.push(shard.address);
+                nodes.insert(&shard.node_name);
             }
-            owning_shards.push(self.hash_ring[index].address);
+            i += 1;
+            index = (position + i as usize) % self.hash_ring.len();
         }
+
         Ok(self.send_request(&owning_shards, request).await?)
     }
 
