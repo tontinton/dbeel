@@ -1311,6 +1311,71 @@ mod tests {
         dir: PathBuf,
         cache: GlobalCache,
     ) -> Result<()> {
+        async fn validate_tree_iter_range_pre_delete(
+            tree: &LSMTree,
+        ) -> Result<()> {
+            validate_tree_iter_range(
+                tree,
+                vec![1, 0],
+                vec![5, 0],
+                vec![vec![1, 0], vec![2, 0], vec![3, 0], vec![4, 0]],
+            )
+            .await
+        }
+
+        async fn validate_tree_iter_range_post_delete(
+            tree: &LSMTree,
+        ) -> Result<()> {
+            validate_tree_iter_range(
+                tree,
+                vec![1, 0],
+                vec![5, 0],
+                vec![
+                    vec![1, 0],
+                    vec![2, 0],
+                    vec![3, 0],
+                    vec![4, 0],
+                    vec![],
+                    vec![],
+                ],
+            )
+            .await
+        }
+
+        async fn validate_tree_iter_range(
+            tree: &LSMTree,
+            start: Vec<u8>,
+            end: Vec<u8>,
+            expected: Vec<Vec<u8>>,
+        ) -> Result<()> {
+            let mut items = Vec::new();
+            let mut iter = tree.iter_filter(Box::new(move |k, _| {
+                k.cmp(&start) != Ordering::Less && k.cmp(&end) == Ordering::Less
+            }));
+            while let Some(entry) = iter.next().await? {
+                items.push(entry.value.data);
+            }
+            assert_eq!(items, expected);
+            Ok(())
+        }
+
+        async fn validate_tree_after_compaction(tree: &LSMTree) -> Result<()> {
+            assert_eq!(*tree.sstable_indices(), vec![5]);
+            assert_eq!(tree.write_sstable_index.get(), 6);
+            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
+            assert_eq!(tree.get(&vec![2, 0]).await?, Some(vec![2, 0]));
+            assert_eq!(tree.get(&vec![10, 0]).await?, Some(vec![10, 0]));
+            assert_eq!(tree.get(&vec![1, 0]).await?, None);
+            assert_eq!(tree.get(&vec![4, 0]).await?, None);
+            validate_tree_iter_range(
+                tree,
+                vec![1, 0],
+                vec![5, 0],
+                vec![vec![2, 0], vec![3, 0]],
+            )
+            .await
+        }
+
         // New tree.
         {
             let tree = Rc::new(
@@ -1327,34 +1392,26 @@ mod tests {
             for v in values {
                 tree.clone().set(v.clone(), v).await?;
             }
+            validate_tree_iter_range_pre_delete(&tree).await?;
+
             tree.clone().delete(vec![1, 0]).await?;
             tree.clone().delete(vec![4, 0]).await?;
+            validate_tree_iter_range_post_delete(&tree).await?;
+
             tree.clone().flush().await?;
+            validate_tree_iter_range_post_delete(&tree).await?;
 
             assert_eq!(*tree.sstable_indices(), vec![0, 2, 4]);
 
             tree.compact(vec![0, 2, 4], 5, true).await?;
-
-            assert_eq!(*tree.sstable_indices(), vec![5]);
-            assert_eq!(tree.write_sstable_index.get(), 6);
-            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![2, 0]).await?, Some(vec![2, 0]));
-            assert_eq!(tree.get(&vec![10, 0]).await?, Some(vec![10, 0]));
-            assert_eq!(tree.get(&vec![1, 0]).await?, None);
-            assert_eq!(tree.get(&vec![4, 0]).await?, None);
+            validate_tree_after_compaction(&tree).await?;
         }
 
         // Reopening the tree.
         {
             let tree =
                 test_lsm_tree(dir.clone(), partitioned_cache(&cache)).await?;
-            assert_eq!(*tree.sstable_indices(), vec![5]);
-            assert_eq!(tree.write_sstable_index.get(), 6);
-            assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
-            assert_eq!(tree.get(&vec![2, 0]).await?, Some(vec![2, 0]));
-            assert_eq!(tree.get(&vec![10, 0]).await?, Some(vec![10, 0]));
-            assert_eq!(tree.get(&vec![1, 0]).await?, None);
-            assert_eq!(tree.get(&vec![4, 0]).await?, None);
+            validate_tree_after_compaction(&tree).await?;
         }
 
         Ok(())
