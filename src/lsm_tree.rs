@@ -98,8 +98,8 @@ impl Eq for Entry {}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct EntryOffset {
-    entry_offset: u64,
-    entry_size: usize,
+    offset: u64,
+    size: usize,
 }
 
 static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
@@ -165,8 +165,8 @@ impl EntryWriter {
         let data_size = data_encoded.len();
 
         let entry_index = EntryOffset {
-            entry_offset: self.data_written as u64,
-            entry_size: data_size,
+            offset: self.data_written as u64,
+            size: data_size,
         };
         let index_encoded = bincode_options().serialize(&entry_index)?;
         let index_size = index_encoded.len();
@@ -574,9 +574,7 @@ impl LSMTree {
 
         while lind <= hind {
             let entry: Entry = bincode_options().deserialize(
-                &data_file
-                    .read_at(current.entry_offset, current.entry_size)
-                    .await?,
+                &data_file.read_at(current.offset, current.size).await?,
             )?;
 
             match entry.key.cmp(key) {
@@ -1016,7 +1014,7 @@ impl LSMTree {
         index_reader.read_exact(offset_bytes).await?;
         let entry_offset: EntryOffset =
             bincode_options().deserialize(offset_bytes)?;
-        let mut data_bytes = vec![0; entry_offset.entry_size];
+        let mut data_bytes = vec![0; entry_offset.size];
         data_reader.read_exact(&mut data_bytes).await?;
         let entry: Entry = bincode_options().deserialize(&data_bytes)?;
         Ok(entry)
