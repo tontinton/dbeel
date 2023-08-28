@@ -72,6 +72,10 @@ pub fn hash_string(s: &String) -> std::io::Result<u32> {
     murmur3_32(&mut std::io::Cursor::new(s), 0)
 }
 
+pub fn hash_bytes(bytes: &[u8]) -> std::io::Result<u32> {
+    murmur3_32(&mut std::io::Cursor::new(bytes), 0)
+}
+
 impl Shard {
     pub fn new(
         node_name: String,

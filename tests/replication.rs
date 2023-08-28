@@ -74,7 +74,11 @@ fn three_nodes_replication_test(
         .unwrap();
 
         collection
-            .set_consistent("key", Value::F32(42.0), set_consistency)
+            .set_consistent(
+                Value::String("key".into()),
+                Value::F32(42.0),
+                set_consistency,
+            )
             .await
             .unwrap();
         try_join!(set1_sender.send(()), set2_sender.send(())).unwrap();
@@ -119,7 +123,7 @@ fn three_nodes_replication_test(
 
             let collection = client.collection("test");
             let response = collection
-                .get_consistent("key", get_consistency)
+                .get_consistent(Value::String("key".into()), get_consistency)
                 .await
                 .unwrap();
             let value = read_value_ref(&mut &response[..]).unwrap();

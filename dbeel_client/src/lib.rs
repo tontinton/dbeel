@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use dbeel::shards::{hash_string, ClusterMetadata};
+use dbeel::shards::{hash_bytes, hash_string, ClusterMetadata};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::net::TcpStream;
 use rmp_serde::from_slice;
@@ -46,6 +46,12 @@ fn to_utf8string<S: Into<Utf8String>>(
         return Err(Error::InvalidUtf8String(utf8));
     }
     Ok(utf8)
+}
+
+fn hash_key(key: &Value) -> Result<u32> {
+    let mut buf: Vec<u8> = Vec::new();
+    write_value(&mut buf, key)?;
+    hash_bytes(&buf).map_err(Error::HashKey)
 }
 
 impl DbeelClient {
@@ -224,10 +230,9 @@ impl DbeelClient {
 
     pub(crate) async fn send_sharded_request(
         &self,
-        shard_key: &String,
+        hash: u32,
         request: Value,
     ) -> Result<Vec<u8>> {
-        let hash = hash_string(shard_key).map_err(Error::HashShardName)?;
         let position = self
             .hash_ring
             .iter()
@@ -288,19 +293,18 @@ impl DbeelClient {
 }
 
 impl<'a> Collection<'a> {
-    pub async fn get_consistent<S, I>(
+    pub async fn get_consistent<I>(
         &self,
-        key: S,
+        key: Value,
         consistency: I,
     ) -> Result<Vec<u8>>
     where
-        S: Into<Utf8String>,
         I: Into<Integer>,
     {
-        let key = to_utf8string(key)?;
+        let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("get".into())),
-            (Value::String("key".into()), Value::String(key.clone())),
+            (Value::String("key".into()), key),
             (
                 Value::String("collection".into()),
                 Value::String(self.name.clone()),
@@ -310,32 +314,33 @@ impl<'a> Collection<'a> {
                 Value::Integer(consistency.into()),
             ),
         ]);
-        self.client
-            .send_sharded_request(&(key.into_str().unwrap()), request)
-            .await
+        self.client.send_sharded_request(hash, request).await
     }
 
-    pub async fn get<S>(&self, key: S) -> Result<Vec<u8>>
-    where
-        S: Into<Utf8String>,
-    {
+    pub async fn get(&self, key: Value) -> Result<Vec<u8>> {
         self.get_consistent(key, 1).await
     }
 
-    pub async fn set_consistent<S, I>(
+    pub async fn get_from_str_key<S>(&self, key: S) -> Result<Vec<u8>>
+    where
+        S: Into<Utf8String>,
+    {
+        self.get(Value::String(key.into())).await
+    }
+
+    pub async fn set_consistent<I>(
         &self,
-        key: S,
+        key: Value,
         value: Value,
         consistency: I,
     ) -> Result<Vec<u8>>
     where
-        S: Into<Utf8String>,
         I: Into<Integer>,
     {
-        let key = to_utf8string(key)?;
+        let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("set".into())),
-            (Value::String("key".into()), Value::String(key.clone())),
+            (Value::String("key".into()), key),
             (Value::String("value".into()), value),
             (
                 Value::String("collection".into()),
@@ -346,32 +351,54 @@ impl<'a> Collection<'a> {
                 Value::Integer(consistency.into()),
             ),
         ]);
-        self.client
-            .send_sharded_request(&(key.into_str().unwrap()), request)
-            .await
+        self.client.send_sharded_request(hash, request).await
     }
 
-    pub async fn set<S: Into<Utf8String>>(
+    pub async fn set(&self, key: Value, value: Value) -> Result<Vec<u8>> {
+        self.set_consistent(key, value, 1).await
+    }
+
+    pub async fn set_from_str_key<S: Into<Utf8String>>(
         &self,
         key: S,
         value: Value,
     ) -> Result<Vec<u8>> {
-        self.set_consistent(key, value, 1).await
+        self.set(Value::String(key.into()), value).await
     }
 
-    pub async fn delete<S: Into<Utf8String>>(&self, key: S) -> Result<Vec<u8>> {
-        let key = to_utf8string(key)?;
+    pub async fn delete_consistent<I>(
+        &self,
+        key: Value,
+        consistency: I,
+    ) -> Result<Vec<u8>>
+    where
+        I: Into<Integer>,
+    {
+        let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("delete".into())),
-            (Value::String("key".into()), Value::String(key.clone())),
+            (Value::String("key".into()), key),
             (
                 Value::String("collection".into()),
                 Value::String(self.name.clone()),
             ),
+            (
+                Value::String("consistency".into()),
+                Value::Integer(consistency.into()),
+            ),
         ]);
-        self.client
-            .send_sharded_request(&(key.into_str().unwrap()), request)
-            .await
+        self.client.send_sharded_request(hash, request).await
+    }
+
+    pub async fn delete(&self, key: Value) -> Result<Vec<u8>> {
+        self.delete_consistent(key, 1).await
+    }
+
+    pub async fn delete_from_str_key<S: Into<Utf8String>>(
+        &self,
+        key: S,
+    ) -> Result<Vec<u8>> {
+        self.delete(Value::String(key.into())).await
     }
 
     pub async fn drop(self) -> Result<()> {
