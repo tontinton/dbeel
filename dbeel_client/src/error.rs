@@ -11,6 +11,10 @@ pub enum Error {
     #[error("Failed to hash shard name")]
     HashShardName(std::io::Error),
 
+    /// Failed to hash key.
+    #[error("Failed to hash key")]
+    HashKey(std::io::Error),
+
     /// Failed to parse to a socket address.
     #[error("Failed to parse to a socket address")]
     ParsingSocketAddress(std::io::Error),
