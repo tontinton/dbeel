@@ -7,6 +7,7 @@ use crate::{gossip::GossipEvent, lsm_tree::EntryValue};
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
     Gossip(GossipEvent),
+    Set(String, Vec<u8>, Vec<u8>, OffsetDateTime),
 }
 
 #[derive(Clone, Serialize, Deserialize)]

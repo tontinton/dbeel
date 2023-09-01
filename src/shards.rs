@@ -361,6 +361,12 @@ impl MyShard {
             ShardEvent::Gossip(event) => {
                 self.handle_gossip_event(event).await?;
             }
+            ShardEvent::Set(collection, key, value, timestamp) => {
+                self.handle_shard_set_message(
+                    collection, key, value, timestamp,
+                )
+                .await?;
+            }
         };
 
         Ok(())
@@ -459,18 +465,10 @@ impl MyShard {
                 ShardResponse::GetMetadata(self.get_nodes())
             }
             ShardRequest::Set(collection, key, value, timestamp) => {
-                let existing_tree =
-                    self.trees.borrow().get(&collection).cloned();
-                if let Some(tree) = existing_tree {
-                    tree.set_with_timestamp(key, value, timestamp).await?;
-                } else {
-                    let tree = self.create_lsm_tree(collection.clone()).await?;
-                    tree.clone()
-                        .set_with_timestamp(key, value, timestamp)
-                        .await?;
-                    self.trees.borrow_mut().insert(collection, tree);
-                };
-
+                self.handle_shard_set_message(
+                    collection, key, value, timestamp,
+                )
+                .await?;
                 ShardResponse::Set
             }
             ShardRequest::Delete(collection, key, timestamp) => {
@@ -494,6 +492,26 @@ impl MyShard {
         };
 
         Ok(response)
+    }
+
+    async fn handle_shard_set_message(
+        &self,
+        collection: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+        timestamp: OffsetDateTime,
+    ) -> Result<()> {
+        let existing_tree = self.trees.borrow().get(&collection).cloned();
+        if let Some(tree) = existing_tree {
+            tree.set_with_timestamp(key, value, timestamp).await?;
+        } else {
+            let tree = self.create_lsm_tree(collection.clone()).await?;
+            tree.clone()
+                .set_with_timestamp(key, value, timestamp)
+                .await?;
+            self.trees.borrow_mut().insert(collection, tree);
+        };
+        Ok(())
     }
 
     pub async fn handle_shard_message(

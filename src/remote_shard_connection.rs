@@ -50,7 +50,7 @@ impl RemoteShardConnection {
         }
     }
 
-    async fn connect(&self) -> Result<TcpStream> {
+    pub async fn connect(&self) -> Result<TcpStream> {
         let stream =
             TcpStream::connect_timeout(&self.address, self.connect_timeout)
                 .await?;
