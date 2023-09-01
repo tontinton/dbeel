@@ -220,6 +220,7 @@ impl MyShard {
         }
         let tree = self.create_lsm_tree(name.clone()).await?;
         self.trees.borrow_mut().insert(name, tree);
+        notify_flow_event!(self, FlowEvent::CollectionCreated);
         Ok(())
     }
 
@@ -467,8 +468,6 @@ impl MyShard {
                         .await?;
                     self.trees.borrow_mut().insert(collection, tree);
                 };
-
-                notify_flow_event!(self, FlowEvent::ItemSetFromRemoteShard);
 
                 ShardResponse::Set
             }
