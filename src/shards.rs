@@ -564,7 +564,7 @@ impl MyShard {
     ) -> Result<bool> {
         // All events must be handled idempotently, as gossip messages can be seen
         // multiple times.
-        let sent_event = match event {
+        let another_gossip_sent = match event {
             GossipEvent::Alive(node) if node.name != self.args.name => {
                 self.nodes
                     .borrow_mut()
@@ -614,7 +614,7 @@ impl MyShard {
             _ => false,
         };
 
-        Ok(sent_event)
+        Ok(!another_gossip_sent)
     }
 
     #[cfg(feature = "flow-events")]
