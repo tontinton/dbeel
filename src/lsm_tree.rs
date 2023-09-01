@@ -71,8 +71,8 @@ impl EntryValue {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Entry {
-    key: Vec<u8>,
-    value: EntryValue,
+    pub key: Vec<u8>,
+    pub value: EntryValue,
 }
 
 impl Ord for Entry {
