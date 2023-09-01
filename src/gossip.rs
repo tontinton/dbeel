@@ -14,6 +14,8 @@ use crate::{error::Result, messages::NodeMetadata};
 pub enum GossipEvent {
     Alive(NodeMetadata),
     Dead(String),
+    CreateCollection(String),
+    DropCollection(String),
 }
 
 #[derive(Serialize, Deserialize)]

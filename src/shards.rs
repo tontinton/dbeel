@@ -355,22 +355,6 @@ impl MyShard {
     async fn handle_shard_event(&self, event: ShardEvent) -> Result<()> {
         // All events should be idempotent.
         match event {
-            ShardEvent::CreateCollection(name) => {
-                match self.create_collection(name).await {
-                    Ok(()) | Err(Error::CollectionAlreadyExists(_)) => {}
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
-            }
-            ShardEvent::DropCollection(name) => {
-                match self.drop_collection(&name) {
-                    Ok(()) | Err(Error::CollectionNotFound(_)) => {}
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
-            }
             ShardEvent::Gossip(event) => {
                 self.handle_gossip_event(event).await?;
             }
@@ -609,6 +593,24 @@ impl MyShard {
                     self.handle_dead_node(&node_name).await;
                     false
                 }
+            }
+            GossipEvent::CreateCollection(name) => {
+                match self.create_collection(name).await {
+                    Ok(()) | Err(Error::CollectionAlreadyExists(_)) => {}
+                    Err(e) => {
+                        return Err(e);
+                    }
+                };
+                false
+            }
+            GossipEvent::DropCollection(name) => {
+                match self.drop_collection(&name) {
+                    Ok(()) | Err(Error::CollectionNotFound(_)) => {}
+                    Err(e) => {
+                        return Err(e);
+                    }
+                };
+                false
             }
             _ => false,
         };
