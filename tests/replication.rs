@@ -6,6 +6,7 @@ use dbeel::{
     flow_events::FlowEvent,
 };
 use dbeel_client::DbeelClient;
+use futures::try_join;
 use rmpv::{decode::read_value_ref, Value, ValueRef};
 use rstest::{fixture, rstest};
 use serial_test::serial;
@@ -32,6 +33,12 @@ fn three_nodes_replication_test(
     get_consistency: usize,
 ) -> Result<()> {
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
+    let (set1_sender, set1_receiver) = async_channel::bounded(1);
+    let (set2_sender, set2_receiver) = async_channel::bounded(1);
+    let (collection_created1_sender, collection_created1_receiver) =
+        async_channel::bounded(1);
+    let (collection_created2_sender, collection_created2_receiver) =
+        async_channel::bounded(1);
     let (done_sender, done_receiver) = async_channel::bounded(1);
 
     let main_handle = test_node(1, args.clone(), move |shard, _| async move {
@@ -54,11 +61,23 @@ fn three_nodes_replication_test(
         )])
         .await
         .unwrap();
+
+        let collection_created =
+            shard.subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
         let collection = client.create_collection("test").await.unwrap();
+
+        try_join!(
+            collection_created.recv(),
+            collection_created1_receiver.recv(),
+            collection_created2_receiver.recv(),
+        )
+        .unwrap();
+
         collection
             .set_consistent("key", Value::F32(42.0), set_consistency)
             .await
             .unwrap();
+        try_join!(set1_sender.send(()), set2_sender.send(())).unwrap();
 
         // Wait for all other nodes to finish their tests.
         done_receiver.recv().await.unwrap();
@@ -74,14 +93,19 @@ fn three_nodes_replication_test(
 
     let mut handles = Vec::new();
 
-    for node_args in vec![args1, args2] {
+    for (node_args, set_receiver, collection_created_sender) in vec![
+        (args1, set1_receiver, collection_created1_sender),
+        (args2, set2_receiver, collection_created2_sender),
+    ] {
         handles.push(test_node(1, node_args, move |shard, _| async move {
             if shard.trees.borrow().is_empty() {
                 let receiver = shard.subscribe_to_flow_event(
-                    FlowEvent::ItemSetFromRemoteShard.into(),
+                    FlowEvent::CollectionCreated.into(),
                 );
                 receiver.recv().await.unwrap();
             }
+            collection_created_sender.send(()).await.unwrap();
+            set_receiver.recv().await.unwrap();
 
             let mut client = DbeelClient::from_seed_nodes(&[(
                 shard.args.ip.clone(),
