@@ -6,8 +6,6 @@ use crate::{gossip::GossipEvent, lsm_tree::EntryValue};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
-    CreateCollection(String),
-    DropCollection(String),
     Gossip(GossipEvent),
 }
 

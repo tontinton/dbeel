@@ -14,8 +14,9 @@ use time::OffsetDateTime;
 
 use crate::{
     error::{Error, Result},
+    gossip::GossipEvent,
     lsm_tree::TOMBSTONE,
-    messages::{ShardEvent, ShardMessage, ShardRequest, ShardResponse},
+    messages::{ShardRequest, ShardResponse},
     read_exactly::read_exactly,
     response_to_empty_result, response_to_result,
     shards::MyShard,
@@ -76,20 +77,6 @@ fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
     Ok(field_encoded)
 }
 
-fn broadcast_message_to_local_shards_in_background(
-    my_shard: Rc<MyShard>,
-    message: ShardMessage,
-) {
-    spawn_local(async move {
-        if let Err(e) =
-            my_shard.broadcast_message_to_local_shards(&message).await
-        {
-            error!("Failed to broadcast message: {}", e);
-        }
-    })
-    .detach();
-}
-
 async fn handle_request(
     my_shard: Rc<MyShard>,
     buffer: Vec<u8>,
@@ -113,20 +100,12 @@ async fn handle_request(
                 }
 
                 my_shard.create_collection(name.clone()).await?;
-
-                broadcast_message_to_local_shards_in_background(
-                    my_shard,
-                    ShardMessage::Event(ShardEvent::CreateCollection(name)),
-                );
+                my_shard.gossip(GossipEvent::CreateCollection(name)).await?;
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
                 my_shard.drop_collection(&name)?;
-
-                broadcast_message_to_local_shards_in_background(
-                    my_shard,
-                    ShardMessage::Event(ShardEvent::DropCollection(name)),
-                );
+                my_shard.gossip(GossipEvent::DropCollection(name)).await?;
             }
             Some("set") => {
                 let collection = extract_field_as_str(&map, "collection")?;
