@@ -5,7 +5,7 @@ use glommio::{enclose, net::TcpListener, spawn_local, Task};
 use log::{error, trace};
 
 use crate::{
-    error::Result,
+    error::{Error, Result},
     messages::{ShardMessage, ShardResponse},
     remote_shard_connection::{
         get_message_from_stream, send_message_to_stream,
@@ -17,22 +17,33 @@ async fn handle_remote_shard_client(
     my_shard: Rc<MyShard>,
     client: &mut (impl AsyncRead + AsyncWrite + Unpin),
 ) -> Result<()> {
-    let msg = get_message_from_stream(client).await?;
-    match my_shard.handle_shard_message(msg).await {
-        Ok(Some(response_msg)) => {
-            send_message_to_stream(
-                client,
-                &ShardMessage::Response(response_msg),
-            )
-            .await?;
-        }
-        Ok(None) => {}
-        Err(e) => {
-            send_message_to_stream(
-                client,
-                &ShardMessage::Response(ShardResponse::Error(e.to_string())),
-            )
-            .await?;
+    loop {
+        match get_message_from_stream(client).await {
+            Ok(msg) => match my_shard.handle_shard_message(msg).await {
+                Ok(Some(response_msg)) => {
+                    send_message_to_stream(
+                        client,
+                        &ShardMessage::Response(response_msg),
+                    )
+                    .await?;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    send_message_to_stream(
+                        client,
+                        &ShardMessage::Response(ShardResponse::Error(
+                            e.to_string(),
+                        )),
+                    )
+                    .await?;
+                }
+            },
+            Err(Error::StdIOError(e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
+            Err(e) => return Err(e),
         }
     }
     client.close().await?;
