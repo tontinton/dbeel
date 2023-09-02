@@ -158,13 +158,12 @@ pub fn create_shard(
         .next()
         .unwrap();
 
-    let shard_name = format!("{}-{}", args.name, id);
     let shards = local_connections
         .into_iter()
         .map(|c| {
             Shard::new(
                 args.name.clone(),
-                shard_name.clone(),
+                format!("{}-{}", args.name, c.id),
                 ShardConnection::Local(c),
             )
         })
