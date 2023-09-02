@@ -10,4 +10,5 @@ pub enum FlowEvent {
     AliveNodeGossip,
     CollectionCreated,
     DoneMigration,
+    ItemSetFromShardMessage,
 }

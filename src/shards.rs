@@ -531,6 +531,9 @@ impl MyShard {
                 .await?;
             self.trees.borrow_mut().insert(collection, tree);
         };
+
+        notify_flow_event!(self, FlowEvent::ItemSetFromShardMessage);
+
         Ok(())
     }
 
