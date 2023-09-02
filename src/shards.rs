@@ -148,9 +148,7 @@ impl MyShard {
         stop_sender: Sender<()>,
     ) -> Self {
         let shard_name = format!("{}-{}", args.name, id);
-        let hash =
-            hash_string(&format!("{}:{}", args.ip, args.port + id as u16))
-                .unwrap();
+        let hash = hash_string(&shard_name).unwrap();
         Self {
             args,
             id,
