@@ -23,7 +23,8 @@ pub enum ShardRequest {
 pub struct NodeMetadata {
     pub name: String,
     pub ip: String,
-    pub shard_ports: Vec<u16>,
+    pub remote_shard_base_port: u16,
+    pub ids: Vec<u16>,
     pub gossip_port: u16,
     pub db_port: u16,
 }

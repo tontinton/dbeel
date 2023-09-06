@@ -2,10 +2,7 @@ use std::{rc::Rc, time::Duration};
 
 use glommio::{spawn_local, timer::sleep, Task};
 use log::{error, info};
-use rand::{
-    seq::{IteratorRandom, SliceRandom},
-    thread_rng,
-};
+use rand::{seq::IteratorRandom, thread_rng};
 
 use crate::{
     error::Result,
@@ -28,7 +25,7 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
             .borrow()
             .iter()
             .map(|(_, node)| node)
-            .filter(|node| !node.shard_ports.is_empty())
+            .filter(|node| !node.ids.is_empty())
             .choose(&mut rng)
         {
             node.clone()
@@ -40,7 +37,11 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
             format!(
                 "{}:{}",
                 node.ip,
-                node.shard_ports.choose(&mut rng).unwrap()
+                node.ids
+                    .iter()
+                    .map(|id| node.remote_shard_base_port + id)
+                    .choose(&mut rng)
+                    .unwrap()
             ),
             &my_shard.args,
         );

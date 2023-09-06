@@ -22,9 +22,8 @@ fn create_metadata_from_args(
     NodeMetadata {
         name: args.name,
         ip: args.ip,
-        shard_ports: (0..number_of_shards)
-            .map(|x| x + args.remote_shard_port)
-            .collect::<Vec<_>>(),
+        remote_shard_base_port: args.remote_shard_port,
+        ids: (0..number_of_shards).collect::<Vec<_>>(),
         gossip_port: args.gossip_port,
         db_port: args.port,
     }

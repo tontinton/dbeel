@@ -161,11 +161,8 @@ pub fn create_shard(
     let shards = local_connections
         .into_iter()
         .map(|c| {
-            Shard::new(
-                args.name.clone(),
-                format!("{}-{}", args.name, c.id),
-                ShardConnection::Local(c),
-            )
+            let shard_name = format!("{}-{}", args.name, c.id);
+            Shard::new(args.name.clone(), shard_name, ShardConnection::Local(c))
         })
         .collect::<Vec<_>>();
 
