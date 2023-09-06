@@ -1,7 +1,6 @@
 pub mod error;
 
 use std::{
-    collections::HashSet,
     net::{SocketAddr, ToSocketAddrs},
     time::Duration,
 };
@@ -21,13 +20,11 @@ const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 struct Shard {
     hash: u32,
     address: SocketAddr,
-    node_name: String,
 }
 
 pub struct DbeelClient {
     seed_shards: Vec<SocketAddr>,
     hash_ring: Vec<Shard>,
-    replication_factor: u32,
     connect_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
@@ -93,11 +90,7 @@ impl DbeelClient {
                 let shard_name = format!("{}-{}", node.name, shard_id);
                 let hash =
                     hash_string(&shard_name).map_err(Error::HashShardName)?;
-                hash_ring.push(Shard {
-                    hash,
-                    address,
-                    node_name: node.name.clone(),
-                });
+                hash_ring.push(Shard { hash, address });
             }
         }
         hash_ring.sort_unstable_by_key(|s| s.hash);
@@ -105,7 +98,6 @@ impl DbeelClient {
         Ok(Self {
             seed_shards: seed_addresses,
             hash_ring,
-            replication_factor: metadata.replication_factor,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             read_timeout: DEFAULT_READ_TIMEOUT,
             write_timeout: DEFAULT_WRITE_TIMEOUT,
@@ -229,24 +221,8 @@ impl DbeelClient {
             .iter()
             .position(|s| s.hash >= hash)
             .unwrap_or(0);
-
-        let mut owning_shards = Vec::new();
-        let mut nodes = HashSet::new();
-        let mut i = 0;
-        let mut index = position % self.hash_ring.len();
-        while (i == 0 || index != position)
-            && owning_shards.len() < self.replication_factor as usize
-        {
-            let shard = &self.hash_ring[index];
-            if !nodes.contains(&shard.node_name) {
-                owning_shards.push(shard.address);
-                nodes.insert(&shard.node_name);
-            }
-            i += 1;
-            index = (position + i as usize) % self.hash_ring.len();
-        }
-
-        Ok(self.send_request(&owning_shards, request).await?)
+        self.send_request(&[self.hash_ring[position].address], request)
+            .await
     }
 
     pub async fn create_collection<S: Into<Utf8String>>(

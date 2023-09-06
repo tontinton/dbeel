@@ -43,7 +43,6 @@ macro_rules! notify_flow_event {
 #[derive(Serialize, Deserialize)]
 pub struct ClusterMetadata {
     pub nodes: Vec<NodeMetadata>,
-    pub replication_factor: u32,
 }
 
 #[derive(Debug)]
@@ -459,7 +458,6 @@ impl MyShard {
     pub fn get_cluster_metadata(&self) -> ClusterMetadata {
         ClusterMetadata {
             nodes: self.get_nodes(),
-            replication_factor: self.args.replication_factor,
         }
     }
 
