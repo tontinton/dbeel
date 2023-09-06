@@ -288,7 +288,7 @@ impl MyShard {
         spawn_local(async move {
             // Filter out remote shards of nodes we already collected.
             let mut nodes =
-                HashSet::with_capacity(my_shard.args.replication_factor as usize);
+                HashSet::with_capacity(my_shard.args.replication_factor as usize - 1);
 
             let connections = my_shard.shards.borrow()
                 .iter()
@@ -301,7 +301,7 @@ impl MyShard {
                     }
                     _ => None,
                 })
-                .take(my_shard.args.replication_factor as usize)
+                .take(my_shard.args.replication_factor as usize - 1)
                 .cloned()
                 .collect::<Vec<_>>();
 
