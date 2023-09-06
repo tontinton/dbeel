@@ -373,22 +373,21 @@ impl MyShard {
     }
 
     pub fn get_node_metadata(&self) -> NodeMetadata {
-        let shard_ports = self
+        let ids = self
             .shards
             .borrow()
             .iter()
             .flat_map(|shard| match &shard.connection {
                 ShardConnection::Remote(_) => None,
-                ShardConnection::Local(c) => {
-                    Some(self.args.remote_shard_port + c.id as u16)
-                }
+                ShardConnection::Local(c) => Some(c.id),
             })
             .collect::<Vec<_>>();
 
         NodeMetadata {
             name: self.args.name.clone(),
             ip: self.args.ip.clone(),
-            shard_ports,
+            remote_shard_base_port: self.args.remote_shard_port,
+            ids,
             gossip_port: self.args.gossip_port,
             db_port: self.args.port,
         }
@@ -399,17 +398,26 @@ impl MyShard {
             nodes
                 .into_iter()
                 .flat_map(|node| {
-                    node.shard_ports
+                    node.ids
                         .into_iter()
-                        .map(|port| {
-                            (node.name.clone(), format!("{}:{}", node.ip, port))
+                        .map(|id| {
+                            (
+                                node.name.clone(),
+                                format!(
+                                    "{}:{}",
+                                    node.ip,
+                                    node.remote_shard_base_port + id
+                                ),
+                                id,
+                            )
                         })
                         .collect::<Vec<_>>()
                 })
-                .map(|(node_name, address)| {
+                .map(|(node_name, address, id)| {
+                    let shard_name = format!("{}-{}", node_name, id);
                     Shard::new(
                         node_name,
-                        address.clone(),
+                        shard_name,
                         ShardConnection::Remote(
                             RemoteShardConnection::from_args(
                                 address, &self.args,

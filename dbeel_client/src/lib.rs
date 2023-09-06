@@ -82,30 +82,21 @@ impl DbeelClient {
         .await?;
 
         let metadata: ClusterMetadata = from_slice(&buf)?;
-        let flatten_shards = metadata
-            .nodes
-            .into_iter()
-            .map(|node| (node.name, format!("{}:{}", node.ip, node.db_port)))
-            .flat_map(|(node_name, address)| {
-                address
-                    .to_socket_addrs()
-                    .map(|socket_addr| {
-                        let hash =
-                            hash_string(&address).map_err(Error::HashShardName);
-                        (hash, socket_addr, node_name)
-                    })
-                    .map_err(Error::ParsingSocketAddress)
-            })
-            .collect::<Vec<(Result<u32>, std::vec::IntoIter<SocketAddr>, String)>>();
 
         let mut hash_ring = Vec::new();
-        for (hash_result, socket_addrs, node_name) in flatten_shards {
-            let hash = hash_result?;
-            for address in socket_addrs {
+        for node in metadata.nodes {
+            let address = format!("{}:{}", node.ip, node.db_port)
+                .to_socket_addrs()
+                .map_err(Error::ParsingSocketAddress)?
+                .collect::<Vec<_>>()[0];
+            for shard_id in node.ids {
+                let shard_name = format!("{}-{}", node.name, shard_id);
+                let hash =
+                    hash_string(&shard_name).map_err(Error::HashShardName)?;
                 hash_ring.push(Shard {
                     hash,
                     address,
-                    node_name: node_name.clone(),
+                    node_name: node.name.clone(),
                 });
             }
         }
