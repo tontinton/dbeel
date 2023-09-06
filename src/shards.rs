@@ -99,7 +99,7 @@ pub struct MyShard {
     pub args: Args,
 
     /// Current shard's cpu id.
-    pub id: usize,
+    pub id: u16,
 
     /// Shard unique name, if you want the node unique name, it's in args.name.
     pub shard_name: String,
@@ -140,7 +140,7 @@ pub struct MyShard {
 impl MyShard {
     pub fn new(
         args: Args,
-        id: usize,
+        id: u16,
         shards: Vec<Shard>,
         cache: PageCache<FileId>,
         local_shards_packet_receiver: Receiver<ShardPacket>,

@@ -73,13 +73,13 @@ pub enum ShardMessage {
 
 // A packet that is sent between local shards.
 pub struct ShardPacket {
-    pub source_id: usize,
+    pub source_id: u16,
     pub message: ShardMessage,
     pub response_sender: Option<Sender<ShardResponse>>,
 }
 
 impl ShardPacket {
-    pub fn new(id: usize, message: ShardMessage) -> Self {
+    pub fn new(id: u16, message: ShardMessage) -> Self {
         Self {
             source_id: id,
             message,
@@ -88,7 +88,7 @@ impl ShardPacket {
     }
 
     pub fn new_request(
-        id: usize,
+        id: u16,
         message: ShardMessage,
         sender: Sender<ShardResponse>,
     ) -> Self {

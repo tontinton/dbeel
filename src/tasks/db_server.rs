@@ -283,7 +283,7 @@ async fn handle_client(
 }
 
 async fn run_server(my_shard: Rc<MyShard>) -> Result<()> {
-    let port = my_shard.args.port + my_shard.id as u16;
+    let port = my_shard.args.port + my_shard.id;
     let address = format!("{}:{}", my_shard.args.ip, port);
     let server = TcpListener::bind(address.as_str())?;
     trace!("Listening for clients on: {}", address);

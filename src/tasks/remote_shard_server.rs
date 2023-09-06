@@ -55,7 +55,7 @@ async fn run_remote_shard_server(my_shard: Rc<MyShard>) -> Result<()> {
     let address = format!(
         "{}:{}",
         my_shard.args.ip,
-        my_shard.args.remote_shard_port + my_shard.id as u16
+        my_shard.args.remote_shard_port + my_shard.id
     );
     let server = TcpListener::bind(address.as_str())?;
     trace!("Listening for distributed messages on: {}", address);

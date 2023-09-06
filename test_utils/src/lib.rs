@@ -69,7 +69,7 @@ where
 }
 
 pub fn test_node_ex<G, F, T>(
-    number_of_shards: usize,
+    number_of_shards: u16,
     args: Args,
     crash_at_shutdown: bool,
     test_future: G,
@@ -127,7 +127,7 @@ where
 }
 
 pub fn test_node<G, F, T>(
-    number_of_shards: usize,
+    number_of_shards: u16,
     args: Args,
     test_future: G,
 ) -> Result<ExecutorJoinHandle<()>>
@@ -140,7 +140,7 @@ where
 }
 
 pub fn test_node_with_crash_at_end<G, F, T>(
-    number_of_shards: usize,
+    number_of_shards: u16,
     args: Args,
     test_future: G,
 ) -> Result<ExecutorJoinHandle<()>>
