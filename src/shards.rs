@@ -701,11 +701,14 @@ impl MyShard {
                     .borrow_mut()
                     .entry(node.name.clone())
                     .or_insert_with(|| node.clone());
-                trace!(
-                    "After alive: holding {} number of nodes",
-                    self.nodes.borrow().len()
-                );
+                let node_name = node.name.clone();
                 self.add_shards_of_nodes(vec![node]);
+                trace!(
+                    "After alive of {}: holding {} nodes and {} shards",
+                    node_name,
+                    self.nodes.borrow().len(),
+                    self.shards.borrow().len(),
+                );
 
                 notify_flow_event!(self, FlowEvent::AliveNodeGossip);
 
