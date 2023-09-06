@@ -142,7 +142,7 @@ pub async fn run_shard(
 
 pub fn create_shard(
     args: Args,
-    id: usize,
+    id: u16,
     local_connections: Vec<LocalShardConnection>,
 ) -> Rc<MyShard> {
     let (receiver, stop_receiver, stop_sender) = local_connections

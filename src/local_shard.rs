@@ -7,7 +7,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct LocalShardConnection {
-    pub id: usize,
+    pub id: u16,
     pub sender: Sender<ShardPacket>,
     pub receiver: Receiver<ShardPacket>,
     pub stop_sender: Sender<()>,
@@ -15,7 +15,7 @@ pub struct LocalShardConnection {
 }
 
 impl LocalShardConnection {
-    pub fn new(id: usize) -> Self {
+    pub fn new(id: u16) -> Self {
         let (sender, receiver) = async_channel::unbounded();
         let (stop_sender, stop_receiver) = async_channel::bounded(1);
         Self {

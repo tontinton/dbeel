@@ -35,16 +35,16 @@ fn main() -> Result<()> {
 
     let local_connections = cpu_set
         .iter()
-        .map(|x| x.cpu)
+        .map(|x| x.cpu as u16)
         .map(LocalShardConnection::new)
         .collect::<Vec<_>>();
 
     let handles = cpu_set
         .into_iter()
-        .map(|x| x.cpu)
+        .map(|x| x.cpu as u16)
         .enumerate()
         .map(|(i, cpu)| {
-            LocalExecutorBuilder::new(Placement::Fixed(cpu))
+            LocalExecutorBuilder::new(Placement::Fixed(cpu as usize))
                 .name(format!("executor({})", cpu).as_str())
                 .spawn(enclose!((local_connections.clone() => connections,
                                 args.clone() => args) move || async move {
