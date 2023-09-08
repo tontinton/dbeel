@@ -7,6 +7,7 @@ use futures::{
     stream::{FuturesUnordered, StreamExt},
 };
 use glommio::{net::UdpSocket, spawn_local};
+use itertools::Itertools;
 use log::{error, trace};
 use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
@@ -19,7 +20,9 @@ use crate::gossip::{
     serialize_gossip_message, GossipEvent, GossipEventKind, GossipMessage,
 };
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
-use crate::tasks::migration::spawn_migration_tasks;
+use crate::tasks::migration::{
+    spawn_migration_actions_tasks, spawn_migration_tasks, MigrationAction,
+};
 use crate::utils::get_first_capture;
 use crate::{
     args::Args,
@@ -55,7 +58,7 @@ pub enum ShardConnection {
 }
 
 // A struct to hold shard metadata + connection info to communicate with.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Shard {
     // The unique node name.
     pub node_name: String,
@@ -663,18 +666,152 @@ impl MyShard {
         spawn_migration_tasks(self, start, end, migrate_to_connection);
     }
 
+    fn migrate_data_on_node_addition(self: Rc<Self>, added_shards: &[Shard]) {
+        assert!(!added_shards.is_empty());
+
+        // No need to migrate data if no replication set.
+        if self.args.replication_factor <= 1 {
+            return;
+        }
+
+        // No need to migrate data if all nodes already contain all the data.
+        if self.nodes.borrow().len() + 1 < self.args.replication_factor as usize
+        {
+            return;
+        }
+
+        let shards = self.shards.borrow();
+        let last_owning_shard = Self::get_last_owning_shard(
+            &shards,
+            self.hash,
+            self.args.replication_factor as usize,
+        )
+        .unwrap();
+
+        let added_shard_names = added_shards
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>();
+
+        // Get the previous shard's hash (prior to adding the new node's
+        // shards to the ring).
+        let previous_shard_hash = self
+            .shards
+            .borrow()
+            .iter()
+            .rev()
+            .filter(|s| !added_shard_names.contains(&s.name))
+            .map(|s| s.hash)
+            .next();
+        if previous_shard_hash.is_none() {
+            return;
+        }
+        let previous_shard_hash = previous_shard_hash.unwrap();
+
+        let mut migration_actions = Vec::new();
+
+        // Step 1.
+        // Migrate to the closest added shard that is between this shard and the
+        // last owning one.
+        if let Some(migrate_to_shard) = added_shards
+            .iter()
+            .filter(|shard| {
+                is_between(shard.hash, self.hash, last_owning_shard.hash)
+                    || shard.hash == last_owning_shard.hash
+            })
+            .min_by_key(|shard| shard.hash.wrapping_sub(self.hash))
+        {
+            migration_actions.push((
+                previous_shard_hash,
+                self.hash,
+                MigrationAction::SendToShard(
+                    migrate_to_shard.connection.clone(),
+                ),
+            ));
+        }
+
+        // Step 2.
+        // Migrate to added shards between the previous shard and this shard,
+        // excluding the farthest one, because the previous shard should
+        // migrate to it (see step 1).
+        {
+            let mut migrate_to_shards = added_shards
+                .iter()
+                .filter(|s| is_between(s.hash, previous_shard_hash, self.hash))
+                .collect::<Vec<_>>();
+
+            if migrate_to_shards.len() > 1 {
+                migrate_to_shards
+                    .sort_unstable_by_key(|s| s.hash.wrapping_sub(self.hash));
+
+                let actions = migrate_to_shards
+                    .into_iter()
+                    .tuple_windows()
+                    .map(|(a, b)| {
+                        (
+                            a.hash,
+                            b.hash,
+                            MigrationAction::SendToShard(b.connection.clone()),
+                        )
+                    });
+                migration_actions.extend(actions);
+            }
+        }
+
+        // Step 3.
+        // Delete items that are no longer owned by this shard. It's ok to
+        // delete while migrating, because this shard is not the first owner of
+        // these items.
+        let mut seen =
+            HashSet::with_capacity(self.args.replication_factor as usize);
+        for (i, shard) in self
+            .shards
+            .borrow()
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, shard)| !added_shard_names.contains(&shard.name))
+        {
+            seen.insert(&shard.name);
+            if seen.len() == self.args.replication_factor as usize {
+                break;
+            }
+
+            if !self.is_owning_shard(i, self.args.replication_factor as usize) {
+                let prev_index = if i == 0 {
+                    self.shards.borrow().len() - 1
+                } else {
+                    i - 1
+                };
+
+                migration_actions.push((
+                    self.shards.borrow()[prev_index].hash,
+                    shard.hash,
+                    MigrationAction::Delete,
+                ));
+            }
+        }
+
+        // Step 4.
+        // Execute migration actions on background tasks.
+        spawn_migration_actions_tasks(self.clone(), migration_actions.clone());
+    }
+
     fn get_last_owning_shard(
         shards: &[Shard],
-        hash: u32,
+        start_shard_hash: u32,
         replication_factor: usize,
     ) -> Option<&Shard> {
-        let position = shards.iter().position(|s| s.hash >= hash).unwrap_or(0);
+        let start_shard_index = shards
+            .iter()
+            .position(|s| s.hash >= start_shard_hash)
+            .unwrap_or(0);
 
         let mut owning_shards_found = 0;
         let mut nodes = HashSet::new();
         let mut i = 0;
-        let mut index = position % shards.len();
-        while i == 0 || index != position {
+        let mut index = start_shard_index % shards.len();
+        while i == 0 || index != start_shard_index {
             let shard = &shards[index];
             if !nodes.contains(&shard.node_name) {
                 owning_shards_found += 1;
@@ -684,9 +821,37 @@ impl MyShard {
                 nodes.insert(&shard.node_name);
             }
             i += 1;
-            index = (position + i as usize) % shards.len();
+            index = (start_shard_index + i as usize) % shards.len();
         }
         None
+    }
+
+    fn is_owning_shard(
+        &self,
+        start_shard_index: usize,
+        replication_factor: usize,
+    ) -> bool {
+        let shards = self.shards.borrow();
+        let mut owning_shards_found = 0;
+        let mut nodes = HashSet::new();
+        let mut i = 0;
+        let mut index = start_shard_index % shards.len();
+        while i == 0 || index != start_shard_index {
+            let shard = &shards[index];
+            if !nodes.contains(&shard.node_name) {
+                if shard.hash == self.hash {
+                    return true;
+                }
+                owning_shards_found += 1;
+                if owning_shards_found == replication_factor {
+                    break;
+                }
+                nodes.insert(&shard.node_name);
+            }
+            i += 1;
+            index = (start_shard_index + i as usize) % shards.len();
+        }
+        false
     }
 
     pub async fn handle_gossip_event(
@@ -711,6 +876,15 @@ impl MyShard {
                 );
 
                 notify_flow_event!(self, FlowEvent::AliveNodeGossip);
+
+                let added = self
+                    .shards
+                    .borrow()
+                    .iter()
+                    .filter(|s| s.node_name == node_name)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                self.migrate_data_on_node_addition(&added);
 
                 false
             }

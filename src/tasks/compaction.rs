@@ -47,7 +47,7 @@ async fn run_compaction_loop(my_shard: Rc<MyShard>) {
             }
         }
 
-        sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(100)).await;
     }
 }
 
