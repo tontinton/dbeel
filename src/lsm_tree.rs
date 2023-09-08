@@ -798,16 +798,20 @@ impl LSMTree {
     ) -> Result<Option<EntryValue>> {
         let value = EntryValue::new(value, timestamp);
 
+        // Write to WAL for persistance.
+        self.write_to_wal(&Entry {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .await?;
+
         // Wait until some flush happens.
         while self.memtable_full() {
             futures_lite::future::yield_now().await;
         }
 
         // Write to memtable in memory.
-        let result = self
-            .active_memtable
-            .borrow_mut()
-            .set(key.clone(), value.clone())?;
+        let result = self.active_memtable.borrow_mut().set(key, value)?;
 
         if self.memtable_full() {
             // Capacity is full, flush memtable to disk in background.
@@ -818,9 +822,6 @@ impl LSMTree {
             }))
             .detach();
         }
-
-        // Write to WAL for persistance.
-        self.write_to_wal(&Entry { key, value }).await?;
 
         Ok(result)
     }
