@@ -726,6 +726,7 @@ dependencies = [
  "futures",
  "futures-lite",
  "glommio",
+ "itertools",
  "kinded",
  "log",
  "murmur3",
