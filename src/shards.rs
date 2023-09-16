@@ -567,7 +567,15 @@ impl MyShard {
         })
     }
 
-    pub async fn gossip(&self, event: GossipEvent) -> Result<()> {
+    pub async fn gossip(self: Rc<Self>, event: GossipEvent) -> Result<()> {
+        if self.nodes.borrow().is_empty() {
+            self.clone()
+                .broadcast_message_to_local_shards(&ShardMessage::Event(
+                    ShardEvent::Gossip(event.clone()),
+                ))
+                .await?;
+        }
+
         let message = GossipMessage::new(self.args.name.clone(), event);
         self.gossip_buffer(&serialize_gossip_message(&message)?)
             .await
@@ -901,7 +909,8 @@ impl MyShard {
                     // Whoops, someone marked us as dead, even though we are alive
                     // and well.
                     // Let's notify everyone that we are actually alive.
-                    self.gossip(GossipEvent::Alive(self.get_node_metadata()))
+                    self.clone()
+                        .gossip(GossipEvent::Alive(self.get_node_metadata()))
                         .await?;
                     true
                 } else {
