@@ -4,9 +4,11 @@ use dbeel::{
     args::{parse_args_from, Args},
     error::Result,
     flow_events::FlowEvent,
+    lsm_tree::TOMBSTONE,
 };
 use dbeel_client::DbeelClient;
-use futures::try_join;
+use event_listener::Event;
+use futures::{future::join_all, try_join};
 use once_cell::sync::Lazy;
 use rmpv::{encode::write_value, Value};
 use rstest::{fixture, rstest};
@@ -212,6 +214,182 @@ fn migration_on_death(args: Args) -> Result<()> {
     }
 
     c_handle.join()?;
+    for handle in handles {
+        handle.join()?;
+    }
+
+    Ok(())
+}
+
+#[rstest]
+#[serial]
+fn migration_on_new_node(args: Args) -> Result<()> {
+    // "a-0"    -> 2727548292
+    // "b-0"    -> 1121949192
+    // "c-0"    -> 2242724227
+    // "key"    -> 1211368233
+    // "KEY"    -> 791967430
+    //
+    // 1. KEY -> b-0 -> key -> c-0.
+    // 2. KEY -> b-0 -> key -> c-0 -> a-0.
+
+    let (seed_sender, seed_receiver) = async_channel::bounded(1);
+    let (keys_created_sender, keys_created_receiver) =
+        async_channel::bounded(1);
+    let (b_keys_checked_sender, b_keys_checked_receiver) =
+        async_channel::bounded(1);
+    let (b_migration_done_sender, b_migration_done_receiver) =
+        async_channel::bounded(1);
+    let (c_migration_done_sender, c_migration_done_receiver) =
+        async_channel::bounded(1);
+
+    let a_done_event = Event::new();
+    let b_done_event = Event::new();
+    let c_done_event = Event::new();
+
+    let a_done_listeners = vec![b_done_event.listen(), c_done_event.listen()];
+    let b_done_listeners = vec![a_done_event.listen(), c_done_event.listen()];
+    let c_done_listeners = vec![a_done_event.listen(), b_done_event.listen()];
+
+    let mut handles = Vec::with_capacity(3);
+
+    let mut c_args = args;
+    c_args.remote_shard_port += 3;
+    c_args.port += 3;
+    c_args.gossip_port += 3;
+    c_args.name = "c".to_string();
+
+    handles.push(test_node(1, c_args.clone(), move |shard, _| async move {
+        seed_sender
+            .send(vec![format!(
+                "{}:{}",
+                shard.args.ip,
+                shard.args.remote_shard_port + shard.id as u16
+            )])
+            .await
+            .unwrap();
+        if shard.nodes.borrow().is_empty() {
+            let receiver = shard
+                .subscribe_to_flow_event(FlowEvent::AliveNodeGossip.into());
+            receiver.recv().await.unwrap();
+        }
+
+        let mut client = DbeelClient::from_seed_nodes(&[(
+            shard.args.ip.clone(),
+            shard.args.port,
+        )])
+        .await
+        .unwrap();
+
+        client.set_read_timeout(Duration::from_secs(1));
+        client.set_write_timeout(Duration::from_secs(1));
+
+        let collection_created =
+            shard.subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
+        let collection = client.create_collection("test").await.unwrap();
+        collection_created.recv().await.unwrap();
+
+        collection
+            .set_consistent(Value::String("key".into()), Value::F32(42.0), 2)
+            .await
+            .unwrap();
+        collection
+            .set_consistent(
+                Value::String("KEY".into()),
+                Value::Boolean(false),
+                2,
+            )
+            .await
+            .unwrap();
+
+        let done_migration =
+            shard.subscribe_to_flow_event(FlowEvent::DoneMigration.into());
+
+        keys_created_sender.send(()).await.unwrap();
+
+        done_migration.recv().await.unwrap();
+        c_migration_done_sender.send(()).await.unwrap();
+        b_migration_done_receiver.recv().await.unwrap();
+
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            Some((*UPPER_VALUE).clone())
+        );
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            Some((*LOWER_VALUE).clone())
+        );
+
+        c_done_event.notify(2);
+        join_all(c_done_listeners).await;
+    })?);
+
+    let seed_nodes = seed_receiver.recv_blocking()?;
+
+    let mut a_args = next_node_args(c_args, "a".to_string(), 1);
+    a_args.dir = "/tmp/test1".to_string();
+    a_args.seed_nodes = seed_nodes;
+
+    let mut b_args = next_node_args(a_args.clone(), "b".to_string(), 1);
+    b_args.dir = "/tmp/test2".to_string();
+
+    handles.push(test_node(1, b_args, move |shard, _| async move {
+        keys_created_receiver.recv().await.unwrap();
+
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            Some((*UPPER_VALUE).clone())
+        );
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            Some((*LOWER_VALUE).clone())
+        );
+
+        let done_migration =
+            shard.subscribe_to_flow_event(FlowEvent::DoneMigration.into());
+
+        b_keys_checked_sender.send(()).await.unwrap();
+
+        done_migration.recv().await.unwrap();
+        b_migration_done_sender.send(()).await.unwrap();
+        c_migration_done_receiver.recv().await.unwrap();
+
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            Some((*UPPER_VALUE).clone())
+        );
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            Some(TOMBSTONE)
+        );
+
+        b_done_event.notify(2);
+        join_all(b_done_listeners).await;
+    })?);
+
+    b_keys_checked_receiver.recv_blocking().unwrap();
+
+    handles.push(test_node(1, a_args, move |shard, _| async move {
+        if shard.trees.borrow().is_empty() {
+            let item_set_event = shard.subscribe_to_flow_event(
+                FlowEvent::ItemSetFromShardMessage.into(),
+            );
+            item_set_event.recv().await.unwrap();
+        }
+
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            None
+        );
+        assert_eq!(
+            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            Some((*LOWER_VALUE).clone())
+        );
+
+        a_done_event.notify(2);
+        join_all(a_done_listeners).await;
+    })?);
+
     for handle in handles {
         handle.join()?;
     }

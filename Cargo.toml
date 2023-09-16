@@ -51,3 +51,4 @@ dbeel_client = { path = "dbeel_client" }
 rstest = "0.18.1"
 serial_test = "2.0.0"
 dbeel = { path = ".", features = ["flow-events"] }
+event-listener = "3.0.0"
