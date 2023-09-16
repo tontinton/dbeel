@@ -12,6 +12,7 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
+use event_listener::{Event, EventListener};
 use futures::{try_join, AsyncWrite};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
@@ -31,6 +32,7 @@ use std::{
     cmp::Ordering,
     collections::BinaryHeap,
     path::{Path, PathBuf},
+    pin::Pin,
     rc::Rc,
 };
 use time::OffsetDateTime;
@@ -437,6 +439,9 @@ pub struct LSMTree {
     /// The memtable that is currently being flushed to disk.
     flush_memtable: RefCell<Option<MemTable>>,
 
+    /// Used for waiting on flushes.
+    flush_event: Event,
+
     /// The next sstable index that is going to be written.
     write_sstable_index: Cell<usize>,
 
@@ -604,6 +609,7 @@ impl LSMTree {
             page_cache,
             active_memtable: RefCell::new(active_memtable),
             flush_memtable: RefCell::new(None),
+            flush_event: Event::new(),
             write_sstable_index: Cell::new(write_file_index),
             sstables: RefCell::new(Rc::new(sstables)),
             memtable_index: Cell::new(wal_file_index),
@@ -819,6 +825,7 @@ impl LSMTree {
                 if let Err(e) = tree.flush().await {
                     error!("Failed to flush memtable: {}", e);
                 }
+                tree.flush_event.notify(usize::MAX);
             }))
             .detach();
         }
@@ -877,6 +884,11 @@ impl LSMTree {
         }
 
         Ok(())
+    }
+
+    /// Wait until a flush occures.
+    pub fn get_flush_event_listener(&self) -> Pin<Box<EventListener<()>>> {
+        self.flush_event.listen()
     }
 
     pub async fn flush(&self) -> Result<()> {

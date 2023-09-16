@@ -60,10 +60,10 @@ Running the benchmark on my machine ([System76 lemp11](https://tech-docs.system7
 
 ```
 Set:
-total: 56.851788216s, min: 97.733µs, p50: 368.206µs, p90: 824.117µs, p99: 1.509325ms, p999: 99.203241ms, max: 101.680801ms
+total: 48.733705959s, min: 106.442µs, p50: 347.806µs, p90: 928.311µs, p99: 1.751205ms, p999: 7.331712ms, max: 44.204281ms
 
 Get:
-total: 59.702427356s, min: 64.529µs, p50: 524.737µs, p90: 994.665µs, p99: 1.553771ms, p999: 2.002257ms, max: 10.496793ms
+total: 61.39613906s, min: 69.37µs, p50: 520.323µs, p90: 1.082239ms, p99: 1.813001ms, p999: 3.394344ms, max: 9.267451ms
 ```
 
 Meaning the median user will have ~3 writes in a millisecond and ~2 reads in a millisecond.

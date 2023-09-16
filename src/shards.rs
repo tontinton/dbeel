@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use async_channel::{Receiver, Sender};
+use event_listener::Event;
 use futures::{
     future::join_all,
     stream::{FuturesUnordered, StreamExt},
@@ -133,6 +134,9 @@ pub struct MyShard {
     /// Collections to the lsm tree on disk.
     pub trees: RefCell<HashMap<String, Rc<LSMTree>>>,
 
+    /// Used for notfying any insertions / removals from |trees|.
+    pub trees_change_event: Event,
+
     /// The shard's page cache.
     cache: Rc<RefCell<PageCache<FileId>>>,
 
@@ -171,6 +175,7 @@ impl MyShard {
             nodes: RefCell::new(HashMap::new()),
             gossip_requests: RefCell::new(HashMap::new()),
             trees: RefCell::new(HashMap::new()),
+            trees_change_event: Event::new(),
             cache: Rc::new(RefCell::new(cache)),
             local_shards_packet_receiver,
             stop_receiver,
@@ -234,8 +239,12 @@ impl MyShard {
             return Err(Error::CollectionAlreadyExists(name));
         }
         let tree = self.create_lsm_tree(name.clone()).await?;
+
         self.trees.borrow_mut().insert(name, tree);
+        self.trees_change_event.notify(usize::MAX);
+
         notify_flow_event!(self, FlowEvent::CollectionCreated);
+
         Ok(())
     }
 
@@ -245,6 +254,7 @@ impl MyShard {
             .remove(name)
             .ok_or_else(|| Error::CollectionNotFound(name.clone()))?
             .purge()?;
+        self.trees_change_event.notify(usize::MAX);
         Ok(())
     }
 
@@ -533,6 +543,7 @@ impl MyShard {
                 .set_with_timestamp(key, value, timestamp)
                 .await?;
             self.trees.borrow_mut().insert(collection, tree);
+            self.trees_change_event.notify(usize::MAX);
         };
 
         notify_flow_event!(self, FlowEvent::ItemSetFromShardMessage);
