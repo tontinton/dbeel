@@ -39,9 +39,9 @@ fn create_set_message(name: String, entry: Entry) -> ShardMessage {
 
 fn between_cmp(hash: u32, start: &u32, end: &u32) -> bool {
     if end < start {
-        hash.cmp(&start) == Ordering::Less || hash.cmp(&end) != Ordering::Less
+        hash.cmp(start) == Ordering::Less || hash.cmp(end) != Ordering::Less
     } else {
-        hash.cmp(&start) != Ordering::Less && hash.cmp(&end) == Ordering::Less
+        hash.cmp(start) != Ordering::Less && hash.cmp(end) == Ordering::Less
     }
 }
 
@@ -173,7 +173,10 @@ pub fn spawn_migration_tasks(
         .collect::<Vec<_>>();
     for (collection_name, tree) in trees {
         let c = connection.clone();
+
+        #[cfg(feature = "flow-events")]
         let s = my_shard.clone();
+
         spawn_local(async move {
             let result = migrate(collection_name, tree, start, end, c).await;
             if let Err(e) = &result {
@@ -198,7 +201,10 @@ pub fn spawn_migration_actions_tasks(
         .collect::<Vec<_>>();
     for (collection_name, tree) in trees {
         let r = ranges_and_actions.clone();
+
+        #[cfg(feature = "flow-events")]
         let s = my_shard.clone();
+
         spawn_local(async move {
             let result = migrate_actions(collection_name, tree, &r).await;
             if let Err(e) = &result {
