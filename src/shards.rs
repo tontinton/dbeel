@@ -302,7 +302,7 @@ impl MyShard {
         spawn_local(async move {
             // Filter out remote shards of nodes we already collected.
             let mut nodes =
-                HashSet::with_capacity(my_shard.args.replication_factor as usize - 1);
+                HashSet::with_capacity(my_shard.args.replication_factor - 1);
 
             let connections = my_shard.shards.borrow()
                 .iter()
@@ -315,7 +315,7 @@ impl MyShard {
                     }
                     _ => None,
                 })
-                .take(my_shard.args.replication_factor as usize - 1)
+                .take(my_shard.args.replication_factor - 1)
                 .cloned()
                 .collect::<Vec<_>>();
 
@@ -625,8 +625,7 @@ impl MyShard {
         }
 
         // No need to migrate data if all nodes already contain all the data.
-        if self.nodes.borrow().len() + 1 < self.args.replication_factor as usize
-        {
+        if self.nodes.borrow().len() + 1 < self.args.replication_factor {
             return;
         }
 
@@ -635,7 +634,7 @@ impl MyShard {
             let migrate_to_shard = Self::get_last_owning_shard(
                 &shards,
                 self.hash,
-                self.args.replication_factor as usize,
+                self.args.replication_factor,
             )
             .unwrap();
             (migrate_to_shard.hash, migrate_to_shard.connection.clone())
@@ -675,8 +674,7 @@ impl MyShard {
         }
 
         // No need to migrate data if all nodes already contain all the data.
-        if self.nodes.borrow().len() + 1 < self.args.replication_factor as usize
-        {
+        if self.nodes.borrow().len() + 1 < self.args.replication_factor {
             return;
         }
 
@@ -684,7 +682,7 @@ impl MyShard {
         let last_owning_shard = Self::get_last_owning_shard(
             &shards,
             self.hash,
-            self.args.replication_factor as usize,
+            self.args.replication_factor,
         )
         .unwrap();
 
@@ -762,8 +760,7 @@ impl MyShard {
         // Delete items that are no longer owned by this shard. It's ok to
         // delete while migrating, because this shard is not the first owner of
         // these items.
-        let mut seen =
-            HashSet::with_capacity(self.args.replication_factor as usize);
+        let mut seen = HashSet::with_capacity(self.args.replication_factor);
         for (i, shard) in self
             .shards
             .borrow()
@@ -773,11 +770,11 @@ impl MyShard {
             .filter(|(_, shard)| !added_shard_names.contains(&shard.name))
         {
             seen.insert(&shard.name);
-            if seen.len() == self.args.replication_factor as usize {
+            if seen.len() == self.args.replication_factor {
                 break;
             }
 
-            if !self.is_owning_shard(i, self.args.replication_factor as usize) {
+            if !self.is_owning_shard(i, self.args.replication_factor) {
                 let prev_index = if i == 0 {
                     self.shards.borrow().len() - 1
                 } else {
