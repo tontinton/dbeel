@@ -40,6 +40,8 @@ fn three_nodes_replication_test(
     let (collection_created2_sender, collection_created2_receiver) =
         async_channel::bounded(1);
     let (done_sender, done_receiver) = async_channel::bounded(1);
+    let (done1_sender, done1_receiver) = async_channel::bounded(1);
+    let (done2_sender, done2_receiver) = async_channel::bounded(1);
 
     let main_handle = test_node(1, args.clone(), move |shard, _| async move {
         seed_sender
@@ -97,9 +99,27 @@ fn three_nodes_replication_test(
 
     let mut handles = Vec::new();
 
-    for (node_args, set_receiver, collection_created_sender) in vec![
-        (args1, set1_receiver, collection_created1_sender),
-        (args2, set2_receiver, collection_created2_sender),
+    for (
+        node_args,
+        set_receiver,
+        collection_created_sender,
+        done_sender,
+        done_receiver,
+    ) in vec![
+        (
+            args1,
+            set1_receiver,
+            collection_created1_sender,
+            done1_sender,
+            done2_receiver,
+        ),
+        (
+            args2,
+            set2_receiver,
+            collection_created2_sender,
+            done2_sender,
+            done1_receiver,
+        ),
     ] {
         handles.push(test_node(1, node_args, move |shard, _| async move {
             if shard.trees.borrow().is_empty() {
@@ -128,6 +148,9 @@ fn three_nodes_replication_test(
                 .unwrap();
             let value = read_value_ref(&mut &response[..]).unwrap();
             assert_eq!(value, ValueRef::F32(42.0));
+
+            done_sender.send(()).await.unwrap();
+            done_receiver.recv().await.unwrap();
         })?);
     }
 
