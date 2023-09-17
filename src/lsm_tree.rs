@@ -340,7 +340,7 @@ impl<'a> AsyncIter<'a> {
                 let sstable = &self.sstables[i];
 
                 let (data_filename, index_filename) =
-                    LSMTree::get_data_file_paths(&self.tree.dir, sstable.index);
+                    get_data_file_paths(&self.tree.dir, sstable.index);
 
                 let data_file = CachedFileReader::new(
                     (DATA_FILE_EXT, sstable.index),
@@ -418,6 +418,18 @@ fn get_file_path(dir: &Path, index: usize, ext: &str) -> PathBuf {
     let mut path = dir.to_path_buf();
     path.push(format!("{0:01$}.{2}", index, INDEX_PADDING, ext));
     path
+}
+
+fn get_data_file_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
+    let data_path = get_file_path(dir, index, DATA_FILE_EXT);
+    let index_path = get_file_path(dir, index, INDEX_FILE_EXT);
+    (data_path, index_path)
+}
+
+fn get_compaction_file_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
+    let data_path = get_file_path(dir, index, COMPACT_DATA_FILE_EXT);
+    let index_path = get_file_path(dir, index, COMPACT_INDEX_FILE_EXT);
+    (data_path, index_path)
 }
 
 fn create_file_path_regex(file_ext: &'static str) -> Result<Regex> {
@@ -565,7 +577,7 @@ impl LSMTree {
                     MEMTABLE_FILE_EXT,
                 );
                 let (data_file_path, index_file_path) =
-                    Self::get_data_file_paths(&dir, unflashed_file_index);
+                    get_data_file_paths(&dir, unflashed_file_index);
                 let memtable = Self::read_memtable_from_wal_file(
                     &unflashed_file_path,
                     tree_capacity,
@@ -668,21 +680,6 @@ impl LSMTree {
         Ok(())
     }
 
-    fn get_data_file_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
-        let data_path = get_file_path(dir, index, DATA_FILE_EXT);
-        let index_path = get_file_path(dir, index, INDEX_FILE_EXT);
-        (data_path, index_path)
-    }
-
-    fn get_compaction_file_paths(
-        dir: &Path,
-        index: usize,
-    ) -> (PathBuf, PathBuf) {
-        let data_path = get_file_path(dir, index, COMPACT_DATA_FILE_EXT);
-        let index_path = get_file_path(dir, index, COMPACT_INDEX_FILE_EXT);
-        (data_path, index_path)
-    }
-
     pub fn sstable_indices(&self) -> Vec<usize> {
         self.sstables.borrow().iter().map(|t| t.index).collect()
     }
@@ -761,7 +758,7 @@ impl LSMTree {
         let sstables = self.sstables.borrow().clone();
         for sstable in sstables.iter().rev() {
             let (data_filename, index_filename) =
-                Self::get_data_file_paths(&self.dir, sstable.index);
+                get_data_file_paths(&self.dir, sstable.index);
 
             let data_file = CachedFileReader::new(
                 (DATA_FILE_EXT, sstable.index),
@@ -924,10 +921,8 @@ impl LSMTree {
             .replace(Rc::new(DmaFile::create(&next_wal_path).await?));
         self.wal_offset.set(0);
 
-        let (data_filename, index_filename) = Self::get_data_file_paths(
-            &self.dir,
-            self.write_sstable_index.get(),
-        );
+        let (data_filename, index_filename) =
+            get_data_file_paths(&self.dir, self.write_sstable_index.get());
         let (data_file, index_file) = try_join!(
             DmaFile::create(&data_filename),
             DmaFile::create(&index_filename)
@@ -1007,7 +1002,7 @@ impl LSMTree {
     ) -> Result<()> {
         let sstable_paths: Vec<(PathBuf, PathBuf)> = indices_to_compact
             .iter()
-            .map(|i| Self::get_data_file_paths(&self.dir, *i))
+            .map(|i| get_data_file_paths(&self.dir, *i))
             .collect();
 
         // No stable AsyncIterator yet...
@@ -1028,7 +1023,7 @@ impl LSMTree {
         }
 
         let (compact_data_path, compact_index_path) =
-            Self::get_compaction_file_paths(&self.dir, output_index);
+            get_compaction_file_paths(&self.dir, output_index);
         let (compact_data_file, compact_index_file) = try_join!(
             DmaFile::create(&compact_data_path),
             DmaFile::create(&compact_index_path)
@@ -1095,7 +1090,7 @@ impl LSMTree {
         }
 
         let (output_data_path, output_index_path) =
-            Self::get_data_file_paths(&self.dir, output_index);
+            get_data_file_paths(&self.dir, output_index);
 
         let action = CompactionAction {
             renames: vec![
