@@ -137,8 +137,8 @@ impl EntryWriter {
         );
         let index_writer = Box::new(
             DmaStreamWriterBuilder::new(index_file)
-                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-                .with_buffer_size(PAGE_SIZE)
+                .with_write_behind(1)
+                .with_buffer_size(*INDEX_ENTRY_SIZE as usize)
                 .build(),
         );
 
