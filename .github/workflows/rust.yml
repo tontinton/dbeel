@@ -39,7 +39,7 @@ jobs:
         run: |
           cat << EOF > "run.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
-          cargo test
+          RUST_BACKTRACE=1 cargo test
           EOF
           sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run.sh"
 
