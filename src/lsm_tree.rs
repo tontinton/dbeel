@@ -523,7 +523,7 @@ impl LSMTree {
                 .filter_map(|entry| get_first_capture(&pattern, &entry))
                 .filter_map(|n| n.parse::<usize>().ok())
                 .collect::<Vec<_>>();
-            indices.sort();
+            indices.sort_unstable();
 
             let mut sstables = Vec::with_capacity(indices.len());
             for index in indices {
@@ -548,7 +548,7 @@ impl LSMTree {
                 .filter_map(|entry| get_first_capture(&pattern, &entry))
                 .filter_map(|n| n.parse::<usize>().ok())
                 .collect::<Vec<_>>();
-            vec.sort();
+            vec.sort_unstable();
             vec
         };
 
