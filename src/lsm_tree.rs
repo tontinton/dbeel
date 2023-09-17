@@ -349,7 +349,7 @@ impl<'a> AsyncIter<'a> {
                 );
 
                 let index_file = DmaFile::open(&index_filename).await?;
-                let index_file_size = index_file.file_size().await?;
+                let index_file_size = sstable.size * *INDEX_ENTRY_SIZE;
                 let index_file = CachedFileReader::new(
                     (INDEX_FILE_EXT, sstable.index),
                     index_file,
