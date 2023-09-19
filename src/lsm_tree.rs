@@ -684,7 +684,7 @@ impl LSMTree {
         self.sstables.borrow().iter().map(|t| t.index).collect()
     }
 
-    fn memtable_full(&self) -> bool {
+    fn active_memtable_full(&self) -> bool {
         self.active_memtable.borrow().capacity()
             == self.active_memtable.borrow().len()
     }
@@ -800,29 +800,28 @@ impl LSMTree {
         timestamp: Option<OffsetDateTime>,
     ) -> Result<Option<EntryValue>> {
         let value = EntryValue::new(value, timestamp);
-
-        // Write to WAL for persistance.
-        self.write_to_wal(&Entry {
+        let entry = Entry {
             key: key.clone(),
             value: value.clone(),
-        })
-        .await?;
+        };
 
-        // Wait until some flush happens.
-        while self.memtable_full() {
-            futures_lite::future::yield_now().await;
+        // Wait until the current flush ends.
+        while self.active_memtable_full() {
+            self.get_flush_event_listener().await;
         }
+
+        // Write to WAL for persistance.
+        self.write_to_wal(&entry).await?;
 
         // Write to memtable in memory.
         let result = self.active_memtable.borrow_mut().set(key, value)?;
 
-        if self.memtable_full() {
+        if self.active_memtable_full() {
             // Capacity is full, flush memtable to disk in background.
             spawn_local(enclose!((self.clone() => tree) async move {
                 if let Err(e) = tree.flush().await {
                     error!("Failed to flush memtable: {}", e);
                 }
-                tree.flush_event.notify(usize::MAX);
             }))
             .detach();
         }
@@ -891,10 +890,10 @@ impl LSMTree {
     pub async fn flush(&self) -> Result<()> {
         // Wait until the previous flush is finished.
         while self.flush_memtable.borrow().is_some() {
-            futures_lite::future::yield_now().await;
+            self.get_flush_event_listener().await;
         }
 
-        if self.active_memtable.borrow().len() == 0 {
+        if self.active_memtable.borrow().is_empty() {
             return Ok(());
         }
 
@@ -959,6 +958,8 @@ impl LSMTree {
         }
         self.write_sstable_index
             .set(self.write_sstable_index.get() + 2);
+
+        self.flush_event.notify(usize::MAX);
 
         std::fs::remove_file(&flush_wal_path)?;
 
