@@ -800,21 +800,17 @@ impl LSMTree {
         timestamp: Option<OffsetDateTime>,
     ) -> Result<Option<EntryValue>> {
         let value = EntryValue::new(value, timestamp);
-        let entry = Entry {
-            key: key.clone(),
-            value: value.clone(),
-        };
 
         // Wait until the current flush ends.
         while self.active_memtable_full() {
             self.get_flush_event_listener().await;
         }
 
-        // Write to WAL for persistance.
-        self.write_to_wal(&entry).await?;
-
         // Write to memtable in memory.
-        let result = self.active_memtable.borrow_mut().set(key, value)?;
+        let result = self
+            .active_memtable
+            .borrow_mut()
+            .set(key.clone(), value.clone())?;
 
         if self.active_memtable_full() {
             // Capacity is full, flush memtable to disk in background.
@@ -825,6 +821,9 @@ impl LSMTree {
             }))
             .detach();
         }
+
+        // Write to WAL for persistance.
+        self.write_to_wal(&Entry { key, value }).await?;
 
         Ok(result)
     }
