@@ -173,6 +173,9 @@ fn node_discovery_and_shutdown_detect(args: Args) -> Result<()> {
 #[rstest]
 #[serial]
 fn node_discovery_and_crash_detect(mut args: Args) -> Result<()> {
+    args.remote_shard_port += 4;
+    args.port += 4;
+    args.gossip_port += 4;
     args.failure_detection_interval = 10;
     node_discovery_and_shutdown_detect_(args, true)
 }
