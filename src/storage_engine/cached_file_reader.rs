@@ -1,7 +1,7 @@
-use crate::error::Result;
-use crate::page_cache::{
+use super::page_cache::{
     align_down, align_up, Page, PartitionPageCache, PAGE_SIZE,
 };
+use crate::error::Result;
 use glommio::io::DmaFile;
 use std::rc::Rc;
 

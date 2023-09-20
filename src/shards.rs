@@ -27,13 +27,15 @@ use crate::tasks::migration::{
 use crate::utils::get_first_capture;
 use crate::{
     args::Args,
-    cached_file_reader::FileId,
     error::{Error, Result},
     local_shard::LocalShardConnection,
-    lsm_tree::LSMTree,
     messages::{ShardEvent, ShardMessage, ShardPacket},
-    page_cache::{PageCache, PartitionPageCache},
     remote_shard_connection::RemoteShardConnection,
+    storage_engine::{
+        cached_file_reader::FileId,
+        lsm_tree::LSMTree,
+        page_cache::{PageCache, PartitionPageCache},
+    },
 };
 
 #[cfg(feature = "flow-events")]

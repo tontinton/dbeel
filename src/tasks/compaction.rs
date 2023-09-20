@@ -5,7 +5,9 @@ use futures::future::{select, select_all, Either};
 use glommio::{spawn_local, Task};
 use log::error;
 
-use crate::{error::Result, lsm_tree::LSMTree, shards::MyShard};
+use crate::{
+    error::Result, shards::MyShard, storage_engine::lsm_tree::LSMTree,
+};
 
 async fn get_trees_and_listeners(
     my_shard: &MyShard,

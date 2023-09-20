@@ -15,12 +15,11 @@ use time::OffsetDateTime;
 use crate::{
     error::{Error, Result},
     gossip::GossipEvent,
-    lsm_tree::TOMBSTONE,
     messages::{ShardRequest, ShardResponse},
-    read_exactly::read_exactly,
     response_to_empty_result, response_to_result,
     shards::MyShard,
-    timeout::timeout,
+    storage_engine::lsm_tree::TOMBSTONE,
+    utils::{read_exactly::read_exactly, timeout::timeout},
 };
 
 const DEFAULT_SET_TIMEOUT_MS: u64 = 15000;

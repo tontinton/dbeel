@@ -5,9 +5,9 @@ use crate::{
     local_shard::LocalShardConnection,
     messages::NodeMetadata,
     notify_flow_event,
-    page_cache::{PageCache, PAGE_SIZE},
     remote_shard_connection::RemoteShardConnection,
     shards::{MyShard, Shard, ShardConnection},
+    storage_engine::page_cache::{PageCache, PAGE_SIZE},
     tasks::{
         compaction::spawn_compaction_task, db_server::spawn_db_server_task,
         failure_detector::spawn_failure_detector_task,

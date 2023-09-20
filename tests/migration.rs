@@ -4,7 +4,7 @@ use dbeel::{
     args::{parse_args_from, Args},
     error::Result,
     flow_events::FlowEvent,
-    lsm_tree::TOMBSTONE,
+    storage_engine::lsm_tree::TOMBSTONE,
 };
 use dbeel_client::DbeelClient;
 use event_listener::Event;

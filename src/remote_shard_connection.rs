@@ -13,8 +13,8 @@ use crate::{
     args::Args,
     error::{Error, Result},
     messages::{NodeMetadata, ShardMessage, ShardRequest, ShardResponse},
-    read_exactly::read_exactly,
     response_to_empty_result, response_to_result,
+    utils::read_exactly::read_exactly,
 };
 
 #[derive(Debug, Clone)]

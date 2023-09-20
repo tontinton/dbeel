@@ -2,7 +2,7 @@ use async_channel::Sender;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{gossip::GossipEvent, lsm_tree::EntryValue};
+use crate::{gossip::GossipEvent, storage_engine::lsm_tree::EntryValue};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
