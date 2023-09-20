@@ -1,4 +1,3 @@
-use async_recursion::async_recursion;
 use bincode::Options;
 use event_listener::{Event, EventListener};
 use futures::try_join;
@@ -136,9 +135,23 @@ impl<'a> AsyncIter<'a> {
     }
 }
 
+enum NextEntryResult {
+    Found(Option<Entry>),
+    Continue,
+}
+
 impl<'a> AsyncIter<'a> {
-    #[async_recursion(?Send)]
     pub async fn next(&mut self) -> Result<Option<Entry>> {
+        loop {
+            if let NextEntryResult::Found(result) = self.read_one().await? {
+                return Ok(result);
+            }
+        }
+    }
+
+    async fn read_one(&mut self) -> Result<NextEntryResult> {
+        use NextEntryResult::{Continue, Found};
+
         Ok(match &mut self.state {
             IterState::UnreadSSTable(i) => {
                 let i = *i;
@@ -168,7 +181,7 @@ impl<'a> AsyncIter<'a> {
                     0,
                     index_file_size,
                 );
-                return self.next().await;
+                Continue
             }
             IterState::ReadingSSTable(
                 i,
@@ -200,12 +213,12 @@ impl<'a> AsyncIter<'a> {
                 };
 
                 if (self.filter_fn)(&entry.key, &entry.value) {
-                    Some(entry)
+                    Found(Some(entry))
                 } else {
-                    return self.next().await;
+                    Continue
                 }
             }
-            IterState::Memtable => self.memtable.next(),
+            IterState::Memtable => Found(self.memtable.next()),
         })
     }
 }
