@@ -18,7 +18,7 @@ use crate::{
     messages::{ShardRequest, ShardResponse},
     response_to_empty_result, response_to_result,
     shards::MyShard,
-    storage_engine::lsm_tree::TOMBSTONE,
+    storage_engine::TOMBSTONE,
     utils::{read_exactly::read_exactly, timeout::timeout},
 };
 

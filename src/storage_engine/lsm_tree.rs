@@ -1,20 +1,21 @@
 use super::{
+    bincode_options,
     cached_file_reader::{CachedFileReader, FileId},
-    page_cache::{Page, PartitionPageCache, PAGE_SIZE},
+    entry_writer::EntryWriter,
+    page_cache::{PartitionPageCache, PAGE_SIZE},
+    Entry, EntryOffset, EntryValue, COMPACT_ACTION_FILE_EXT,
+    COMPACT_DATA_FILE_EXT, COMPACT_INDEX_FILE_EXT, DATA_FILE_EXT,
+    DEFAULT_TREE_CAPACITY, DMA_STREAM_NUMBER_OF_BUFFERS, INDEX_ENTRY_SIZE,
+    INDEX_FILE_EXT, INDEX_PADDING, MEMTABLE_FILE_EXT, TOMBSTONE,
 };
 use crate::{
     error::{Error, Result},
-    utils::{get_first_capture, timestamp_nanos},
+    utils::get_first_capture,
 };
 use async_recursion::async_recursion;
-use bincode::{
-    config::{
-        FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
-    },
-    DefaultOptions, Options,
-};
+use bincode::Options;
 use event_listener::{Event, EventListener};
-use futures::{try_join, AsyncWrite};
+use futures::try_join;
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
@@ -24,7 +25,6 @@ use glommio::{
     spawn_local,
 };
 use log::{error, trace};
-use once_cell::sync::Lazy;
 use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -38,208 +38,10 @@ use std::{
 };
 use time::OffsetDateTime;
 
-pub const TOMBSTONE: Vec<u8> = vec![];
-
 // Whether to ensure full durability against system crashes.
 const SYNC_WAL_FILE: bool = false;
 
-const DEFAULT_TREE_CAPACITY: usize = 4096;
-const INDEX_PADDING: usize = 20; // Number of integers in max u64.
-const DMA_STREAM_NUMBER_OF_BUFFERS: usize = 16;
-
-const MEMTABLE_FILE_EXT: &str = "memtable";
-const DATA_FILE_EXT: &str = "data";
-const INDEX_FILE_EXT: &str = "index";
-const COMPACT_DATA_FILE_EXT: &str = "compact_data";
-const COMPACT_INDEX_FILE_EXT: &str = "compact_index";
-const COMPACT_ACTION_FILE_EXT: &str = "compact_action";
-
 type MemTable = RedBlackTree<Vec<u8>, EntryValue>;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EntryValue {
-    pub data: Vec<u8>,
-    #[serde(with = "timestamp_nanos")]
-    pub timestamp: OffsetDateTime,
-}
-
-impl EntryValue {
-    fn new(data: Vec<u8>, timestamp: Option<OffsetDateTime>) -> Self {
-        Self {
-            data,
-            timestamp: timestamp.unwrap_or_else(OffsetDateTime::now_utc),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Entry {
-    pub key: Vec<u8>,
-    pub value: EntryValue,
-}
-
-impl Ord for Entry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.key
-            .cmp(&other.key)
-            .then(self.value.timestamp.cmp(&other.value.timestamp))
-    }
-}
-
-impl PartialOrd for Entry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for Entry {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
-    }
-}
-
-impl Eq for Entry {}
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-struct EntryOffset {
-    offset: u64,
-    size: usize,
-}
-
-static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
-    bincode_options()
-        .serialized_size(&EntryOffset::default())
-        .unwrap()
-});
-
-struct EntryWriter {
-    data_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
-    index_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
-    files_index: usize,
-    page_cache: Rc<PartitionPageCache<FileId>>,
-    data_buf: [u8; PAGE_SIZE],
-    data_written: usize,
-    index_buf: [u8; PAGE_SIZE],
-    index_written: usize,
-}
-
-impl EntryWriter {
-    fn new_from_dma(
-        data_file: DmaFile,
-        index_file: DmaFile,
-        files_index: usize,
-        page_cache: Rc<PartitionPageCache<FileId>>,
-    ) -> Self {
-        let data_writer = Box::new(
-            DmaStreamWriterBuilder::new(data_file)
-                .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
-                .with_buffer_size(PAGE_SIZE)
-                .build(),
-        );
-        let index_writer = Box::new(
-            DmaStreamWriterBuilder::new(index_file)
-                .with_write_behind(1)
-                .with_buffer_size(*INDEX_ENTRY_SIZE as usize)
-                .build(),
-        );
-
-        Self::new(data_writer, index_writer, files_index, page_cache)
-    }
-
-    fn new(
-        data_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
-        index_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
-        files_index: usize,
-        page_cache: Rc<PartitionPageCache<FileId>>,
-    ) -> Self {
-        Self {
-            data_writer,
-            index_writer,
-            files_index,
-            page_cache,
-            data_buf: [0; PAGE_SIZE],
-            data_written: 0,
-            index_buf: [0; PAGE_SIZE],
-            index_written: 0,
-        }
-    }
-
-    async fn write(&mut self, entry: &Entry) -> Result<(usize, usize)> {
-        let data_encoded = bincode_options().serialize(entry)?;
-        let data_size = data_encoded.len();
-
-        let entry_index = EntryOffset {
-            offset: self.data_written as u64,
-            size: data_size,
-        };
-        let index_encoded = bincode_options().serialize(&entry_index)?;
-        let index_size = index_encoded.len();
-
-        try_join!(
-            self.data_writer.write_all(&data_encoded),
-            self.index_writer.write_all(&index_encoded)
-        )?;
-
-        self.write_to_cache(data_encoded, true);
-        self.write_to_cache(index_encoded, false);
-
-        Ok((data_size, index_size))
-    }
-
-    fn write_to_cache(&mut self, bytes: Vec<u8>, is_data_file: bool) {
-        let (buf, written, ext) = if is_data_file {
-            (&mut self.data_buf, &mut self.data_written, DATA_FILE_EXT)
-        } else {
-            (&mut self.index_buf, &mut self.index_written, INDEX_FILE_EXT)
-        };
-
-        for chunk in bytes.chunks(PAGE_SIZE) {
-            let data_buf_offset = *written % PAGE_SIZE;
-            let end = std::cmp::min(data_buf_offset + chunk.len(), PAGE_SIZE);
-            buf[data_buf_offset..end]
-                .copy_from_slice(&chunk[..end - data_buf_offset]);
-
-            let written_first_copy = end - data_buf_offset;
-            *written += written_first_copy;
-
-            if *written % PAGE_SIZE == 0 {
-                // Filled a page, write it to cache.
-                self.page_cache.set(
-                    (ext, self.files_index),
-                    *written as u64 - PAGE_SIZE as u64,
-                    Page::new(std::mem::replace(buf, [0; PAGE_SIZE])),
-                );
-
-                // Write whatever is left in the chunk.
-                let left = chunk.len() - written_first_copy;
-                buf[..left].copy_from_slice(&chunk[written_first_copy..]);
-                *written += left;
-            }
-        }
-    }
-
-    async fn close(&mut self) -> Result<()> {
-        let data_left = self.data_written % PAGE_SIZE;
-        if data_left != 0 {
-            self.page_cache.set(
-                (DATA_FILE_EXT, self.files_index),
-                (self.data_written - data_left) as u64,
-                Page::new(self.data_buf),
-            );
-        }
-        let index_left = self.index_written % PAGE_SIZE;
-        if self.index_written % PAGE_SIZE != 0 {
-            self.page_cache.set(
-                (INDEX_FILE_EXT, self.files_index),
-                (self.index_written - index_left) as u64,
-                Page::new(self.index_buf),
-            );
-        }
-
-        try_join!(self.data_writer.close(), self.index_writer.close())?;
-        Ok(())
-    }
-}
 
 #[derive(Eq, PartialEq)]
 struct CompactionItem {
@@ -404,15 +206,6 @@ impl<'a> AsyncIter<'a> {
             IterState::Memtable => self.memtable.next(),
         })
     }
-}
-
-fn bincode_options() -> WithOtherIntEncoding<
-    WithOtherTrailing<DefaultOptions, RejectTrailing>,
-    FixintEncoding,
-> {
-    DefaultOptions::new()
-        .reject_trailing_bytes()
-        .with_fixint_encoding()
 }
 
 fn get_file_path(dir: &Path, index: usize, ext: &str) -> PathBuf {
@@ -1190,11 +983,11 @@ mod tests {
     };
 
     use ctor::ctor;
-    use futures_lite::{io::Cursor, Future};
+    use futures_lite::{io::Cursor, AsyncWrite, Future};
     use glommio::{LocalExecutorBuilder, Placement};
     use tempfile::tempdir;
 
-    use crate::page_cache::PageCache;
+    use crate::storage_engine::page_cache::PageCache;
 
     use super::*;
 

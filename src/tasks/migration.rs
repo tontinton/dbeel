@@ -10,7 +10,7 @@ use crate::{
     notify_flow_event,
     remote_shard_connection::send_message_to_stream,
     shards::{hash_bytes, MyShard, ShardConnection},
-    storage_engine::lsm_tree::{Entry, LSMTree},
+    storage_engine::{lsm_tree::LSMTree, Entry},
 };
 
 #[cfg(feature = "flow-events")]
