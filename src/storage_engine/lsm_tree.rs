@@ -1,17 +1,3 @@
-use super::{
-    bincode_options,
-    cached_file_reader::{CachedFileReader, FileId},
-    entry_writer::EntryWriter,
-    page_cache::{PartitionPageCache, PAGE_SIZE},
-    Entry, EntryOffset, EntryValue, COMPACT_ACTION_FILE_EXT,
-    COMPACT_DATA_FILE_EXT, COMPACT_INDEX_FILE_EXT, DATA_FILE_EXT,
-    DEFAULT_TREE_CAPACITY, DMA_STREAM_NUMBER_OF_BUFFERS, INDEX_ENTRY_SIZE,
-    INDEX_FILE_EXT, INDEX_PADDING, MEMTABLE_FILE_EXT, TOMBSTONE,
-};
-use crate::{
-    error::{Error, Result},
-    utils::get_first_capture,
-};
 use async_recursion::async_recursion;
 use bincode::Options;
 use event_listener::{Event, EventListener};
@@ -28,6 +14,8 @@ use log::{error, trace};
 use redblacktree::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
 use std::{
     cell::{Cell, RefCell},
     cmp::Ordering,
@@ -36,7 +24,21 @@ use std::{
     pin::Pin,
     rc::Rc,
 };
-use time::OffsetDateTime;
+
+use super::{
+    bincode_options,
+    cached_file_reader::{CachedFileReader, FileId},
+    entry_writer::EntryWriter,
+    page_cache::{PartitionPageCache, PAGE_SIZE},
+    Entry, EntryOffset, EntryValue, COMPACT_ACTION_FILE_EXT,
+    COMPACT_DATA_FILE_EXT, COMPACT_INDEX_FILE_EXT, DATA_FILE_EXT,
+    DEFAULT_TREE_CAPACITY, DMA_STREAM_NUMBER_OF_BUFFERS, INDEX_ENTRY_SIZE,
+    INDEX_FILE_EXT, INDEX_PADDING, MEMTABLE_FILE_EXT, TOMBSTONE,
+};
+use crate::{
+    error::{Error, Result},
+    utils::get_first_capture,
+};
 
 // Whether to ensure full durability against system crashes.
 const SYNC_WAL_FILE: bool = false;
