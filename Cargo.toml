@@ -1,5 +1,10 @@
 [workspace]
-members = ["blackbox_bench"]
+members = [
+  "blackbox_bench",
+  "dbeel_client",
+  "redblacktree",
+  "test_utils",
+]
 
 [package]
 name = "dbeel"
