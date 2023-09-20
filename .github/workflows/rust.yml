@@ -35,11 +35,19 @@ jobs:
       - name: Cache setup
         uses: ./.github/actions/cache-setup
 
-      - name: Test
+      - name: DB tests
         run: |
           cat << EOF > "run.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
           RUST_BACKTRACE=1 cargo test
+          EOF
+          sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run.sh"
+
+      - name: Red black tree tests
+        run: |
+          cat << EOF > "run.sh"
+          PATH=$PATH:/usr/share/rust/.cargo/bin
+          RUST_BACKTRACE=1 cargo test -p redblacktree
           EOF
           sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run.sh"
 
