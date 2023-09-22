@@ -128,13 +128,20 @@ async fn handle_request(
                         value.clone(),
                         timestamp,
                     );
-                    let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Set(collection, key, value, timestamp),
-                        write_consistency as usize - 1,
-                        |res| {
-                            response_to_empty_result!(res, ShardResponse::Set)
-                        },
-                    );
+                    let remote_future =
+                        my_shard.clone().send_request_to_replicas(
+                            ShardRequest::Set(
+                                collection, key, value, timestamp,
+                            ),
+                            write_consistency as usize - 1,
+                            my_shard.args.replication_factor - 1,
+                            |res| {
+                                response_to_empty_result!(
+                                    res,
+                                    ShardResponse::Set
+                                )
+                            },
+                        );
                     timeout(
                         write_timeout,
                         try_join(local_future, remote_future),
@@ -166,16 +173,18 @@ async fn handle_request(
                 if my_shard.args.replication_factor > 1 {
                     let local_future =
                         tree.delete_with_timestamp(key.clone(), timestamp);
-                    let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Delete(collection, key, timestamp),
-                        delete_consistency as usize - 1,
-                        |res| {
-                            response_to_empty_result!(
-                                res,
-                                ShardResponse::Delete
-                            )
-                        },
-                    );
+                    let remote_future =
+                        my_shard.clone().send_request_to_replicas(
+                            ShardRequest::Delete(collection, key, timestamp),
+                            delete_consistency as usize - 1,
+                            my_shard.args.replication_factor - 1,
+                            |res| {
+                                response_to_empty_result!(
+                                    res,
+                                    ShardResponse::Delete
+                                )
+                            },
+                        );
                     timeout(
                         delete_timeout,
                         try_join(local_future, remote_future),
@@ -205,11 +214,13 @@ async fn handle_request(
 
                 return if my_shard.args.replication_factor > 1 {
                     let local_future = tree.get_entry(&key);
-                    let remote_future = my_shard.send_request_to_replicas(
-                        ShardRequest::Get(collection, key.clone()),
-                        read_consistency as usize - 1,
-                        |res| response_to_result!(res, ShardResponse::Get),
-                    );
+                    let remote_future =
+                        my_shard.clone().send_request_to_replicas(
+                            ShardRequest::Get(collection, key.clone()),
+                            read_consistency as usize - 1,
+                            my_shard.args.replication_factor - 1,
+                            |res| response_to_result!(res, ShardResponse::Get),
+                        );
                     let (local_value, mut values) = timeout(
                         read_timeout,
                         try_join(local_future, remote_future),
