@@ -26,7 +26,7 @@ use crate::flow_events::FlowEvent;
 
 async fn get_collections(
     seed_shards: &[RemoteShardConnection],
-) -> Option<Vec<String>> {
+) -> Option<Vec<(String, u16)>> {
     for c in seed_shards {
         match c.get_collections().await {
             Ok(collections) => return Some(collections),
@@ -43,14 +43,18 @@ async fn discover_collections(
     my_shard: &MyShard,
     seed_shards: &[RemoteShardConnection],
 ) -> Result<()> {
-    for collection in my_shard.get_collection_names_from_disk()? {
-        my_shard.create_collection(collection).await?;
+    for (collection, metadata) in my_shard.get_collections_from_disk().await? {
+        my_shard
+            .create_collection(collection, metadata.replication_factor)
+            .await?;
     }
 
     if let Some(collections) = get_collections(seed_shards).await {
-        for collection in collections {
-            if !my_shard.trees.borrow().contains_key(&collection) {
-                my_shard.create_collection(collection).await?;
+        for (collection, replication_factor) in collections {
+            if !my_shard.collections.borrow().contains_key(&collection) {
+                my_shard
+                    .create_collection(collection, replication_factor)
+                    .await?;
             }
         }
     }

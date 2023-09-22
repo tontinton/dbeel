@@ -1,11 +1,6 @@
 use std::time::Duration;
 
-use bincode::{
-    config::{
-        FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
-    },
-    DefaultOptions, Options,
-};
+use bincode::Options;
 use futures_lite::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::net::TcpStream;
 
@@ -14,7 +9,7 @@ use crate::{
     error::{Error, Result},
     messages::{NodeMetadata, ShardMessage, ShardRequest, ShardResponse},
     response_to_empty_result, response_to_result,
-    utils::read_exactly::read_exactly,
+    utils::{bincode::bincode_options, read_exactly::read_exactly},
 };
 
 #[derive(Debug, Clone)]
@@ -88,21 +83,12 @@ impl RemoteShardConnection {
         )
     }
 
-    pub async fn get_collections(&self) -> Result<Vec<String>> {
+    pub async fn get_collections(&self) -> Result<Vec<(String, u16)>> {
         response_to_result!(
             self.send_request(ShardRequest::GetCollections).await?,
             ShardResponse::GetCollections
         )
     }
-}
-
-fn bincode_options() -> WithOtherIntEncoding<
-    WithOtherTrailing<DefaultOptions, RejectTrailing>,
-    FixintEncoding,
-> {
-    DefaultOptions::new()
-        .reject_trailing_bytes()
-        .with_fixint_encoding()
 }
 
 pub async fn get_message_from_stream(

@@ -52,13 +52,13 @@ This port is for listening on client requests.",
     pub dir: String,
 
     #[clap(
-        short,
         long,
-        help = "Number of nodes (replicas) that hold a copy for a specific key \
-for tunable availability.",
+        help = "Default number of nodes (replicas) that hold a copy for a \
+specific key for tunable availability / consistency, when the replication \
+factor is not set in a create collection request.",
         default_value = "1"
     )]
-    pub replication_factor: usize,
+    pub default_replication_factor: u16,
 
     #[clap(
         long,

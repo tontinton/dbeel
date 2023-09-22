@@ -1,11 +1,5 @@
 use std::cmp::Ordering;
 
-use bincode::{
-    config::{
-        FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
-    },
-    DefaultOptions, Options,
-};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -82,12 +76,3 @@ impl PartialEq for Entry {
 }
 
 impl Eq for Entry {}
-
-fn bincode_options() -> WithOtherIntEncoding<
-    WithOtherTrailing<DefaultOptions, RejectTrailing>,
-    FixintEncoding,
-> {
-    DefaultOptions::new()
-        .reject_trailing_bytes()
-        .with_fixint_encoding()
-}

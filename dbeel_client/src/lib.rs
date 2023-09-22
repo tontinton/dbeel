@@ -225,9 +225,10 @@ impl DbeelClient {
             .await
     }
 
-    pub async fn create_collection<S: Into<Utf8String>>(
+    pub async fn create_collection_with_replication<S: Into<Utf8String>>(
         &self,
         name: S,
+        replication_factor: u16,
     ) -> Result<Collection> {
         let name = to_utf8string(name)?;
         let request = Value::Map(vec![
@@ -236,10 +237,21 @@ impl DbeelClient {
                 Value::String("create_collection".into()),
             ),
             (Value::String("name".into()), Value::String(name.clone())),
+            (
+                Value::String("replication_factor".into()),
+                Value::Integer(replication_factor.into()),
+            ),
         ]);
         self.send_request(&self.seed_shards, request).await?;
 
         Ok(self.collection(name))
+    }
+
+    pub async fn create_collection<S: Into<Utf8String>>(
+        &self,
+        name: S,
+    ) -> Result<Collection> {
+        self.create_collection_with_replication(name, 1).await
     }
 
     pub(crate) async fn drop_collection<S: Into<Utf8String>>(

@@ -24,7 +24,7 @@ fn args() -> Args {
     let _ = std::fs::remove_dir_all("/tmp/test");
     let _ = std::fs::remove_dir_all("/tmp/test1");
     let _ = std::fs::remove_dir_all("/tmp/test2");
-    parse_args_from(["", "--dir", "/tmp/test", "--replication-factor", "3"])
+    parse_args_from(["", "--dir", "/tmp/test"])
 }
 
 fn three_nodes_replication_test(
@@ -66,7 +66,10 @@ fn three_nodes_replication_test(
 
         let collection_created =
             shard.subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
-        let collection = client.create_collection("test").await.unwrap();
+        let collection = client
+            .create_collection_with_replication("test", 3)
+            .await
+            .unwrap();
 
         try_join!(
             collection_created.recv(),
@@ -122,7 +125,7 @@ fn three_nodes_replication_test(
         ),
     ] {
         handles.push(test_node(1, node_args, move |shard, _| async move {
-            if shard.trees.borrow().is_empty() {
+            if shard.collections.borrow().is_empty() {
                 let receiver = shard.subscribe_to_flow_event(
                     FlowEvent::CollectionCreated.into(),
                 );

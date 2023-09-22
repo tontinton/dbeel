@@ -43,6 +43,8 @@ pub enum Error {
 
     #[error("field '{0}' is missing")]
     MissingField(String),
+    #[error("field '{0}' is not a u16")]
+    FieldNotU16(String),
     #[error("unsupported field '{0}'")]
     UnsupportedField(String),
     #[error("field '{0}' is of a bad type")]

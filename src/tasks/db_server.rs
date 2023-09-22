@@ -67,6 +67,15 @@ fn extract_field_as_u64(map: &Value, field_name: &str) -> Result<u64> {
         .ok_or_else(|| Error::MissingField(field_name.to_string()))
 }
 
+fn extract_field_as_u16(map: &Value, field_name: &str) -> Result<u16> {
+    let number = extract_field_as_u64(map, field_name)?;
+    if (0..u16::MAX as u64).contains(&number) {
+        Ok(number as u16)
+    } else {
+        Err(Error::FieldNotU16(field_name.to_string()))
+    }
+}
+
 fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
     let field = extract_field(map, field_name)?;
 
@@ -82,6 +91,7 @@ async fn handle_request(
 ) -> Result<Option<Vec<u8>>> {
     let msgpack_request = read_value_ref(&mut &buffer[..])?.to_owned();
     if let Some(map_vec) = msgpack_request.as_map() {
+        let timestamp = OffsetDateTime::now_utc();
         let map = Value::Map(map_vec.to_vec());
         match map["type"].as_str() {
             Some("get_cluster_metadata") => {
@@ -93,13 +103,23 @@ async fn handle_request(
             }
             Some("create_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
+                let replication_factor =
+                    extract_field_as_u16(&map, "replication_factor")
+                        .unwrap_or(my_shard.args.default_replication_factor);
 
-                if my_shard.trees.borrow().contains_key(&name) {
+                if my_shard.collections.borrow().contains_key(&name) {
                     return Err(Error::CollectionAlreadyExists(name));
                 }
 
-                my_shard.create_collection(name.clone()).await?;
-                my_shard.gossip(GossipEvent::CreateCollection(name)).await?;
+                my_shard
+                    .create_collection(name.clone(), replication_factor)
+                    .await?;
+                my_shard
+                    .gossip(GossipEvent::CreateCollection(
+                        name,
+                        replication_factor,
+                    ))
+                    .await?;
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
@@ -107,22 +127,25 @@ async fn handle_request(
                 my_shard.gossip(GossipEvent::DropCollection(name)).await?;
             }
             Some("set") => {
-                let collection = extract_field_as_str(&map, "collection")?;
+                let collection_name = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
                 let value = extract_field_encoded(&map, "value")?;
-                let write_consistency = min(
-                    extract_field_as_u64(&map, "consistency").unwrap_or(1),
-                    my_shard.args.replication_factor as u64,
-                );
                 let write_timeout = Duration::from_millis(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
                 );
 
-                let tree = my_shard.get_collection(&collection)?;
-                let timestamp = OffsetDateTime::now_utc();
+                let collection = my_shard.get_collection(&collection_name)?;
+                let tree = collection.tree;
+                let replications = collection.metadata.replication_factor;
 
-                if my_shard.args.replication_factor > 1 {
+                let write_consistency = min(
+                    extract_field_as_u16(&map, "consistency")
+                        .unwrap_or(replications),
+                    replications,
+                );
+
+                if replications > 1 {
                     let local_future = tree.set_with_timestamp(
                         key.clone(),
                         value.clone(),
@@ -131,10 +154,13 @@ async fn handle_request(
                     let remote_future =
                         my_shard.clone().send_request_to_replicas(
                             ShardRequest::Set(
-                                collection, key, value, timestamp,
+                                collection_name,
+                                key,
+                                value,
+                                timestamp,
                             ),
                             write_consistency as usize - 1,
-                            my_shard.args.replication_factor - 1,
+                            replications as usize - 1,
                             |res| {
                                 response_to_empty_result!(
                                     res,
@@ -156,28 +182,35 @@ async fn handle_request(
                 }
             }
             Some("delete") => {
-                let collection = extract_field_as_str(&map, "collection")?;
+                let collection_name = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
-                let delete_consistency = min(
-                    extract_field_as_u64(&map, "consistency").unwrap_or(1),
-                    my_shard.args.replication_factor as u64,
-                );
                 let delete_timeout = Duration::from_millis(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
                 );
 
-                let timestamp = OffsetDateTime::now_utc();
-                let tree = my_shard.get_collection(&collection)?;
+                let collection = my_shard.get_collection(&collection_name)?;
+                let tree = collection.tree;
+                let replications = collection.metadata.replication_factor;
 
-                if my_shard.args.replication_factor > 1 {
+                let delete_consistency = min(
+                    extract_field_as_u16(&map, "consistency")
+                        .unwrap_or(replications),
+                    replications,
+                );
+
+                if replications > 1 {
                     let local_future =
                         tree.delete_with_timestamp(key.clone(), timestamp);
                     let remote_future =
                         my_shard.clone().send_request_to_replicas(
-                            ShardRequest::Delete(collection, key, timestamp),
+                            ShardRequest::Delete(
+                                collection_name,
+                                key,
+                                timestamp,
+                            ),
                             delete_consistency as usize - 1,
-                            my_shard.args.replication_factor - 1,
+                            replications as usize - 1,
                             |res| {
                                 response_to_empty_result!(
                                     res,
@@ -199,26 +232,30 @@ async fn handle_request(
                 }
             }
             Some("get") => {
-                let collection = extract_field_as_str(&map, "collection")?;
+                let collection_name = extract_field_as_str(&map, "collection")?;
                 let key = extract_field_encoded(&map, "key")?;
-                let read_consistency = min(
-                    extract_field_as_u64(&map, "consistency").unwrap_or(1),
-                    my_shard.args.replication_factor as u64,
-                );
                 let read_timeout = Duration::from_millis(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_GET_TIMEOUT_MS),
                 );
 
-                let tree = my_shard.get_collection(&collection)?;
+                let collection = my_shard.get_collection(&collection_name)?;
+                let tree = collection.tree;
+                let replications = collection.metadata.replication_factor;
 
-                return if my_shard.args.replication_factor > 1 {
+                let read_consistency = min(
+                    extract_field_as_u16(&map, "consistency")
+                        .unwrap_or(replications),
+                    replications,
+                );
+
+                return if replications > 1 {
                     let local_future = tree.get_entry(&key);
                     let remote_future =
                         my_shard.clone().send_request_to_replicas(
-                            ShardRequest::Get(collection, key.clone()),
+                            ShardRequest::Get(collection_name, key.clone()),
                             read_consistency as usize - 1,
-                            my_shard.args.replication_factor - 1,
+                            replications as usize - 1,
                             |res| response_to_result!(res, ShardResponse::Get),
                         );
                     let (local_value, mut values) = timeout(

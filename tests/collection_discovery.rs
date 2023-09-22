@@ -26,7 +26,7 @@ fn args() -> Args {
 #[serial]
 fn clean_state(args: Args) -> Result<()> {
     test_shard(args, |shard| async move {
-        assert!(shard.trees.borrow().is_empty());
+        assert!(shard.collections.borrow().is_empty());
     })
 }
 
@@ -43,15 +43,24 @@ fn find_collections_after_rerun(args: Args) -> Result<()> {
 
         client.set_read_timeout(Duration::from_secs(1));
         client.set_write_timeout(Duration::from_secs(1));
+
         client.create_collection("test").await.unwrap();
 
-        assert_eq!(shard.trees.borrow().len(), 1);
-        assert!(shard.trees.borrow().get(&"test".to_string()).is_some());
+        assert_eq!(shard.collections.borrow().len(), 1);
+        assert!(shard
+            .collections
+            .borrow()
+            .get(&"test".to_string())
+            .is_some());
     })?;
 
     test_shard(args, |shard| async move {
-        assert_eq!(shard.trees.borrow().len(), 1);
-        assert!(shard.trees.borrow().get(&"test".to_string()).is_some());
+        assert_eq!(shard.collections.borrow().len(), 1);
+        assert!(shard
+            .collections
+            .borrow()
+            .get(&"test".to_string())
+            .is_some());
     })?;
 
     Ok(())

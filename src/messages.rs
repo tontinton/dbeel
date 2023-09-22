@@ -34,7 +34,7 @@ pub struct NodeMetadata {
 pub enum ShardResponse {
     Pong,
     GetMetadata(Vec<NodeMetadata>),
-    GetCollections(Vec<String>),
+    GetCollections(Vec<(String, u16)>),
     Set,
     Delete,
     Get(Option<EntryValue>),

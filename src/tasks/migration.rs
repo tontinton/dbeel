@@ -22,6 +22,19 @@ pub enum MigrationAction {
     Delete,
 }
 
+#[derive(Debug)]
+pub struct RangeAndAction {
+    start: u32,
+    end: u32,
+    action: MigrationAction,
+}
+
+impl RangeAndAction {
+    pub fn new(start: u32, end: u32, action: MigrationAction) -> Self {
+        Self { start, end, action }
+    }
+}
+
 enum Action {
     Remote(TcpStream),
     Local(u16, Sender<ShardPacket>),
@@ -45,57 +58,14 @@ fn between_cmp(hash: u32, start: &u32, end: &u32) -> bool {
     }
 }
 
-async fn migrate(
-    collection_name: String,
-    tree: Rc<LSMTree>,
-    start: u32,
-    end: u32,
-    connection: ShardConnection,
-) -> Result<()> {
-    let mut iter = tree.iter_filter(Box::new(move |key, _| {
-        hash_bytes(key)
-            .map(|hash| between_cmp(hash, &start, &end))
-            .unwrap_or(false)
-    }));
-
-    match connection {
-        ShardConnection::Remote(remote_connection) => {
-            let mut stream = remote_connection.connect().await?;
-            while let Ok(Some(entry)) = iter.next().await {
-                send_message_to_stream(
-                    &mut stream,
-                    &create_set_message(collection_name.clone(), entry),
-                )
-                .await?;
-            }
-            if let Err(e) = stream.shutdown(Shutdown::Both).await {
-                error!("Error shutting down migration socket: {}", e);
-            }
-        }
-        ShardConnection::Local(local_connection) => {
-            while let Ok(Some(entry)) = iter.next().await {
-                local_connection
-                    .sender
-                    .send(ShardPacket::new(
-                        local_connection.id,
-                        create_set_message(collection_name.clone(), entry),
-                    ))
-                    .await?;
-            }
-        }
-    };
-
-    Ok(())
-}
-
 async fn migrate_actions(
     collection_name: String,
     tree: Rc<LSMTree>,
-    ranges_and_actions: &[(u32, u32, MigrationAction)],
+    ranges_and_actions: &[RangeAndAction],
 ) -> Result<()> {
     let mut actions = Vec::with_capacity(ranges_and_actions.len());
-    for (_, _, action) in ranges_and_actions {
-        actions.push(match action {
+    for ra in ranges_and_actions {
+        actions.push(match &ra.action {
             MigrationAction::SendToShard(ShardConnection::Remote(c)) => {
                 Action::Remote(c.connect().await?)
             }
@@ -108,7 +78,7 @@ async fn migrate_actions(
 
     let ranges = ranges_and_actions
         .iter()
-        .map(|(start, end, _)| (*start, *end))
+        .map(|ra| (ra.start, ra.end))
         .collect::<Vec<_>>();
     let ranges_clone = ranges.clone();
 
@@ -159,60 +129,33 @@ async fn migrate_actions(
     Ok(())
 }
 
-pub fn spawn_migration_tasks(
-    my_shard: Rc<MyShard>,
-    start: u32,
-    end: u32,
-    connection: ShardConnection,
-) {
-    let trees = my_shard
-        .trees
-        .borrow()
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect::<Vec<_>>();
-    for (collection_name, tree) in trees {
-        let c = connection.clone();
-
-        #[cfg(feature = "flow-events")]
-        let s = my_shard.clone();
-
-        spawn_local(async move {
-            let result = migrate(collection_name, tree, start, end, c).await;
-            if let Err(e) = &result {
-                error!("Error migrating: {}", e);
-            }
-            notify_flow_event!(s, FlowEvent::DoneMigration);
-            result
-        })
-        .detach();
-    }
-}
-
 pub fn spawn_migration_actions_tasks(
     my_shard: Rc<MyShard>,
-    ranges_and_actions: Vec<(u32, u32, MigrationAction)>,
+    collections_to_ranges_and_actions: Vec<(String, Vec<RangeAndAction>)>,
 ) {
-    let trees = my_shard
-        .trees
-        .borrow()
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect::<Vec<_>>();
-    for (collection_name, tree) in trees {
-        let r = ranges_and_actions.clone();
+    for (collection_name, ranges_and_actions) in
+        collections_to_ranges_and_actions
+    {
+        if let Some(tree) = my_shard
+            .collections
+            .borrow()
+            .get(&collection_name)
+            .map(|c| c.tree.clone())
+        {
+            #[cfg(feature = "flow-events")]
+            let s = my_shard.clone();
 
-        #[cfg(feature = "flow-events")]
-        let s = my_shard.clone();
-
-        spawn_local(async move {
-            let result = migrate_actions(collection_name, tree, &r).await;
-            if let Err(e) = &result {
-                error!("Error migrating: {}", e);
-            }
-            notify_flow_event!(s, FlowEvent::DoneMigration);
-            result
-        })
-        .detach();
+            spawn_local(async move {
+                let result =
+                    migrate_actions(collection_name, tree, &ranges_and_actions)
+                        .await;
+                if let Err(e) = &result {
+                    error!("Error migrating: {}", e);
+                }
+                notify_flow_event!(s, FlowEvent::DoneMigration);
+                result
+            })
+            .detach();
+        }
     }
 }
