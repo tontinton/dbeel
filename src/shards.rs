@@ -218,7 +218,7 @@ impl MyShard {
         Ok(paths)
     }
 
-    fn get_collection_dir(&self, name: &String) -> PathBuf {
+    fn get_collection_dir(&self, name: &str) -> PathBuf {
         let mut dir = PathBuf::from(self.args.dir.clone());
         dir.push(format!("{}-{}", name, self.id));
         dir
@@ -250,11 +250,11 @@ impl MyShard {
         Ok(())
     }
 
-    pub fn drop_collection(&self, name: &String) -> Result<()> {
+    pub fn drop_collection(&self, name: &str) -> Result<()> {
         self.trees
             .borrow_mut()
             .remove(name)
-            .ok_or_else(|| Error::CollectionNotFound(name.clone()))?
+            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?
             .purge()?;
         self.trees_change_event.notify(usize::MAX);
         Ok(())
@@ -610,7 +610,7 @@ impl MyShard {
         Ok(())
     }
 
-    pub async fn handle_dead_node(self: Rc<Self>, node_name: &String) {
+    pub async fn handle_dead_node(self: Rc<Self>, node_name: &str) {
         if self.nodes.borrow_mut().remove(node_name).is_none() {
             return;
         }
@@ -619,7 +619,7 @@ impl MyShard {
             .shards
             .replace(Vec::new())
             .into_iter()
-            .partition(|shard| &shard.node_name == node_name);
+            .partition(|shard| shard.node_name == node_name);
         self.shards.replace(kept);
 
         trace!(
