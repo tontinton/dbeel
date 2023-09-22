@@ -303,6 +303,7 @@ impl MyShard {
         self: Rc<Self>,
         request: ShardRequest,
         number_of_acks: usize,
+        number_of_nodes: usize,
         response_map_fn: F,
     ) -> Result<Vec<T>>
     where
@@ -314,7 +315,7 @@ impl MyShard {
         spawn_local(async move {
             // Filter out remote shards of nodes we already collected.
             let mut nodes =
-                HashSet::with_capacity(my_shard.args.replication_factor - 1);
+                HashSet::with_capacity(number_of_nodes);
 
             let connections = my_shard.shards.borrow()
                 .iter()
@@ -327,7 +328,7 @@ impl MyShard {
                     }
                     _ => None,
                 })
-                .take(my_shard.args.replication_factor - 1)
+                .take(number_of_nodes)
                 .cloned()
                 .collect::<Vec<_>>();
 
