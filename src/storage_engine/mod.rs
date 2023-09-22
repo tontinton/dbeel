@@ -6,7 +6,6 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -31,11 +30,8 @@ const COMPACT_DATA_FILE_EXT: &str = "compact_data";
 const COMPACT_INDEX_FILE_EXT: &str = "compact_index";
 const COMPACT_ACTION_FILE_EXT: &str = "compact_action";
 
-static INDEX_ENTRY_SIZE: Lazy<u64> = Lazy::new(|| {
-    bincode_options()
-        .serialized_size(&EntryOffset::default())
-        .unwrap()
-});
+/// An EntryOffset item size ater serialization with bincode.
+const INDEX_ENTRY_SIZE: usize = 16;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct EntryOffset {

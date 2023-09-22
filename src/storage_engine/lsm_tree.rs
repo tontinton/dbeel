@@ -167,7 +167,7 @@ impl<'a> AsyncIter<'a> {
                 );
 
                 let index_file = DmaFile::open(&index_filename).await?;
-                let index_file_size = sstable.size * *INDEX_ENTRY_SIZE;
+                let index_file_size = sstable.size * (INDEX_ENTRY_SIZE as u64);
                 let index_file = CachedFileReader::new(
                     (INDEX_FILE_EXT, sstable.index),
                     index_file,
@@ -194,7 +194,7 @@ impl<'a> AsyncIter<'a> {
 
                 let entry_offset: EntryOffset = bincode_options().deserialize(
                     &index_file
-                        .read_at(*index_offset, *INDEX_ENTRY_SIZE as usize)
+                        .read_at(*index_offset, INDEX_ENTRY_SIZE)
                         .await?,
                 )?;
                 let entry: Entry = bincode_options().deserialize(
@@ -203,7 +203,7 @@ impl<'a> AsyncIter<'a> {
                         .await?,
                 )?;
 
-                *index_offset += *INDEX_ENTRY_SIZE;
+                *index_offset += INDEX_ENTRY_SIZE as u64;
                 if *index_offset >= *index_file_size {
                     self.state = if i == self.sstables.len() - 1 {
                         IterState::Memtable
@@ -303,6 +303,13 @@ impl LSMTree {
         page_cache: PartitionPageCache<FileId>,
         tree_capacity: usize,
     ) -> Result<Self> {
+        assert_eq!(
+            bincode_options()
+                .serialized_size(&EntryOffset::default())
+                .unwrap(),
+            INDEX_ENTRY_SIZE as u64
+        );
+
         if !dir.is_dir() {
             trace!("Creating new tree in: {:?}", dir);
             std::fs::create_dir_all(&dir)?;
@@ -349,7 +356,8 @@ impl LSMTree {
             let mut sstables = Vec::with_capacity(indices.len());
             for index in indices {
                 let path = get_file_path(&dir, index, INDEX_FILE_EXT);
-                let size = std::fs::metadata(path)?.len() / *INDEX_ENTRY_SIZE;
+                let size =
+                    std::fs::metadata(path)?.len() / INDEX_ENTRY_SIZE as u64;
                 sstables.push(SSTable { index, size });
             }
             sstables
@@ -510,10 +518,10 @@ impl LSMTree {
         let mut lind = 0;
 
         let mut current_index_offset =
-            index_offset_start + half * *INDEX_ENTRY_SIZE;
+            index_offset_start + half * (INDEX_ENTRY_SIZE as u64);
         let mut current: EntryOffset = bincode_options().deserialize(
             &index_file
-                .read_at(current_index_offset, *INDEX_ENTRY_SIZE as usize)
+                .read_at(current_index_offset, INDEX_ENTRY_SIZE)
                 .await?,
         )?;
 
@@ -536,10 +544,10 @@ impl LSMTree {
 
             half = (hind + lind) / 2;
             current_index_offset =
-                index_offset_start + half * *INDEX_ENTRY_SIZE;
+                index_offset_start + half * (INDEX_ENTRY_SIZE as u64);
             current = bincode_options().deserialize(
                 &index_file
-                    .read_at(current_index_offset, *INDEX_ENTRY_SIZE as usize)
+                    .read_at(current_index_offset, INDEX_ENTRY_SIZE)
                     .await?,
             )?;
         }
@@ -784,7 +792,7 @@ impl LSMTree {
         let table_length = memtable.len();
 
         index_file
-            .hint_extent_size((*INDEX_ENTRY_SIZE as usize) * table_length)
+            .hint_extent_size(INDEX_ENTRY_SIZE * table_length)
             .await?;
 
         let mut entry_writer = EntryWriter::new_from_dma(
@@ -838,7 +846,7 @@ impl LSMTree {
             DmaFile::create(&compact_index_path)
         )?;
 
-        let mut offset_bytes = vec![0; *INDEX_ENTRY_SIZE as usize];
+        let mut offset_bytes = vec![0; INDEX_ENTRY_SIZE];
         let mut heap = BinaryHeap::new();
 
         for (index, (data_reader, index_reader)) in
