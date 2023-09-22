@@ -5,7 +5,7 @@ use wtinylfu::WTinyLfuCache;
 
 pub const PAGE_SIZE: usize = 4096;
 
-pub type Page = Rc<[u8; PAGE_SIZE]>;
+pub type Page = [u8; PAGE_SIZE];
 
 type CacheKey<K> = (String, K, u64);
 pub type PageCache<K> = WTinyLfuCache<CacheKey<K>, Page>;
