@@ -514,8 +514,8 @@ impl LSMTree {
         index_offset_length: u64,
     ) -> Result<Option<(Entry, u64)>> {
         let mut half = index_offset_length / 2;
-        let mut hind = index_offset_length - 1;
-        let mut lind = 0;
+        let mut high_index = index_offset_length - 1;
+        let mut low_index = 0;
 
         let mut index_buf = [0; INDEX_ENTRY_SIZE];
 
@@ -526,7 +526,8 @@ impl LSMTree {
             index_file
                 .read_at_into(current_index_offset, &mut index_buf)
                 .await?;
-            let current: EntryOffset = bincode_options().deserialize(&index_buf)?;
+            let current: EntryOffset =
+                bincode_options().deserialize(&index_buf)?;
 
             let entry: Entry = bincode_options().deserialize(
                 &data_file.read_at(current.offset, current.size).await?,
@@ -536,18 +537,18 @@ impl LSMTree {
                 Ordering::Equal => {
                     return Ok(Some((entry, current_index_offset)));
                 }
-                Ordering::Less => lind = half + 1,
-                Ordering::Greater => hind = std::cmp::max(half, 1) - 1,
+                Ordering::Less => low_index = half + 1,
+                Ordering::Greater => high_index = std::cmp::max(half, 1) - 1,
             }
 
             if half == 0 || half == index_offset_length {
                 break;
             }
 
-            half = (hind + lind) / 2;
+            half = (high_index + low_index) / 2;
 
             // while not:
-            if lind > hind {
+            if low_index > high_index {
                 break;
             }
         }
