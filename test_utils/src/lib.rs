@@ -53,7 +53,7 @@ where
             shard.subscribe_to_flow_event(FlowEvent::StartTasks.into());
         let shard_run_handle =
             spawn_local(enclose!((shard.clone() => shard) async move {
-                run_shard(shard, false).await
+                run_shard(shard, false).await.unwrap();
             }));
         start_event_receiver.recv().await.unwrap();
 
@@ -62,7 +62,7 @@ where
         // Test end
 
         shard.stop().await.unwrap();
-        shard_run_handle.await.unwrap();
+        shard_run_handle.await;
     })?;
     handle.join()?;
     Ok(())
