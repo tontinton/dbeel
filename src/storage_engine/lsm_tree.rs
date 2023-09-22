@@ -517,15 +517,17 @@ impl LSMTree {
         let mut hind = index_offset_length - 1;
         let mut lind = 0;
 
-        let mut current_index_offset =
-            index_offset_start + half * (INDEX_ENTRY_SIZE as u64);
-        let mut current: EntryOffset = bincode_options().deserialize(
-            &index_file
-                .read_at(current_index_offset, INDEX_ENTRY_SIZE)
-                .await?,
-        )?;
+        let mut index_buf = [0; INDEX_ENTRY_SIZE];
 
-        while lind <= hind {
+        // do:
+        loop {
+            let current_index_offset =
+                index_offset_start + half * (INDEX_ENTRY_SIZE as u64);
+            index_file
+                .read_at_into(current_index_offset, &mut index_buf)
+                .await?;
+            let current: EntryOffset = bincode_options().deserialize(&index_buf)?;
+
             let entry: Entry = bincode_options().deserialize(
                 &data_file.read_at(current.offset, current.size).await?,
             )?;
@@ -543,13 +545,11 @@ impl LSMTree {
             }
 
             half = (hind + lind) / 2;
-            current_index_offset =
-                index_offset_start + half * (INDEX_ENTRY_SIZE as u64);
-            current = bincode_options().deserialize(
-                &index_file
-                    .read_at(current_index_offset, INDEX_ENTRY_SIZE)
-                    .await?,
-            )?;
+
+            // while not:
+            if lind > hind {
+                break;
+            }
         }
 
         Ok(None)
