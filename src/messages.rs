@@ -14,6 +14,7 @@ pub enum ShardEvent {
 pub enum ShardRequest {
     Ping,
     GetMetadata,
+    GetCollections,
     Set(String, Vec<u8>, Vec<u8>, OffsetDateTime),
     Delete(String, Vec<u8>, OffsetDateTime),
     Get(String, Vec<u8>),
@@ -33,6 +34,7 @@ pub struct NodeMetadata {
 pub enum ShardResponse {
     Pong,
     GetMetadata(Vec<NodeMetadata>),
+    GetCollections(Vec<String>),
     Set,
     Delete,
     Get(Option<EntryValue>),

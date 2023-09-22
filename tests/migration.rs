@@ -64,6 +64,11 @@ fn migration_on_death(args: Args) -> Result<()> {
 
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
 
+    let (a_collection_created_sender, a_collection_created_receiver) =
+        async_channel::bounded(1);
+    let (b_collection_created_sender, b_collection_created_receiver) =
+        async_channel::bounded(1);
+
     let (a_set_sender, a_set_receiver) = async_channel::bounded(1);
     let (b_set_sender, b_set_receiver) = async_channel::bounded(1);
 
@@ -104,7 +109,13 @@ fn migration_on_death(args: Args) -> Result<()> {
         let collection_created =
             shard.subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
         let collection = client.create_collection("test").await.unwrap();
-        collection_created.recv().await.unwrap();
+
+        try_join!(
+            collection_created.recv(),
+            a_collection_created_receiver.recv(),
+            b_collection_created_receiver.recv()
+        )
+        .unwrap();
 
         collection
             .set_consistent(Value::String("key".into()), Value::F32(42.0), 2)
@@ -145,6 +156,7 @@ fn migration_on_death(args: Args) -> Result<()> {
     let mut handles = Vec::with_capacity(2);
     for (
         args,
+        collection_created_sender,
         set_receiver,
         checked_sender,
         done_sender,
@@ -153,6 +165,7 @@ fn migration_on_death(args: Args) -> Result<()> {
     ) in vec![
         (
             a_args,
+            a_collection_created_sender,
             a_set_receiver,
             a_checked_sender,
             a_done_sender,
@@ -161,6 +174,7 @@ fn migration_on_death(args: Args) -> Result<()> {
         ),
         (
             b_args,
+            b_collection_created_sender,
             b_set_receiver,
             b_checked_sender,
             b_done_sender,
@@ -172,6 +186,15 @@ fn migration_on_death(args: Args) -> Result<()> {
 
         handles.push(test_node(1, args, move |shard, _| async move {
             up_sender.send(()).await.unwrap();
+
+            if !shard.trees.borrow().contains_key("test") {
+                let event = shard.subscribe_to_flow_event(
+                    FlowEvent::CollectionCreated.into(),
+                );
+                event.recv().await.unwrap();
+            }
+            collection_created_sender.send(()).await.unwrap();
+
             set_receiver.recv().await.unwrap();
 
             assert_eq!(
@@ -234,6 +257,8 @@ fn migration_on_new_node(args: Args) -> Result<()> {
     // 2. KEY -> b-0 -> key -> c-0 -> a-0.
 
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
+    let (collection_created_sender, collection_created_receiver) =
+        async_channel::bounded(1);
     let (keys_created_sender, keys_created_receiver) =
         async_channel::bounded(1);
     let (b_keys_checked_sender, b_keys_checked_receiver) =
@@ -284,10 +309,15 @@ fn migration_on_new_node(args: Args) -> Result<()> {
         client.set_read_timeout(Duration::from_secs(1));
         client.set_write_timeout(Duration::from_secs(1));
 
-        let collection_created =
+        let local_collection_created =
             shard.subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
         let collection = client.create_collection("test").await.unwrap();
-        collection_created.recv().await.unwrap();
+
+        try_join!(
+            local_collection_created.recv(),
+            collection_created_receiver.recv()
+        )
+        .unwrap();
 
         collection
             .set_consistent(Value::String("key".into()), Value::F32(42.0), 2)
@@ -334,6 +364,13 @@ fn migration_on_new_node(args: Args) -> Result<()> {
     b_args.dir = "/tmp/test2".to_string();
 
     handles.push(test_node(1, b_args, move |shard, _| async move {
+        if shard.trees.borrow().is_empty() {
+            let event = shard
+                .subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
+            event.recv().await.unwrap();
+        }
+        collection_created_sender.send(()).await.unwrap();
+
         keys_created_receiver.recv().await.unwrap();
 
         assert_eq!(
@@ -370,7 +407,12 @@ fn migration_on_new_node(args: Args) -> Result<()> {
     b_keys_checked_receiver.recv_blocking().unwrap();
 
     handles.push(test_node(1, a_args, move |shard, _| async move {
-        if shard.trees.borrow().is_empty() {
+        if shard.trees.borrow()["test"]
+            .get(&LOWER_KEY)
+            .await
+            .unwrap()
+            .is_none()
+        {
             let item_set_event = shard.subscribe_to_flow_event(
                 FlowEvent::ItemSetFromShardMessage.into(),
             );

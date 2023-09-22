@@ -24,15 +24,42 @@ use std::rc::Rc;
 #[cfg(feature = "flow-events")]
 use crate::flow_events::FlowEvent;
 
-async fn discover_collections(my_shard: &MyShard) -> Result<()> {
-    for name in my_shard.get_collection_names_from_disk()? {
-        my_shard.create_collection(name).await?;
+async fn get_collections(
+    seed_shards: &[RemoteShardConnection],
+) -> Option<Vec<String>> {
+    for c in seed_shards {
+        match c.get_collections().await {
+            Ok(collections) => return Some(collections),
+            Err(e) => {
+                error!("Failed to get collections from '{}': {}", c.address, e);
+            }
+        }
     }
+
+    None
+}
+
+async fn discover_collections(
+    my_shard: &MyShard,
+    seed_shards: &[RemoteShardConnection],
+) -> Result<()> {
+    for collection in my_shard.get_collection_names_from_disk()? {
+        my_shard.create_collection(collection).await?;
+    }
+
+    if let Some(collections) = get_collections(seed_shards).await {
+        for collection in collections {
+            if !my_shard.trees.borrow().contains_key(&collection) {
+                my_shard.create_collection(collection).await?;
+            }
+        }
+    }
+
     Ok(())
 }
 
 async fn get_nodes_metadata(
-    seed_shards: &Vec<RemoteShardConnection>,
+    seed_shards: &[RemoteShardConnection],
 ) -> Option<Vec<NodeMetadata>> {
     for c in seed_shards {
         match c.get_metadata().await {
@@ -46,26 +73,17 @@ async fn get_nodes_metadata(
     None
 }
 
-async fn discover_nodes(my_shard: &MyShard) -> Result<()> {
+async fn discover_nodes(
+    my_shard: &MyShard,
+    seed_shards: &[RemoteShardConnection],
+) -> Result<()> {
     if my_shard.args.seed_nodes.is_empty() {
         return Ok(());
     }
 
-    let nodes = get_nodes_metadata(
-        &my_shard
-            .args
-            .seed_nodes
-            .iter()
-            .map(|seed_node| {
-                RemoteShardConnection::from_args(
-                    seed_node.clone(),
-                    &my_shard.args,
-                )
-            })
-            .collect::<Vec<_>>(),
-    )
-    .await
-    .ok_or(Error::NoRemoteShardsFoundInSeedNodes)?;
+    let nodes = get_nodes_metadata(seed_shards)
+        .await
+        .ok_or(Error::NoRemoteShardsFoundInSeedNodes)?;
 
     my_shard.nodes.replace(
         nodes
@@ -90,8 +108,17 @@ pub async fn run_shard(
     is_node_managing: bool,
 ) -> Result<()> {
     info!("Starting shard of id: {}", my_shard.id);
-    discover_collections(&my_shard).await?;
-    discover_nodes(&my_shard).await?;
+
+    let remote_shard_connections = &my_shard
+        .args
+        .seed_nodes
+        .iter()
+        .map(|seed_node| {
+            RemoteShardConnection::from_args(seed_node.clone(), &my_shard.args)
+        })
+        .collect::<Vec<_>>();
+    discover_collections(&my_shard, remote_shard_connections).await?;
+    discover_nodes(&my_shard, remote_shard_connections).await?;
 
     // Tasks that all shards run.
     let mut tasks = vec![

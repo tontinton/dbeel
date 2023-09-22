@@ -499,6 +499,9 @@ impl MyShard {
             ShardRequest::GetMetadata => {
                 ShardResponse::GetMetadata(self.get_nodes())
             }
+            ShardRequest::GetCollections => ShardResponse::GetCollections(
+                self.trees.borrow().keys().cloned().collect::<Vec<_>>(),
+            ),
             ShardRequest::Set(collection, key, value, timestamp) => {
                 self.handle_shard_set_message(
                     collection, key, value, timestamp,
@@ -536,17 +539,13 @@ impl MyShard {
         value: Vec<u8>,
         timestamp: OffsetDateTime,
     ) -> Result<()> {
-        let existing_tree = self.trees.borrow().get(&collection).cloned();
-        if let Some(tree) = existing_tree {
-            tree.set_with_timestamp(key, value, timestamp).await?;
-        } else {
-            let tree = self.create_lsm_tree(collection.clone()).await?;
-            tree.clone()
-                .set_with_timestamp(key, value, timestamp)
-                .await?;
-            self.trees.borrow_mut().insert(collection, tree);
-            self.trees_change_event.notify(usize::MAX);
-        };
+        let tree = self
+            .trees
+            .borrow()
+            .get(&collection)
+            .cloned()
+            .ok_or_else(|| Error::CollectionNotFound(collection))?;
+        tree.set_with_timestamp(key, value, timestamp).await?;
 
         notify_flow_event!(self, FlowEvent::ItemSetFromShardMessage);
 

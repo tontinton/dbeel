@@ -87,6 +87,13 @@ impl RemoteShardConnection {
             ShardResponse::GetMetadata
         )
     }
+
+    pub async fn get_collections(&self) -> Result<Vec<String>> {
+        response_to_result!(
+            self.send_request(ShardRequest::GetCollections).await?,
+            ShardResponse::GetCollections
+        )
+    }
 }
 
 fn bincode_options() -> WithOtherIntEncoding<
