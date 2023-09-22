@@ -229,7 +229,7 @@ impl MyShard {
         let tree = Rc::new(
             LSMTree::open_or_create(
                 self.get_collection_dir(&name),
-                PartitionPageCache::new(name.clone(), cache),
+                PartitionPageCache::new(name, cache),
             )
             .await?,
         );
