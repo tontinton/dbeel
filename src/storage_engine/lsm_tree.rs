@@ -91,6 +91,10 @@ pub struct AsyncIter<'a> {
     memtable: std::vec::IntoIter<Entry>,
     filter_fn: Box<IterFilterFn>,
     state: IterState,
+
+    /// Optimization - read into this buffer when reading an entry from the
+    /// index, instead of allocating a new buffer each time.
+    index_buffer: [u8; INDEX_ENTRY_SIZE],
 }
 
 impl<'a> AsyncIter<'a> {
@@ -131,6 +135,7 @@ impl<'a> AsyncIter<'a> {
             memtable: memtable.into_iter(),
             filter_fn: Box::new(filter_fn),
             state,
+            index_buffer: [0; INDEX_ENTRY_SIZE],
         }
     }
 }
@@ -192,11 +197,11 @@ impl<'a> AsyncIter<'a> {
             ) => {
                 let i = *i;
 
-                let entry_offset: EntryOffset = bincode_options().deserialize(
-                    &index_file
-                        .read_at(*index_offset, INDEX_ENTRY_SIZE)
-                        .await?,
-                )?;
+                index_file
+                    .read_at_into(*index_offset, &mut self.index_buffer)
+                    .await?;
+                let entry_offset: EntryOffset =
+                    bincode_options().deserialize(&self.index_buffer)?;
                 let entry: Entry = bincode_options().deserialize(
                     &data_file
                         .read_at(entry_offset.offset, entry_offset.size)
