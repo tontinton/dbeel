@@ -5,13 +5,12 @@ use futures::{try_join, AsyncWrite, AsyncWriteExt};
 use glommio::io::{DmaFile, DmaStreamWriterBuilder};
 
 use super::{
-    bincode_options,
     cached_file_reader::FileId,
     page_cache::{PartitionPageCache, PAGE_SIZE},
     Entry, EntryOffset, DATA_FILE_EXT, DMA_STREAM_NUMBER_OF_BUFFERS,
     INDEX_ENTRY_SIZE, INDEX_FILE_EXT,
 };
-use crate::error::Result;
+use crate::{error::Result, utils::bincode::bincode_options};
 
 pub struct EntryWriter {
     data_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,

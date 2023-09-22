@@ -25,7 +25,6 @@ use std::{
 };
 
 use super::{
-    bincode_options,
     cached_file_reader::{CachedFileReader, FileId},
     entry_writer::EntryWriter,
     page_cache::{PartitionPageCache, PAGE_SIZE},
@@ -36,7 +35,7 @@ use super::{
 };
 use crate::{
     error::{Error, Result},
-    utils::get_first_capture,
+    utils::{bincode::bincode_options, get_first_capture},
 };
 
 // Whether to ensure full durability against system crashes.

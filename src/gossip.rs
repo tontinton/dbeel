@@ -1,20 +1,17 @@
-use bincode::{
-    config::{
-        FixintEncoding, RejectTrailing, WithOtherIntEncoding, WithOtherTrailing,
-    },
-    DefaultOptions, Options,
-};
+use bincode::Options;
 use kinded::Kinded;
 use serde::{Deserialize, Serialize};
 
-use crate::{error::Result, messages::NodeMetadata};
+use crate::{
+    error::Result, messages::NodeMetadata, utils::bincode::bincode_options,
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Kinded)]
 #[kinded(derive(Hash))]
 pub enum GossipEvent {
     Alive(NodeMetadata),
     Dead(String),
-    CreateCollection(String),
+    CreateCollection(String, u16),
     DropCollection(String),
 }
 
@@ -28,15 +25,6 @@ impl GossipMessage {
     pub fn new(source: String, event: GossipEvent) -> Self {
         Self { source, event }
     }
-}
-
-fn bincode_options() -> WithOtherIntEncoding<
-    WithOtherTrailing<DefaultOptions, RejectTrailing>,
-    FixintEncoding,
-> {
-    DefaultOptions::new()
-        .reject_trailing_bytes()
-        .with_fixint_encoding()
 }
 
 pub fn deserialize_gossip_message(buf: &[u8]) -> Result<GossipMessage> {

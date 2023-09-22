@@ -2,12 +2,19 @@ use std::collections::HashSet;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use async_channel::{Receiver, Sender};
+use bincode::Options;
 use event_listener::Event;
 use futures::{
     future::join_all,
     stream::{FuturesUnordered, StreamExt},
 };
-use glommio::{net::UdpSocket, spawn_local};
+use futures_lite::{AsyncReadExt, AsyncWriteExt};
+use glommio::io::StreamWriterBuilder;
+use glommio::{
+    io::{BufferedFile, StreamReaderBuilder},
+    net::UdpSocket,
+    spawn_local,
+};
 use itertools::Itertools;
 use log::{error, trace};
 use murmur3::murmur3_32;
@@ -22,9 +29,9 @@ use crate::gossip::{
 };
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
 use crate::tasks::migration::{
-    spawn_migration_actions_tasks, spawn_migration_tasks, MigrationAction,
+    spawn_migration_actions_tasks, MigrationAction, RangeAndAction,
 };
-use crate::utils::get_first_capture;
+use crate::utils::{bincode::bincode_options, get_first_capture};
 use crate::{
     args::Args,
     error::{Error, Result},
@@ -108,6 +115,32 @@ impl Shard {
     }
 }
 
+/// The metadata of a collection (saved to disk for each collection).
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct CollectionMetadata {
+    /// Number of nodes (replicas) that hold a copy for a specific key for
+    /// tunable availability / consistency.
+    pub replication_factor: u16,
+}
+
+#[derive(Clone)]
+pub struct Collection {
+    /// The K/V store of the collection.
+    pub tree: Rc<LSMTree>,
+
+    /// The metadata of a collection.
+    pub metadata: CollectionMetadata,
+}
+
+impl Collection {
+    fn new(tree: LSMTree, metadata: CollectionMetadata) -> Self {
+        Self {
+            tree: Rc::new(tree),
+            metadata,
+        }
+    }
+}
+
 /// Holder of state to the shard running on the current thread.
 /// To share the state between all coroutines, async methods get Rc<Self>.
 pub struct MyShard {
@@ -134,10 +167,10 @@ pub struct MyShard {
     pub gossip_requests: RefCell<HashMap<(String, GossipEventKind), u8>>,
 
     /// Collections to the lsm tree on disk.
-    pub trees: RefCell<HashMap<String, Rc<LSMTree>>>,
+    pub collections: RefCell<HashMap<String, Collection>>,
 
-    /// Used for notfying any insertions / removals from |trees|.
-    pub trees_change_event: Event,
+    /// Used for notfying any insertions / removals from |collections|.
+    pub collections_change_event: Event,
 
     /// The shard's page cache.
     cache: Rc<RefCell<PageCache<FileId>>>,
@@ -176,8 +209,8 @@ impl MyShard {
             shards: RefCell::new(shards),
             nodes: RefCell::new(HashMap::new()),
             gossip_requests: RefCell::new(HashMap::new()),
-            trees: RefCell::new(HashMap::new()),
-            trees_change_event: Event::new(),
+            collections: RefCell::new(HashMap::new()),
+            collections_change_event: Event::new(),
             cache: Rc::new(RefCell::new(cache)),
             local_shards_packet_receiver,
             stop_receiver,
@@ -192,15 +225,31 @@ impl MyShard {
         Ok(())
     }
 
-    pub fn get_collection(&self, name: &String) -> Result<Rc<LSMTree>> {
-        self.trees
+    pub fn get_collection(&self, name: &str) -> Result<Collection> {
+        self.collections
             .borrow()
             .get(name)
             .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
-            .map(|t| t.clone())
+            .cloned()
     }
 
-    pub fn get_collection_names_from_disk(&self) -> Result<Vec<String>> {
+    pub fn get_collection_tree(&self, name: &str) -> Result<Rc<LSMTree>> {
+        self.collections
+            .borrow()
+            .get(name)
+            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+            .map(|c| c.tree.clone())
+    }
+
+    fn get_collection_metadata_path(&self, name: &str) -> PathBuf {
+        let mut dir = PathBuf::from(self.args.dir.clone());
+        dir.push(format!("{}.metadata", name));
+        dir
+    }
+
+    pub async fn get_collections_from_disk(
+        &self,
+    ) -> Result<Vec<(String, CollectionMetadata)>> {
         if !std::fs::metadata(&self.args.dir)
             .map(|m| m.is_dir())
             .unwrap_or(false)
@@ -208,14 +257,44 @@ impl MyShard {
             return Ok(Vec::new());
         }
 
-        let pattern = format!(r#"(.*)\-{}$"#, self.id);
+        let pattern = format!(r#"(.*?)\-{}$"#, self.id);
         let regex = Regex::new(pattern.as_str())
             .map_err(|source| Error::RegexCreationError { source, pattern })?;
-        let paths = std::fs::read_dir(&self.args.dir)?
+        let names = std::fs::read_dir(&self.args.dir)?
             .filter_map(std::result::Result::ok)
             .filter_map(|entry| get_first_capture(&regex, &entry))
             .collect::<Vec<_>>();
-        Ok(paths)
+
+        let mut collections = Vec::with_capacity(names.len());
+
+        let metadata_size = bincode_options()
+            .serialized_size(&CollectionMetadata::default())?
+            as usize;
+
+        let mut buf = vec![0; metadata_size];
+        for name in names {
+            match BufferedFile::open(self.get_collection_metadata_path(&name))
+                .await
+            {
+                Ok(file) => {
+                    let mut reader = StreamReaderBuilder::new(file).build();
+                    reader.read_to_end(&mut buf).await?;
+                    reader.close().await?;
+
+                    let mut cursor = std::io::Cursor::new(&buf[..]);
+                    collections.push((
+                        name,
+                        bincode_options().deserialize_from(&mut cursor)?,
+                    ));
+                }
+                Err(e) => panic!(
+                    "Collection '{}' failed to open metadata file on disk: {}",
+                    name, e
+                ),
+            }
+        }
+
+        Ok(collections)
     }
 
     fn get_collection_dir(&self, name: &str) -> PathBuf {
@@ -224,26 +303,38 @@ impl MyShard {
         dir
     }
 
-    async fn create_lsm_tree(&self, name: String) -> Result<Rc<LSMTree>> {
+    async fn create_lsm_tree(&self, name: String) -> Result<LSMTree> {
         let cache = self.cache.clone();
-        let tree = Rc::new(
-            LSMTree::open_or_create(
-                self.get_collection_dir(&name),
-                PartitionPageCache::new(name, cache),
-            )
-            .await?,
-        );
-        Ok(tree)
+        LSMTree::open_or_create(
+            self.get_collection_dir(&name),
+            PartitionPageCache::new(name, cache),
+        )
+        .await
     }
 
-    pub async fn create_collection(&self, name: String) -> Result<()> {
-        if self.trees.borrow().contains_key(&name) {
+    pub async fn create_collection(
+        &self,
+        name: String,
+        replication_factor: u16,
+    ) -> Result<()> {
+        if self.collections.borrow().contains_key(&name) {
             return Err(Error::CollectionAlreadyExists(name));
         }
         let tree = self.create_lsm_tree(name.clone()).await?;
+        let metadata = CollectionMetadata { replication_factor };
 
-        self.trees.borrow_mut().insert(name, tree);
-        self.trees_change_event.notify(usize::MAX);
+        let path = self.get_collection_metadata_path(&name);
+        let mut writer =
+            StreamWriterBuilder::new(BufferedFile::create(path).await?).build();
+        writer
+            .write_all(&bincode_options().serialize(&metadata)?)
+            .await?;
+        writer.close().await?;
+
+        self.collections
+            .borrow_mut()
+            .insert(name, Collection::new(tree, metadata));
+        self.collections_change_event.notify(usize::MAX);
 
         notify_flow_event!(self, FlowEvent::CollectionCreated);
 
@@ -251,12 +342,16 @@ impl MyShard {
     }
 
     pub fn drop_collection(&self, name: &str) -> Result<()> {
-        self.trees
+        let _ = std::fs::remove_file(self.get_collection_metadata_path(name));
+
+        self.collections
             .borrow_mut()
             .remove(name)
             .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?
+            .tree
             .purge()?;
-        self.trees_change_event.notify(usize::MAX);
+        self.collections_change_event.notify(usize::MAX);
+
         Ok(())
     }
 
@@ -501,7 +596,11 @@ impl MyShard {
                 ShardResponse::GetMetadata(self.get_nodes())
             }
             ShardRequest::GetCollections => ShardResponse::GetCollections(
-                self.trees.borrow().keys().cloned().collect::<Vec<_>>(),
+                self.collections
+                    .borrow()
+                    .iter()
+                    .map(|(n, c)| (n.clone(), c.metadata.replication_factor))
+                    .collect::<Vec<_>>(),
             ),
             ShardRequest::Set(collection, key, value, timestamp) => {
                 self.handle_shard_set_message(
@@ -511,16 +610,22 @@ impl MyShard {
                 ShardResponse::Set
             }
             ShardRequest::Delete(collection, key, timestamp) => {
-                let existing_tree =
-                    self.trees.borrow().get(&collection).cloned();
+                let existing_tree = self
+                    .collections
+                    .borrow()
+                    .get(&collection)
+                    .map(|c| c.tree.clone());
                 if let Some(tree) = existing_tree {
                     tree.delete_with_timestamp(key, timestamp).await?;
                 };
                 ShardResponse::Delete
             }
             ShardRequest::Get(collection, key) => {
-                let existing_tree =
-                    self.trees.borrow().get(&collection).cloned();
+                let existing_tree = self
+                    .collections
+                    .borrow()
+                    .get(&collection)
+                    .map(|c| c.tree.clone());
                 let value = if let Some(tree) = existing_tree {
                     tree.get_entry(&key).await?
                 } else {
@@ -541,10 +646,10 @@ impl MyShard {
         timestamp: OffsetDateTime,
     ) -> Result<()> {
         let tree = self
-            .trees
+            .collections
             .borrow()
             .get(&collection)
-            .cloned()
+            .map(|c| c.tree.clone())
             .ok_or_else(|| Error::CollectionNotFound(collection))?;
         tree.set_with_timestamp(key, value, timestamp).await?;
 
@@ -640,179 +745,215 @@ impl MyShard {
     ) {
         assert!(!removed_shards.is_empty());
 
-        // No need to migrate data if no replication set.
-        if self.args.replication_factor <= 1 {
-            return;
-        }
+        let mut migration_actions = Vec::new();
 
-        // No need to migrate data if all nodes already contain all the data.
-        if self.nodes.borrow().len() + 1 < self.args.replication_factor {
-            return;
-        }
-
-        let (migrate_to_hash, migrate_to_connection) = {
-            let shards = self.shards.borrow();
-            let migrate_to_shard = Self::get_last_owning_shard(
-                &shards,
-                self.hash,
-                self.args.replication_factor,
-            )
-            .unwrap();
-            (migrate_to_shard.hash, migrate_to_shard.connection.clone())
-        };
-
-        // No need to migrate if no removed shards in the ring between the
-        // current shard and the last owning shard.
-        if !removed_shards
+        for (collection_name, collection) in self
+            .collections
+            .borrow()
             .iter()
-            .map(|s| s.hash)
-            .any(|h| is_between(h, self.hash, migrate_to_hash))
+            .map(|(k, v)| (k.clone(), v.clone()))
         {
-            return;
+            let replications = collection.metadata.replication_factor as usize;
+
+            // No need to migrate data if no replication set.
+            if replications <= 1 {
+                return;
+            }
+
+            // No need to migrate data if all nodes already contain all the data.
+            if self.nodes.borrow().len() + 1 < replications {
+                return;
+            }
+
+            let (migrate_to_hash, migrate_to_connection) = {
+                let shards = self.shards.borrow();
+                let migrate_to_shard = Self::get_last_owning_shard(
+                    &shards,
+                    self.hash,
+                    replications,
+                )
+                .unwrap();
+                (migrate_to_shard.hash, migrate_to_shard.connection.clone())
+            };
+
+            // No need to migrate if no removed shards in the ring between the
+            // current shard and the last owning shard.
+            if !removed_shards
+                .iter()
+                .map(|s| s.hash)
+                .any(|h| is_between(h, self.hash, migrate_to_hash))
+            {
+                return;
+            }
+
+            // The previous shard in the hash ring is the last one in the vector.
+            let start =
+                self.shards.borrow()[self.shards.borrow().len() - 1].hash;
+
+            // The closest removed shard that is between the previous shard and
+            // this shard, or - this shard if no removed shard found between.
+            let end = removed_shards
+                .iter()
+                .map(|s| s.hash)
+                .filter(|h| is_between(*h, start, self.hash))
+                .min_by_key(|h| self.hash.wrapping_sub(*h))
+                .unwrap_or(self.hash);
+
+            migration_actions.push((
+                collection_name,
+                vec![RangeAndAction::new(
+                    start,
+                    end,
+                    MigrationAction::SendToShard(migrate_to_connection),
+                )],
+            ));
         }
 
-        // The previous shard in the hash ring is the last one in the vector.
-        let start = self.shards.borrow()[self.shards.borrow().len() - 1].hash;
-
-        // The closest removed shard that is between the previous shard and
-        // this shard, or - this shard if no removed shard found between.
-        let end = removed_shards
-            .iter()
-            .map(|s| s.hash)
-            .filter(|h| is_between(*h, start, self.hash))
-            .min_by_key(|h| self.hash.wrapping_sub(*h))
-            .unwrap_or(self.hash);
-
-        spawn_migration_tasks(self, start, end, migrate_to_connection);
+        spawn_migration_actions_tasks(self, migration_actions);
     }
 
     fn migrate_data_on_node_addition(self: Rc<Self>, added_shards: &[Shard]) {
         assert!(!added_shards.is_empty());
 
-        // No need to migrate data if no replication set.
-        if self.args.replication_factor <= 1 {
-            return;
-        }
-
-        // No need to migrate data if all nodes already contain all the data.
-        if self.nodes.borrow().len() + 1 < self.args.replication_factor {
-            return;
-        }
-
-        let shards = self.shards.borrow();
-        let last_owning_shard = Self::get_last_owning_shard(
-            &shards,
-            self.hash,
-            self.args.replication_factor,
-        )
-        .unwrap();
-
-        let added_shard_names = added_shards
-            .iter()
-            .map(|s| s.name.clone())
-            .collect::<Vec<_>>();
-
-        // Get the previous shard's hash (prior to adding the new node's
-        // shards to the ring).
-        let previous_shard_hash = self
-            .shards
-            .borrow()
-            .iter()
-            .rev()
-            .filter(|s| !added_shard_names.contains(&s.name))
-            .map(|s| s.hash)
-            .next();
-        if previous_shard_hash.is_none() {
-            return;
-        }
-        let previous_shard_hash = previous_shard_hash.unwrap();
-
         let mut migration_actions = Vec::new();
 
-        // Step 1.
-        // Migrate to the closest added shard that is between this shard and the
-        // last owning one.
-        if let Some(migrate_to_shard) = added_shards
-            .iter()
-            .filter(|shard| {
-                is_between(shard.hash, self.hash, last_owning_shard.hash)
-                    || shard.hash == last_owning_shard.hash
-            })
-            .min_by_key(|shard| shard.hash.wrapping_sub(self.hash))
-        {
-            migration_actions.push((
-                previous_shard_hash,
-                self.hash,
-                MigrationAction::SendToShard(
-                    migrate_to_shard.connection.clone(),
-                ),
-            ));
-        }
-
-        // Step 2.
-        // Migrate to added shards between the previous shard and this shard,
-        // excluding the farthest one, because the previous shard should
-        // migrate to it (see step 1).
-        {
-            let mut migrate_to_shards = added_shards
-                .iter()
-                .filter(|s| is_between(s.hash, previous_shard_hash, self.hash))
-                .collect::<Vec<_>>();
-
-            if migrate_to_shards.len() > 1 {
-                migrate_to_shards
-                    .sort_unstable_by_key(|s| s.hash.wrapping_sub(self.hash));
-
-                let actions = migrate_to_shards
-                    .into_iter()
-                    .tuple_windows()
-                    .map(|(a, b)| {
-                        (
-                            a.hash,
-                            b.hash,
-                            MigrationAction::SendToShard(b.connection.clone()),
-                        )
-                    });
-                migration_actions.extend(actions);
-            }
-        }
-
-        // Step 3.
-        // Delete items that are no longer owned by this shard. It's ok to
-        // delete while migrating, because this shard is not the first owner of
-        // these items.
-        let mut seen = HashSet::with_capacity(self.args.replication_factor);
-        for (i, shard) in self
-            .shards
+        for (collection_name, collection) in self
+            .collections
             .borrow()
             .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, shard)| !added_shard_names.contains(&shard.name))
+            .map(|(k, v)| (k.clone(), v.clone()))
         {
-            seen.insert(&shard.name);
-            if seen.len() == self.args.replication_factor {
-                break;
+            let replications = collection.metadata.replication_factor as usize;
+
+            // No need to migrate data if no replication set.
+            if replications <= 1 {
+                continue;
             }
 
-            if !self.is_owning_shard(i, self.args.replication_factor) {
-                let prev_index = if i == 0 {
-                    self.shards.borrow().len() - 1
-                } else {
-                    i - 1
-                };
+            // No need to migrate data if all nodes already contain all the data.
+            if self.nodes.borrow().len() + 1 < replications {
+                continue;
+            }
 
-                migration_actions.push((
-                    self.shards.borrow()[prev_index].hash,
-                    shard.hash,
-                    MigrationAction::Delete,
+            let mut collection_migration_actions = Vec::new();
+
+            let shards = self.shards.borrow();
+            let last_owning_shard =
+                Self::get_last_owning_shard(&shards, self.hash, replications)
+                    .unwrap();
+
+            let added_shard_names = added_shards
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>();
+
+            // Get the previous shard's hash (prior to adding the new node's
+            // shards to the ring).
+            let previous_shard_hash = self
+                .shards
+                .borrow()
+                .iter()
+                .rev()
+                .filter(|s| !added_shard_names.contains(&s.name))
+                .map(|s| s.hash)
+                .next();
+            if previous_shard_hash.is_none() {
+                return;
+            }
+            let previous_shard_hash = previous_shard_hash.unwrap();
+
+            // Step 1.
+            // Migrate to the closest added shard that is between this shard and the
+            // last owning one.
+            if let Some(migrate_to_shard) = added_shards
+                .iter()
+                .filter(|shard| {
+                    is_between(shard.hash, self.hash, last_owning_shard.hash)
+                        || shard.hash == last_owning_shard.hash
+                })
+                .min_by_key(|shard| shard.hash.wrapping_sub(self.hash))
+            {
+                collection_migration_actions.push(RangeAndAction::new(
+                    previous_shard_hash,
+                    self.hash,
+                    MigrationAction::SendToShard(
+                        migrate_to_shard.connection.clone(),
+                    ),
                 ));
+            }
+
+            // Step 2.
+            // Migrate to added shards between the previous shard and this shard,
+            // excluding the farthest one, because the previous shard should
+            // migrate to it (see step 1).
+            {
+                let mut migrate_to_shards = added_shards
+                    .iter()
+                    .filter(|s| {
+                        is_between(s.hash, previous_shard_hash, self.hash)
+                    })
+                    .collect::<Vec<_>>();
+
+                if migrate_to_shards.len() > 1 {
+                    migrate_to_shards.sort_unstable_by_key(|s| {
+                        s.hash.wrapping_sub(self.hash)
+                    });
+
+                    let actions = migrate_to_shards
+                        .into_iter()
+                        .tuple_windows()
+                        .map(|(a, b)| {
+                            RangeAndAction::new(
+                                a.hash,
+                                b.hash,
+                                MigrationAction::SendToShard(
+                                    b.connection.clone(),
+                                ),
+                            )
+                        });
+                    collection_migration_actions.extend(actions);
+                }
+            }
+
+            // Step 3.
+            // Delete items that are no longer owned by this shard. It's ok to
+            // delete while migrating, because this shard is not the first owner of
+            // these items.
+            let mut seen = HashSet::with_capacity(replications);
+            for (i, shard) in
+                self.shards.borrow().iter().enumerate().rev().filter(
+                    |(_, shard)| !added_shard_names.contains(&shard.name),
+                )
+            {
+                seen.insert(&shard.name);
+                if seen.len() == replications {
+                    break;
+                }
+
+                if !self.is_owning_shard(i, replications) {
+                    let prev_index = if i == 0 {
+                        self.shards.borrow().len() - 1
+                    } else {
+                        i - 1
+                    };
+
+                    collection_migration_actions.push(RangeAndAction::new(
+                        self.shards.borrow()[prev_index].hash,
+                        shard.hash,
+                        MigrationAction::Delete,
+                    ));
+                }
+            }
+
+            if !collection_migration_actions.is_empty() {
+                migration_actions
+                    .push((collection_name, collection_migration_actions));
             }
         }
 
         // Step 4.
         // Execute migration actions on background tasks.
-        spawn_migration_actions_tasks(self.clone(), migration_actions.clone());
+        spawn_migration_actions_tasks(self, migration_actions);
     }
 
     fn get_last_owning_shard(
@@ -920,8 +1061,8 @@ impl MyShard {
                     false
                 }
             }
-            GossipEvent::CreateCollection(name) => {
-                match self.create_collection(name).await {
+            GossipEvent::CreateCollection(name, replication_factor) => {
+                match self.create_collection(name, replication_factor).await {
                     Ok(()) | Err(Error::CollectionAlreadyExists(_)) => {}
                     Err(e) => {
                         return Err(e);

@@ -12,15 +12,15 @@ use crate::{
 async fn get_trees_and_listeners(
     my_shard: &MyShard,
 ) -> (Vec<Rc<LSMTree>>, Vec<Pin<Box<EventListener<()>>>>) {
-    while my_shard.trees.borrow().is_empty() {
-        my_shard.trees_change_event.listen().await;
+    while my_shard.collections.borrow().is_empty() {
+        my_shard.collections_change_event.listen().await;
     }
 
     let trees = my_shard
-        .trees
+        .collections
         .borrow()
         .values()
-        .cloned()
+        .map(|c| c.tree.clone())
         .collect::<Vec<_>>();
     let listeners = trees
         .iter()
@@ -36,7 +36,7 @@ async fn run_compaction_loop(my_shard: Rc<MyShard>) {
 
     loop {
         match select(
-            my_shard.trees_change_event.listen(),
+            my_shard.collections_change_event.listen(),
             select_all(&mut listeners),
         )
         .await

@@ -48,7 +48,7 @@ fn args() -> Args {
     let _ = std::fs::remove_dir_all("/tmp/test");
     let _ = std::fs::remove_dir_all("/tmp/test1");
     let _ = std::fs::remove_dir_all("/tmp/test2");
-    parse_args_from(["", "--dir", "/tmp/test", "--replication-factor", "2"])
+    parse_args_from(["", "--dir", "/tmp/test"])
 }
 
 #[rstest]
@@ -108,7 +108,10 @@ fn migration_on_death(args: Args) -> Result<()> {
 
         let collection_created =
             shard.subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
-        let collection = client.create_collection("test").await.unwrap();
+        let collection = client
+            .create_collection_with_replication("test", 2)
+            .await
+            .unwrap();
 
         try_join!(
             collection_created.recv(),
@@ -131,11 +134,19 @@ fn migration_on_death(args: Args) -> Result<()> {
             .unwrap();
 
         assert_eq!(
-            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&UPPER_KEY)
+                .await
+                .unwrap(),
             Some((*UPPER_VALUE).clone())
         );
         assert_eq!(
-            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&LOWER_KEY)
+                .await
+                .unwrap(),
             Some((*LOWER_VALUE).clone())
         );
 
@@ -187,7 +198,7 @@ fn migration_on_death(args: Args) -> Result<()> {
         handles.push(test_node(1, args, move |shard, _| async move {
             up_sender.send(()).await.unwrap();
 
-            if !shard.trees.borrow().contains_key("test") {
+            if !shard.collections.borrow().contains_key("test") {
                 let event = shard.subscribe_to_flow_event(
                     FlowEvent::CollectionCreated.into(),
                 );
@@ -198,7 +209,11 @@ fn migration_on_death(args: Args) -> Result<()> {
             set_receiver.recv().await.unwrap();
 
             assert_eq!(
-                shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+                shard.collections.borrow()["test"]
+                    .tree
+                    .get(&UPPER_KEY)
+                    .await
+                    .unwrap(),
                 if should_own_upper {
                     Some((*UPPER_VALUE).clone())
                 } else {
@@ -206,7 +221,11 @@ fn migration_on_death(args: Args) -> Result<()> {
                 },
             );
             assert_eq!(
-                shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+                shard.collections.borrow()["test"]
+                    .tree
+                    .get(&LOWER_KEY)
+                    .await
+                    .unwrap(),
                 if !should_own_upper {
                     Some((*LOWER_VALUE).clone())
                 } else {
@@ -221,11 +240,19 @@ fn migration_on_death(args: Args) -> Result<()> {
             item_migrated.recv().await.unwrap();
 
             assert_eq!(
-                shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+                shard.collections.borrow()["test"]
+                    .tree
+                    .get(&UPPER_KEY)
+                    .await
+                    .unwrap(),
                 Some((*UPPER_VALUE).clone())
             );
             assert_eq!(
-                shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+                shard.collections.borrow()["test"]
+                    .tree
+                    .get(&LOWER_KEY)
+                    .await
+                    .unwrap(),
                 Some((*LOWER_VALUE).clone())
             );
 
@@ -311,7 +338,10 @@ fn migration_on_new_node(args: Args) -> Result<()> {
 
         let local_collection_created =
             shard.subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
-        let collection = client.create_collection("test").await.unwrap();
+        let collection = client
+            .create_collection_with_replication("test", 2)
+            .await
+            .unwrap();
 
         try_join!(
             local_collection_created.recv(),
@@ -342,11 +372,19 @@ fn migration_on_new_node(args: Args) -> Result<()> {
         b_migration_done_receiver.recv().await.unwrap();
 
         assert_eq!(
-            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&UPPER_KEY)
+                .await
+                .unwrap(),
             Some((*UPPER_VALUE).clone())
         );
         assert_eq!(
-            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&LOWER_KEY)
+                .await
+                .unwrap(),
             Some((*LOWER_VALUE).clone())
         );
 
@@ -364,7 +402,7 @@ fn migration_on_new_node(args: Args) -> Result<()> {
     b_args.dir = "/tmp/test2".to_string();
 
     handles.push(test_node(1, b_args, move |shard, _| async move {
-        if shard.trees.borrow().is_empty() {
+        if shard.collections.borrow().is_empty() {
             let event = shard
                 .subscribe_to_flow_event(FlowEvent::CollectionCreated.into());
             event.recv().await.unwrap();
@@ -374,11 +412,19 @@ fn migration_on_new_node(args: Args) -> Result<()> {
         keys_created_receiver.recv().await.unwrap();
 
         assert_eq!(
-            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&UPPER_KEY)
+                .await
+                .unwrap(),
             Some((*UPPER_VALUE).clone())
         );
         assert_eq!(
-            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&LOWER_KEY)
+                .await
+                .unwrap(),
             Some((*LOWER_VALUE).clone())
         );
 
@@ -392,11 +438,19 @@ fn migration_on_new_node(args: Args) -> Result<()> {
         c_migration_done_receiver.recv().await.unwrap();
 
         assert_eq!(
-            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&UPPER_KEY)
+                .await
+                .unwrap(),
             Some((*UPPER_VALUE).clone())
         );
         assert_eq!(
-            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&LOWER_KEY)
+                .await
+                .unwrap(),
             Some(TOMBSTONE)
         );
 
@@ -407,7 +461,8 @@ fn migration_on_new_node(args: Args) -> Result<()> {
     b_keys_checked_receiver.recv_blocking().unwrap();
 
     handles.push(test_node(1, a_args, move |shard, _| async move {
-        if shard.trees.borrow()["test"]
+        if shard.collections.borrow()["test"]
+            .tree
             .get(&LOWER_KEY)
             .await
             .unwrap()
@@ -420,11 +475,19 @@ fn migration_on_new_node(args: Args) -> Result<()> {
         }
 
         assert_eq!(
-            shard.trees.borrow()["test"].get(&UPPER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&UPPER_KEY)
+                .await
+                .unwrap(),
             None
         );
         assert_eq!(
-            shard.trees.borrow()["test"].get(&LOWER_KEY).await.unwrap(),
+            shard.collections.borrow()["test"]
+                .tree
+                .get(&LOWER_KEY)
+                .await
+                .unwrap(),
             Some((*LOWER_VALUE).clone())
         );
 
