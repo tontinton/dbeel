@@ -1,4 +1,4 @@
-use std::sync::Once;
+use std::{sync::Once, time::Duration};
 
 use dbeel::{
     args::{parse_args_from, Args},
@@ -34,12 +34,15 @@ fn clean_state(args: Args) -> Result<()> {
 #[serial]
 fn find_collections_after_rerun(args: Args) -> Result<()> {
     test_shard(args.clone(), |shard| async move {
-        let client = DbeelClient::from_seed_nodes(&[(
+        let mut client = DbeelClient::from_seed_nodes(&[(
             shard.args.ip.clone(),
             shard.args.port,
         )])
         .await
         .unwrap();
+
+        client.set_read_timeout(Duration::from_secs(1));
+        client.set_write_timeout(Duration::from_secs(1));
         client.create_collection("test").await.unwrap();
 
         assert_eq!(shard.trees.borrow().len(), 1);
