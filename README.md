@@ -60,10 +60,10 @@ Running the benchmark on my machine ([System76 lemp11](https://tech-docs.system7
 
 ```
 Set:
-total: 48.733705959s, min: 106.442µs, p50: 347.806µs, p90: 928.311µs, p99: 1.751205ms, p999: 7.331712ms, max: 44.204281ms
+total: 42.987212632s, min: 97.298µs, p50: 375.032µs, p90: 716.749µs, p99: 1.25213ms, p999: 1.965492ms, max: 12.534306ms
 
 Get:
-total: 61.39613906s, min: 69.37µs, p50: 520.323µs, p90: 1.082239ms, p99: 1.813001ms, p999: 3.394344ms, max: 9.267451ms
+total: 61.716233278s, min: 69.543µs, p50: 533.423µs, p90: 1.081879ms, p99: 1.733866ms, p999: 2.231455ms, max: 4.155056ms
 ```
 
 Meaning the median user will have ~3 writes in a millisecond and ~2 reads in a millisecond.
@@ -72,7 +72,7 @@ Running with fdatasync results in the following output for Set:
 
 ```
 Set:
-total: 1278.977625712s, min: 4.097672ms, p50: 12.56982ms, p90: 12.895054ms, p99: 15.352365ms, p999: 91.415289ms, max: 324.257944ms
+total: 1253.611595658s, min: 6.625024ms, p50: 12.57609ms, p90: 12.858347ms, p99: 13.4931ms, p999: 19.062725ms, max: 31.880792ms
 ```
 
 P90 / P99 are very important to me personally, because usually the most demanding users are the ones getting tail latencies, and they are the most important customer as they probably also use the service the most.
