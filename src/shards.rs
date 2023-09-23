@@ -385,10 +385,15 @@ impl MyShard {
             })
             .collect::<Vec<_>>();
 
-        for sender in senders {
-            sender
-                .send(ShardPacket::new(self.id, message.clone()))
-                .await?;
+        let results = join_all(
+            senders
+                .iter()
+                .map(|s| s.send(ShardPacket::new(self.id, message.clone()))),
+        )
+        .await;
+
+        for result in results {
+            result?;
         }
 
         Ok(())
