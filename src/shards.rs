@@ -680,13 +680,11 @@ impl MyShard {
     }
 
     pub async fn gossip(self: Rc<Self>, event: GossipEvent) -> Result<()> {
-        if self.nodes.borrow().is_empty() {
-            self.clone()
-                .broadcast_message_to_local_shards(&ShardMessage::Event(
-                    ShardEvent::Gossip(event.clone()),
-                ))
-                .await?;
-        }
+        self.clone()
+            .broadcast_message_to_local_shards(&ShardMessage::Event(
+                ShardEvent::Gossip(event.clone()),
+            ))
+            .await?;
 
         let message = GossipMessage::new(self.args.name.clone(), event);
         self.gossip_buffer(&serialize_gossip_message(&message)?)
