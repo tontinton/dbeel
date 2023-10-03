@@ -5,7 +5,10 @@ use std::{
     time::Duration,
 };
 
-use dbeel::shards::{hash_bytes, hash_string, ClusterMetadata};
+use dbeel::{
+    shards::{hash_bytes, hash_string, ClusterMetadata},
+    tasks::db_server::{ResponseError, ResponseType},
+};
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::net::TcpStream;
 use rmp_serde::from_slice;
@@ -17,11 +20,13 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug)]
 struct Shard {
     hash: u32,
     address: SocketAddr,
 }
 
+#[derive(Debug)]
 pub struct DbeelClient {
     seed_shards: Vec<SocketAddr>,
     hash_ring: Vec<Shard>,
@@ -30,6 +35,7 @@ pub struct DbeelClient {
     write_timeout: Duration,
 }
 
+#[derive(Debug)]
 pub struct Collection<'a> {
     client: &'a DbeelClient,
     name: Utf8String,
@@ -116,11 +122,21 @@ impl DbeelClient {
         self.write_timeout = timeout;
     }
 
-    pub fn collection<S: Into<Utf8String>>(&self, name: S) -> Collection {
-        Collection {
+    pub async fn collection(&self, name: &str) -> Result<Collection> {
+        let hash = hash_string(name).map_err(Error::HashShardName)?;
+        let request = Value::Map(vec![
+            (
+                Value::String("type".into()),
+                Value::String("get_collection".into()),
+            ),
+            (Value::String("name".into()), Value::String(name.into())),
+        ]);
+        let _ = self.send_sharded_request(hash, request).await?;
+
+        Ok(Collection {
             client: self,
             name: name.into(),
-        }
+        })
     }
 
     async fn send_buffer(
@@ -199,8 +215,17 @@ impl DbeelClient {
             )
             .await
             {
-                Ok(response_encoded) => {
+                Ok(mut response_encoded)
+                    if response_encoded.last()
+                        != Some(ResponseType::Err.into()).as_ref() =>
+                {
+                    response_encoded.pop().unwrap();
                     return Ok(response_encoded);
+                }
+                Ok(mut response_encoded) => {
+                    response_encoded.pop().unwrap();
+                    let err: ResponseError = from_slice(&response_encoded)?;
+                    errors.push(Error::ServerErr(err.name, err.message));
                 }
                 Err(e) => {
                     errors.push(e);
@@ -211,7 +236,7 @@ impl DbeelClient {
         Err(Error::SendRequestToCluster(errors))
     }
 
-    pub(crate) async fn send_sharded_request(
+    async fn send_sharded_request(
         &self,
         hash: u32,
         request: Value,
@@ -225,18 +250,17 @@ impl DbeelClient {
             .await
     }
 
-    pub async fn create_collection_with_replication<S: Into<Utf8String>>(
+    pub async fn create_collection_with_replication(
         &self,
-        name: S,
+        name: &str,
         replication_factor: u16,
     ) -> Result<Collection> {
-        let name = to_utf8string(name)?;
         let request = Value::Map(vec![
             (
                 Value::String("type".into()),
                 Value::String("create_collection".into()),
             ),
-            (Value::String("name".into()), Value::String(name.clone())),
+            (Value::String("name".into()), Value::String(name.into())),
             (
                 Value::String("replication_factor".into()),
                 Value::Integer(replication_factor.into()),
@@ -244,13 +268,13 @@ impl DbeelClient {
         ]);
         self.send_request(&self.seed_shards, request).await?;
 
-        Ok(self.collection(name))
+        Ok(Collection {
+            client: self,
+            name: name.into(),
+        })
     }
 
-    pub async fn create_collection<S: Into<Utf8String>>(
-        &self,
-        name: S,
-    ) -> Result<Collection> {
+    pub async fn create_collection(&self, name: &str) -> Result<Collection> {
         self.create_collection_with_replication(name, 1).await
     }
 

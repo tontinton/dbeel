@@ -59,6 +59,7 @@ macro_rules! notify_flow_event {
 #[derive(Serialize, Deserialize)]
 pub struct ClusterMetadata {
     pub nodes: Vec<NodeMetadata>,
+    pub collections: HashMap<String, u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -588,6 +589,12 @@ impl MyShard {
     pub fn get_cluster_metadata(&self) -> ClusterMetadata {
         ClusterMetadata {
             nodes: self.get_nodes(),
+            collections: self
+                .collections
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.metadata.replication_factor))
+                .collect(),
         }
     }
 

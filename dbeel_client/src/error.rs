@@ -56,6 +56,10 @@ pub enum Error {
     /// Failed to set timeout on a socket.
     #[error("Failed to set timeout on a socket")]
     SetTimeout(glommio::GlommioError<()>),
+
+    /// Server error.
+    #[error("Server error ({0}): {1}")]
+    ServerErr(String, String),
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
