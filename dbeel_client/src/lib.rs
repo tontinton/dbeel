@@ -175,7 +175,7 @@ impl DbeelClient {
         Ok(response_buffer)
     }
 
-    pub(crate) async fn send_request(
+    async fn send_request(
         &self,
         addresses: &[SocketAddr],
         request: Value,
