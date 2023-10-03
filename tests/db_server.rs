@@ -5,8 +5,7 @@ use dbeel::{
     error::{Error, Result},
     tasks::db_server::ResponseError,
 };
-use dbeel_client::DbeelClient;
-use rmp_serde::from_slice;
+use dbeel_client::{self, DbeelClient};
 use rmpv::{decode::read_value_ref, Value, ValueRef};
 use rstest::{fixture, rstest};
 use serial_test::serial;
@@ -16,9 +15,22 @@ const ASSERT_AMOUNT_OF_TIMES: usize = 3;
 
 static ONCE: Once = Once::new();
 
-fn response_equals_error(response: Vec<u8>, e: Error) -> Result<bool> {
-    let error: ResponseError = from_slice(&response)?;
-    Ok(error.same_as(&e))
+fn response_equals_error(
+    response: dbeel_client::error::Error,
+    error: &Error,
+) -> bool {
+    if let dbeel_client::error::Error::SendRequestToCluster(errors) = response {
+        let re = ResponseError::new(error);
+        errors.into_iter().all(|e| {
+            if let dbeel_client::error::Error::ServerErr(name, message) = e {
+                name == re.name && message == re.message
+            } else {
+                panic!("Expected server error");
+            }
+        })
+    } else {
+        panic!("Expected cluster request error");
+    }
 }
 
 fn response_ok(response: Vec<u8>) -> Result<bool> {
@@ -47,16 +59,11 @@ fn get_non_existing_collection(args: Args) -> Result<()> {
         )])
         .await
         .unwrap();
-        let collection = client.collection("test");
-        let response = collection
-            .get_from_str_key("non_existing_key")
-            .await
-            .unwrap();
+
         assert!(response_equals_error(
-            response,
-            Error::CollectionNotFound("test".to_string())
-        )
-        .unwrap());
+            client.collection("test").await.unwrap_err(),
+            &Error::CollectionNotFound("test".to_string())
+        ));
     })?;
 
     Ok(())
@@ -76,16 +83,10 @@ fn drop_collection(args: Args) -> Result<()> {
         let collection = client.create_collection("test").await.unwrap();
         collection.drop().await.unwrap();
 
-        let collection = client.collection("test");
-        let response = collection
-            .get_from_str_key("non_existing_key")
-            .await
-            .unwrap();
         assert!(response_equals_error(
-            response,
-            Error::CollectionNotFound("test".to_string())
-        )
-        .unwrap());
+            client.collection("test").await.unwrap_err(),
+            &Error::CollectionNotFound("test".to_string())
+        ));
     })?;
 
     Ok(())
@@ -102,8 +103,11 @@ fn get_non_existing_key(args: Args) -> Result<()> {
         .await
         .unwrap();
         let collection = client.create_collection("test").await.unwrap();
-        let response = collection.get_from_str_key("key").await.unwrap();
-        assert!(response_equals_error(response, Error::KeyNotFound).unwrap());
+        let response = collection.get_from_str_key("key").await;
+        assert!(response_equals_error(
+            response.unwrap_err(),
+            &Error::KeyNotFound,
+        ));
     })?;
 
     Ok(())
@@ -166,7 +170,7 @@ fn set_and_get_key_after_restart(args: Args) -> Result<()> {
         .await
         .unwrap();
 
-        let collection = client.collection("test");
+        let collection = client.collection("test").await.unwrap();
         for _ in 0..ASSERT_AMOUNT_OF_TIMES {
             let response = collection.get_from_str_key("key").await.unwrap();
             let value = read_value_ref(&mut &response[..]).unwrap();
@@ -200,10 +204,11 @@ fn delete_and_get_key(args: Args) -> Result<()> {
         assert!(response_ok(response).unwrap());
 
         for _ in 0..ASSERT_AMOUNT_OF_TIMES {
-            let response = collection.get_from_str_key("key").await.unwrap();
-            assert!(
-                response_equals_error(response, Error::KeyNotFound).unwrap()
-            );
+            let response = collection.get_from_str_key("key").await;
+            assert!(response_equals_error(
+                response.unwrap_err(),
+                &Error::KeyNotFound
+            ));
         }
     })?;
 
@@ -242,8 +247,12 @@ fn multiple_collections(args: Args) -> Result<()> {
 
         collections[0].delete_from_str_key("key").await.unwrap();
 
-        let response = collections[0].get_from_str_key("key").await.unwrap();
-        assert!(response_equals_error(response, Error::KeyNotFound).unwrap());
+        let response = collections[0].get_from_str_key("key").await;
+        assert!(response_equals_error(
+            response.unwrap_err(),
+            &Error::KeyNotFound
+        ));
+
         let response = collections[1].get_from_str_key("key").await.unwrap();
         let value = read_value_ref(&mut &response[..]).unwrap();
         assert_eq!(value, ValueRef::F32(100.0));
@@ -251,10 +260,11 @@ fn multiple_collections(args: Args) -> Result<()> {
         collections[1].delete_from_str_key("key").await.unwrap();
 
         for collection in &collections {
-            let response = collection.get_from_str_key("key").await.unwrap();
-            assert!(
-                response_equals_error(response, Error::KeyNotFound).unwrap()
-            );
+            let response = collection.get_from_str_key("key").await;
+            assert!(response_equals_error(
+                response.unwrap_err(),
+                &Error::KeyNotFound
+            ));
         }
     })?;
 

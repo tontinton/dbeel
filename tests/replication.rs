@@ -144,7 +144,7 @@ fn three_nodes_replication_test(
             client.set_read_timeout(Duration::from_secs(1));
             client.set_write_timeout(Duration::from_secs(1));
 
-            let collection = client.collection("test");
+            let collection = client.collection("test").await.unwrap();
             let response = collection
                 .get_consistent(Value::String("key".into()), get_consistency)
                 .await

@@ -127,8 +127,10 @@ async fn run_benchmark(
                         continue;
                     }
 
-                    let response =
-                        read_value_ref(&mut &response_buffer[..]).unwrap();
+                    let response = read_value_ref(
+                        &mut &response_buffer[..response_buffer.len() - 1],
+                    )
+                    .unwrap();
                     if set {
                         if response != ValueRef::String("OK".into()) {
                             eprintln!("Response not OK: {}", response);
@@ -180,7 +182,9 @@ async fn send_collection_request(
     let mut response_buffer = Vec::new();
     stream.read_to_end(&mut response_buffer).await?;
 
-    let response = read_value_ref(&mut &response_buffer[..]).unwrap();
+    let response =
+        read_value_ref(&mut &response_buffer[..response_buffer.len() - 1])
+            .unwrap();
     if response != ValueRef::String("OK".into()) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,

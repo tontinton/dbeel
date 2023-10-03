@@ -1,5 +1,6 @@
 use std::{cmp::min, rc::Rc, time::Duration};
 
+use from_num::FromNum;
 use futures::{future::try_join, AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::{enclose, net::TcpListener, spawn_local, Task};
 use log::{error, trace};
@@ -27,21 +28,24 @@ const DEFAULT_GET_TIMEOUT_MS: u64 = 15000;
 
 #[derive(Serialize, Deserialize)]
 pub struct ResponseError {
-    message: String,
-    name: String,
+    pub message: String,
+    pub name: String,
 }
 
 impl ResponseError {
-    fn new(e: &Error) -> Self {
+    pub fn new(e: &Error) -> Self {
         Self {
             message: format!("{}", e),
             name: e.kind().to_string(),
         }
     }
+}
 
-    pub fn same_as(&self, e: &Error) -> bool {
-        self.message == format!("{}", e) && self.name == e.kind().to_string()
-    }
+#[derive(FromNum)]
+pub enum ResponseType {
+    Err,
+    Ok,
+    Bytes,
 }
 
 fn extract_field<'a>(map: &'a Value, field_name: &str) -> Result<&'a Value> {
@@ -120,6 +124,15 @@ async fn handle_request(
                         replication_factor,
                     ))
                     .await?;
+            }
+            Some("get_collection") => {
+                let name = extract_field_as_str(&map, "name")?;
+                let mut buf: Vec<u8> = Vec::new();
+                my_shard
+                    .get_collection(&name)?
+                    .metadata
+                    .serialize(&mut Serializer::new(&mut buf))?;
+                return Ok(Some(buf));
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
@@ -308,9 +321,11 @@ async fn handle_client(
         Ok(None) => {
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(&mut buf, &ValueRef::String("OK".into()))?;
+            buf.push(ResponseType::Bytes.into());
             client.write_all(&buf).await?;
         }
-        Ok(Some(buf)) => {
+        Ok(Some(mut buf)) => {
+            buf.push(ResponseType::Ok.into());
             client.write_all(&buf).await?;
         }
         Err(e) => {
@@ -320,6 +335,7 @@ async fn handle_client(
 
             let mut buf: Vec<u8> = Vec::new();
             ResponseError::new(&e).serialize(&mut Serializer::new(&mut buf))?;
+            buf.push(ResponseType::Err.into());
             client.write_all(&buf).await?;
         }
     }
