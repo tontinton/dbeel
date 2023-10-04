@@ -279,14 +279,13 @@ impl MyShard {
             {
                 Ok(file) => {
                     let mut reader = StreamReaderBuilder::new(file).build();
-                    reader.read_to_end(&mut buf).await?;
+                    let read = reader.read(&mut buf).await?;
+                    assert_eq!(metadata_size, read);
                     reader.close().await?;
 
-                    let mut cursor = std::io::Cursor::new(&buf[..]);
-                    collections.push((
-                        name,
-                        bincode_options().deserialize_from(&mut cursor)?,
-                    ));
+                    let metadata =
+                        bincode_options().deserialize_from(&mut &buf[..])?;
+                    collections.push((name, metadata));
                 }
                 Err(e) => panic!(
                     "Collection '{}' failed to open metadata file on disk: {}",
