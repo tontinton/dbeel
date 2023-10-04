@@ -324,12 +324,14 @@ impl MyShard {
         let metadata = CollectionMetadata { replication_factor };
 
         let path = self.get_collection_metadata_path(&name);
-        let mut writer =
-            StreamWriterBuilder::new(BufferedFile::create(path).await?).build();
-        writer
-            .write_all(&bincode_options().serialize(&metadata)?)
-            .await?;
-        writer.close().await?;
+        if !path.exists() {
+            let mut writer =
+                StreamWriterBuilder::new(BufferedFile::create(path).await?)
+                    .build();
+            let buf = bincode_options().serialize(&metadata)?;
+            writer.write_all(&buf).await?;
+            writer.close().await?;
+        }
 
         self.collections
             .borrow_mut()
