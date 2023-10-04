@@ -98,9 +98,8 @@ pub async fn get_message_from_stream(
     let size = u32::from_le_bytes(size_buf.as_slice().try_into().unwrap());
     let request_buf = read_exactly(stream, size as usize).await?;
 
-    let mut cursor = std::io::Cursor::new(&request_buf[..]);
-
-    Ok(bincode_options().deserialize_from::<_, ShardMessage>(&mut cursor)?)
+    Ok(bincode_options()
+        .deserialize_from::<_, ShardMessage>(&mut &request_buf[..])?)
 }
 
 pub async fn send_message_to_stream(

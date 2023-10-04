@@ -28,8 +28,10 @@ impl GossipMessage {
 }
 
 pub fn deserialize_gossip_message(buf: &[u8]) -> Result<GossipMessage> {
-    let mut cursor = std::io::Cursor::new(buf);
-    Ok(bincode_options().deserialize_from::<_, GossipMessage>(&mut cursor)?)
+    Ok(
+        bincode_options()
+            .deserialize_from::<_, GossipMessage>(&mut &buf[..])?,
+    )
 }
 
 pub fn serialize_gossip_message(message: &GossipMessage) -> Result<Vec<u8>> {

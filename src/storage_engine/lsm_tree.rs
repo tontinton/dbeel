@@ -338,9 +338,8 @@ impl LSMTree {
 
             let mut buf = Vec::new();
             reader.read_to_end(&mut buf).await?;
-            let mut cursor = std::io::Cursor::new(&buf[..]);
             while let Ok(action) = bincode_options()
-                .deserialize_from::<_, CompactionAction>(&mut cursor)
+                .deserialize_from::<_, CompactionAction>(&mut &buf[..])
             {
                 Self::run_compaction_action(&action)?;
             }
