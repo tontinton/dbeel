@@ -147,6 +147,8 @@ async fn handle_request(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
                 );
+                let client_iteration =
+                    extract_field_as_u16(&map, "client_iteration").unwrap_or(0);
 
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
@@ -173,7 +175,7 @@ async fn handle_request(
                                 timestamp,
                             ),
                             write_consistency as usize - 1,
-                            replications as usize - 1,
+                            (replications - client_iteration) as usize - 1,
                             |res| {
                                 response_to_empty_result!(
                                     res,
@@ -201,6 +203,8 @@ async fn handle_request(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
                 );
+                let client_iteration =
+                    extract_field_as_u16(&map, "client_iteration").unwrap_or(0);
 
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
@@ -223,7 +227,7 @@ async fn handle_request(
                                 timestamp,
                             ),
                             delete_consistency as usize - 1,
-                            replications as usize - 1,
+                            (replications - client_iteration) as usize - 1,
                             |res| {
                                 response_to_empty_result!(
                                     res,
@@ -251,6 +255,8 @@ async fn handle_request(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_GET_TIMEOUT_MS),
                 );
+                let client_iteration =
+                    extract_field_as_u16(&map, "client_iteration").unwrap_or(0);
 
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
@@ -268,7 +274,7 @@ async fn handle_request(
                         my_shard.clone().send_request_to_replicas(
                             ShardRequest::Get(collection_name, key.clone()),
                             read_consistency as usize - 1,
-                            replications as usize - 1,
+                            (replications - client_iteration) as usize - 1,
                             |res| response_to_result!(res, ShardResponse::Get),
                         );
                     let (local_value, mut values) = timeout(
