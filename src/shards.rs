@@ -117,7 +117,7 @@ impl Shard {
 }
 
 /// The metadata of a collection (saved to disk for each collection).
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     /// Number of nodes (replicas) that hold a copy for a specific key for
     /// tunable availability / consistency.

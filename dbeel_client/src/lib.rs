@@ -1,12 +1,13 @@
 pub mod error;
 
 use std::{
+    collections::HashSet,
     net::{SocketAddr, ToSocketAddrs},
     time::Duration,
 };
 
 use dbeel::{
-    shards::{hash_bytes, hash_string, ClusterMetadata},
+    shards::{hash_bytes, hash_string, ClusterMetadata, CollectionMetadata},
     tasks::db_server::{ResponseError, ResponseType},
 };
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
@@ -24,6 +25,7 @@ const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 struct Shard {
     hash: u32,
     address: SocketAddr,
+    node_name: String,
 }
 
 #[derive(Debug)]
@@ -39,6 +41,7 @@ pub struct DbeelClient {
 pub struct Collection<'a> {
     client: &'a DbeelClient,
     name: Utf8String,
+    metadata: CollectionMetadata,
 }
 
 fn to_utf8string<S: Into<Utf8String>>(
@@ -96,7 +99,11 @@ impl DbeelClient {
                 let shard_name = format!("{}-{}", node.name, shard_id);
                 let hash =
                     hash_string(&shard_name).map_err(Error::HashShardName)?;
-                hash_ring.push(Shard { hash, address });
+                hash_ring.push(Shard {
+                    hash,
+                    address,
+                    node_name: node.name.clone(),
+                });
             }
         }
         hash_ring.sort_unstable_by_key(|s| s.hash);
@@ -131,11 +138,13 @@ impl DbeelClient {
             ),
             (Value::String("name".into()), Value::String(name.into())),
         ]);
-        let _ = self.send_sharded_request(hash, request).await?;
+        let response = self.send_sharded_request(hash, request, 1).await?;
+        let metadata: CollectionMetadata = from_slice(&response)?;
 
         Ok(Collection {
             client: self,
             name: name.into(),
+            metadata,
         })
     }
 
@@ -240,14 +249,58 @@ impl DbeelClient {
         &self,
         hash: u32,
         request: Value,
+        replication_factor: u16,
     ) -> Result<Vec<u8>> {
-        let position = self
+        let start_shard_index = self
             .hash_ring
             .iter()
             .position(|s| s.hash >= hash)
             .unwrap_or(0);
-        self.send_request(&[self.hash_ring[position].address], request)
-            .await
+
+        let mut errors = Vec::new();
+
+        let mut owning_shards_found = 0;
+        let mut nodes = HashSet::new();
+        let mut i = 0;
+        let mut shard_index = start_shard_index;
+        while i == 0 || shard_index != start_shard_index {
+            let shard = &self.hash_ring[shard_index];
+            if !nodes.contains(&shard.node_name) {
+                let mut replica_request = request.clone();
+                if let Value::Map(items) = &mut replica_request {
+                    items.push((
+                        "client_iteration".into(),
+                        owning_shards_found.into(),
+                    ));
+                }
+
+                match self.send_request(&[shard.address], replica_request).await
+                {
+                    Ok(response) => {
+                        return Ok(response);
+                    }
+                    Err(Error::SendRequestToCluster(mut e)) => {
+                        errors.push(e.pop().unwrap());
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                    }
+                }
+
+                owning_shards_found += 1;
+                if owning_shards_found >= replication_factor {
+                    break;
+                }
+
+                nodes.insert(&shard.node_name);
+            }
+
+            i += 1;
+            shard_index =
+                (start_shard_index + i as usize) % self.hash_ring.len();
+        }
+
+        Err(Error::SendRequestToCluster(errors))
     }
 
     pub async fn create_collection_with_replication(
@@ -271,6 +324,7 @@ impl DbeelClient {
         Ok(Collection {
             client: self,
             name: name.into(),
+            metadata: CollectionMetadata { replication_factor },
         })
     }
 
@@ -317,7 +371,13 @@ impl<'a> Collection<'a> {
                 Value::Integer(consistency.into()),
             ),
         ]);
-        self.client.send_sharded_request(hash, request).await
+        self.client
+            .send_sharded_request(
+                hash,
+                request,
+                self.metadata.replication_factor,
+            )
+            .await
     }
 
     pub async fn get(&self, key: Value) -> Result<Vec<u8>> {
@@ -354,7 +414,13 @@ impl<'a> Collection<'a> {
                 Value::Integer(consistency.into()),
             ),
         ]);
-        self.client.send_sharded_request(hash, request).await
+        self.client
+            .send_sharded_request(
+                hash,
+                request,
+                self.metadata.replication_factor,
+            )
+            .await
     }
 
     pub async fn set(&self, key: Value, value: Value) -> Result<Vec<u8>> {
@@ -390,7 +456,13 @@ impl<'a> Collection<'a> {
                 Value::Integer(consistency.into()),
             ),
         ]);
-        self.client.send_sharded_request(hash, request).await
+        self.client
+            .send_sharded_request(
+                hash,
+                request,
+                self.metadata.replication_factor,
+            )
+            .await
     }
 
     pub async fn delete(&self, key: Value) -> Result<Vec<u8>> {
