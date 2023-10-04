@@ -7,8 +7,8 @@ use event_listener::Event;
 use futures::{
     future::join_all,
     stream::{FuturesUnordered, StreamExt},
+    AsyncReadExt, AsyncWriteExt,
 };
-use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::io::StreamWriterBuilder;
 use glommio::{
     io::{BufferedFile, StreamReaderBuilder},

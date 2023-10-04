@@ -1,7 +1,6 @@
 use bincode::Options;
 use event_listener::{Event, EventListener};
-use futures::try_join;
-use futures_lite::{AsyncReadExt, AsyncWriteExt};
+use futures::{try_join, AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
     io::{
@@ -1010,7 +1009,7 @@ mod tests {
     };
 
     use ctor::ctor;
-    use futures_lite::{io::Cursor, AsyncWrite, Future};
+    use futures::{io::Cursor, AsyncWrite, Future};
     use glommio::{LocalExecutorBuilder, Placement};
     use tempfile::tempdir;
 

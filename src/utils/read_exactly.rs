@@ -1,4 +1,4 @@
-use futures_lite::{AsyncRead, AsyncReadExt};
+use futures::{AsyncRead, AsyncReadExt};
 
 pub async fn read_exactly(
     stream: &mut (impl AsyncRead + Unpin),

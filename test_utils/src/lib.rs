@@ -10,8 +10,7 @@ use dbeel::{
 };
 
 use async_channel::Receiver;
-use futures::future::try_join_all;
-use futures_lite::Future;
+use futures::{future::try_join_all, Future};
 use glommio::{
     enclose, spawn_local, ExecutorJoinHandle, LocalExecutorBuilder, Placement,
 };

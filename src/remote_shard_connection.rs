@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use bincode::Options;
-use futures_lite::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use futures::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::net::TcpStream;
 
 use crate::{
