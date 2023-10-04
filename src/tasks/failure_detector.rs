@@ -15,9 +15,13 @@ use crate::{
 async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
     let interval =
         Duration::from_millis(my_shard.args.failure_detection_interval);
+    let mut should_sleep = true;
 
     loop {
-        sleep(interval).await;
+        if should_sleep {
+            sleep(interval).await;
+        }
+        should_sleep = true;
 
         let mut rng = thread_rng();
         let node = if let Some(node) = my_shard
@@ -32,6 +36,9 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
         } else {
             continue;
         };
+
+        sleep(interval).await;
+        should_sleep = false;
 
         let connection = RemoteShardConnection::from_args(
             format!(
