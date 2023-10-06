@@ -43,6 +43,79 @@ struct Args {
 
 const COLLECTION_NAME: &str = "dbeel";
 
+async fn request(
+    set: bool,
+    cpus: usize,
+    ip: &str,
+    base_port: u16,
+    client_index: usize,
+    request_index: usize,
+) -> Option<Duration> {
+    let mut data_encoded: Vec<u8> = Vec::new();
+    let key = format!("{}_{}", client_index, request_index);
+    let key_str = key.as_str();
+
+    let hash = murmur3_32(&mut std::io::Cursor::new(key_str), 0).unwrap();
+    let port = base_port + (hash % (cpus as u32)) as u16;
+
+    let request_type = if set { "set" } else { "get" };
+
+    let mut parameters = vec![
+        (
+            Value::String("type".into()),
+            Value::String(request_type.into()),
+        ),
+        (
+            Value::String("collection".into()),
+            Value::String(COLLECTION_NAME.into()),
+        ),
+        (Value::String("key".into()), Value::String(key_str.into())),
+    ];
+    if set {
+        parameters.push((
+            Value::String("value".into()),
+            Value::String(key_str.into()),
+        ));
+    };
+    let map = Value::Map(parameters);
+    write_value(&mut data_encoded, &map).unwrap();
+
+    let start_time = Instant::now();
+    let mut stream = TcpStream::connect((ip, port)).await.unwrap();
+
+    let size_buffer = (data_encoded.len() as u16).to_le_bytes();
+    if let Err(e) = stream.write_all(&size_buffer).await {
+        eprintln!("Failed to send size: {}", e);
+        return None;
+    }
+
+    if let Err(e) = stream.write_all(&data_encoded).await {
+        eprintln!("Failed to send data: {}", e);
+        return None;
+    }
+
+    let mut response_buffer = Vec::new();
+    if let Err(e) = stream.read_to_end(&mut response_buffer).await {
+        eprintln!("Failed to receive response: {}", e);
+        return None;
+    }
+
+    let response =
+        read_value_ref(&mut &response_buffer[..response_buffer.len() - 1])
+            .unwrap();
+    if set {
+        if response != ValueRef::String("OK".into()) {
+            eprintln!("Response not OK: {}", response);
+            return None;
+        }
+    } else if response != ValueRef::String(key_str.into()) {
+        eprintln!("Response not OK: {}", response);
+        return None;
+    }
+
+    Some(Instant::now().duration_since(start_time))
+}
+
 async fn run_benchmark(
     ip: String,
     base_port: u16,
@@ -54,11 +127,11 @@ async fn run_benchmark(
 
     let cpus: Vec<CpuLocation> =
         CpuSet::online().unwrap().into_iter().collect();
-    let half_cpus = cpus.len() / 2;
+    let cpus_num = cpus.len() / 2;
 
     for client_index in 0..num_clients {
         let executor = LocalExecutorBuilder::new(Placement::Fixed(
-            half_cpus + client_index % half_cpus,
+            cpus_num + client_index % cpus_num,
         ));
 
         let ip = ip.clone();
@@ -66,83 +139,25 @@ async fn run_benchmark(
             .name(format!("client-{}", client_index).as_str())
             .spawn(move || async move {
                 let mut stats = Vec::new();
-                let request_type = if set { "set" } else { "get" };
 
                 let mut indices: Vec<usize> = (0..num_requests).collect();
                 indices.shuffle(&mut thread_rng());
 
                 for request_index in indices {
-                    let mut data_encoded: Vec<u8> = Vec::new();
-                    let key = format!("{}_{}", client_index, request_index);
-                    let key_str = key.as_str();
-
-                    let hash =
-                        murmur3_32(&mut std::io::Cursor::new(key_str), 0)
-                            .unwrap();
-                    let port = base_port + (hash % (half_cpus as u32)) as u16;
-
-                    let mut parameters = vec![
-                        (
-                            Value::String("type".into()),
-                            Value::String(request_type.into()),
-                        ),
-                        (
-                            Value::String("collection".into()),
-                            Value::String(COLLECTION_NAME.into()),
-                        ),
-                        (
-                            Value::String("key".into()),
-                            Value::String(key_str.into()),
-                        ),
-                    ];
-                    if set {
-                        parameters.push((
-                            Value::String("value".into()),
-                            Value::String(key_str.into()),
-                        ));
-                    };
-                    let map = Value::Map(parameters);
-                    write_value(&mut data_encoded, &map).unwrap();
-
-                    let start_time = Instant::now();
-                    let mut stream =
-                        TcpStream::connect((ip.as_str(), port)).await.unwrap();
-
-                    let size_buffer = (data_encoded.len() as u16).to_le_bytes();
-                    if let Err(e) = stream.write_all(&size_buffer).await {
-                        eprintln!("Failed to send size: {}", e);
-                        continue;
-                    }
-
-                    if let Err(e) = stream.write_all(&data_encoded).await {
-                        eprintln!("Failed to send data: {}", e);
-                        continue;
-                    }
-
-                    let mut response_buffer = Vec::new();
-                    if let Err(e) =
-                        stream.read_to_end(&mut response_buffer).await
-                    {
-                        eprintln!("Failed to receive response: {}", e);
-                        continue;
-                    }
-
-                    let response = read_value_ref(
-                        &mut &response_buffer[..response_buffer.len() - 1],
+                    if let Some(duration) = request(
+                        set,
+                        cpus_num,
+                        &ip,
+                        base_port,
+                        client_index,
+                        request_index,
                     )
-                    .unwrap();
-                    if set {
-                        if response != ValueRef::String("OK".into()) {
-                            eprintln!("Response not OK: {}", response);
-                            continue;
-                        }
-                    } else if response != ValueRef::String(key_str.into()) {
-                        eprintln!("Response not OK: {}", response);
-                        continue;
+                    .await
+                    {
+                        stats.push(duration);
                     }
-
-                    stats.push(Instant::now().duration_since(start_time));
                 }
+
                 stats
             })
             .unwrap();
