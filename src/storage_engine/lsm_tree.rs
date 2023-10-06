@@ -426,7 +426,6 @@ impl LSMTree {
             .create(true)
             .dma_open(&wal_path)
             .await?;
-        wal_file.hint_extent_size(PAGE_SIZE * tree_capacity).await?;
         let wal_offset = wal_file.file_size().await?;
 
         let active_memtable = if wal_path.exists() {
@@ -793,10 +792,6 @@ impl LSMTree {
         page_cache: Rc<PartitionPageCache<(&'static str, usize)>>,
     ) -> Result<usize> {
         let table_length = memtable.len();
-
-        index_file
-            .hint_extent_size(INDEX_ENTRY_SIZE * table_length)
-            .await?;
 
         let mut entry_writer = EntryWriter::new_from_dma(
             data_file,
