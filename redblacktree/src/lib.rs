@@ -66,7 +66,7 @@ impl<K: Ord, V> Ord for NodePtr<K, V> {
 
 impl<K: Ord, V> PartialOrd for NodePtr<K, V> {
     fn partial_cmp(&self, other: &NodePtr<K, V>) -> Option<Ordering> {
-        unsafe { Some((*self.0).key.cmp(&(*other.0).key)) }
+        Some(self.cmp(other))
     }
 }
 
