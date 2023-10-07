@@ -7,6 +7,7 @@ use glommio::{
         DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
     },
     spawn_local,
+    timer::sleep,
 };
 use log::{error, trace};
 use redblacktree::RedBlackTree;
@@ -21,6 +22,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     rc::Rc,
+    time::Duration,
 };
 
 use super::{
@@ -286,6 +288,12 @@ pub struct LSMTree {
 
     /// The current end offset of the wal file.
     wal_offset: Cell<u64>,
+
+    /// The fsync delay, for when throughput is more desirable than latency.
+    wal_sync_delay: Duration,
+
+    /// Used for waiting for a scheduled wal sync.
+    wal_sync_event: RefCell<Option<Rc<Event>>>,
 }
 
 impl LSMTree {
@@ -293,18 +301,20 @@ impl LSMTree {
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<Self> {
-        Self::open_or_create_with_tree_capacity(
+        Self::open_or_create_ex(
             dir,
             page_cache,
             DEFAULT_TREE_CAPACITY,
+            Duration::ZERO,
         )
         .await
     }
 
-    pub async fn open_or_create_with_tree_capacity(
+    pub async fn open_or_create_ex(
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
         tree_capacity: usize,
+        wal_sync_delay: Duration,
     ) -> Result<Self> {
         assert_eq!(
             bincode_options()
@@ -445,6 +455,8 @@ impl LSMTree {
             memtable_index: Cell::new(wal_file_index),
             wal_file: RefCell::new(Rc::new(wal_file)),
             wal_offset: Cell::new(wal_offset),
+            wal_sync_delay,
+            wal_sync_event: RefCell::new(None),
         })
     }
 
@@ -693,8 +705,26 @@ impl LSMTree {
         self.wal_offset.set(offset + size_padded);
 
         file.write_at(buf, offset).await?;
+
         if SYNC_WAL_FILE {
-            file.fdatasync().await?;
+            if self.wal_sync_delay.is_zero() {
+                file.fdatasync().await?;
+            } else {
+                let maybe_event =
+                    self.wal_sync_event.borrow().as_ref().cloned();
+                if let Some(event) = maybe_event {
+                    event.listen().await;
+                } else {
+                    let event = Rc::new(Event::new());
+
+                    self.wal_sync_event.replace(Some(event.clone()));
+                    sleep(self.wal_sync_delay).await;
+                    self.wal_sync_event.replace(None);
+
+                    file.fdatasync().await?;
+                    event.notify(usize::MAX);
+                }
+            }
         }
 
         Ok(())
@@ -737,6 +767,7 @@ impl LSMTree {
         self.wal_file
             .replace(Rc::new(DmaFile::create(&next_wal_path).await?));
         self.wal_offset.set(0);
+        self.wal_sync_event.replace(None);
 
         let (data_filename, index_filename) =
             get_data_file_paths(&self.dir, self.write_sstable_index.get());
@@ -1025,10 +1056,11 @@ mod tests {
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<LSMTree> {
-        LSMTree::open_or_create_with_tree_capacity(
+        LSMTree::open_or_create_ex(
             dir,
             page_cache,
             TEST_TREE_CAPACITY,
+            Duration::ZERO,
         )
         .await
     }
