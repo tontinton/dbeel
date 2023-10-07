@@ -56,7 +56,7 @@ assert DB.drop("test") == "OK"
 ```
 
 ## Performance
-Running the benchmark on my machine ([System76 lemp11](https://tech-docs.system76.com/models/lemp11/README.html)) with no fdatasync results in the following output:
+Running the benchmark on my machine ([System76 lemp11](https://tech-docs.system76.com/models/lemp11/README.html)) with no `fdatasync` results in the following output:
 
 ```
 Set:
@@ -68,7 +68,7 @@ total: 61.716233278s, min: 69.543µs, p50: 533.423µs, p90: 1.081879ms, p99: 1.7
 
 Meaning the median user will have ~3 writes in a millisecond and ~2 reads in a millisecond.
 
-Running with fdatasync results in the following output for Set:
+Running with `--wal-sync` (`fdatasync`s after each write) results in the following output for Set (note that `fdatasync` on my machine takes 6-10ms):
 
 ```
 Set:
