@@ -4,7 +4,7 @@ use event_listener::Event;
 use glommio::io::DmaFile;
 
 use super::page_cache::{align_down, align_up, PartitionPageCache, PAGE_SIZE};
-use crate::error::Result;
+use crate::{error::Result, storage_engine::page_cache::Page};
 
 /// Number of times to try to get from the cache right after waiting for the
 /// page to be read.
@@ -58,7 +58,7 @@ impl CachedFileReader {
             let write_size = end - start;
 
             for i in 0..RETRIES {
-                if let Some(page) = &self.cache.get(self.id, address) {
+                if let Some(page) = self.cache.get(self.id, address) {
                     output_buf[written..written + write_size]
                         .copy_from_slice(&page[start..end]);
                     written += write_size;
@@ -99,7 +99,7 @@ impl CachedFileReader {
                     let mut page_buf = [0; PAGE_SIZE];
                     page_buf[..page.len()].copy_from_slice(&page);
 
-                    self.cache.set(self.id, address, page_buf);
+                    self.cache.set(self.id, address, Page::new(page_buf));
                 }
 
                 break;
