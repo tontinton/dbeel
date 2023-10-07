@@ -6,7 +6,7 @@ use glommio::io::{DmaFile, DmaStreamWriterBuilder};
 
 use super::{
     cached_file_reader::FileId,
-    page_cache::{PartitionPageCache, PAGE_SIZE},
+    page_cache::{Page, PartitionPageCache, PAGE_SIZE},
     Entry, EntryOffset, DATA_FILE_EXT, DMA_STREAM_NUMBER_OF_BUFFERS,
     INDEX_ENTRY_SIZE, INDEX_FILE_EXT,
 };
@@ -107,7 +107,7 @@ impl EntryWriter {
                 self.page_cache.set(
                     (ext, self.files_index),
                     *written as u64 - PAGE_SIZE as u64,
-                    std::mem::replace(buf, [0; PAGE_SIZE]),
+                    Page::new(std::mem::replace(buf, [0; PAGE_SIZE])),
                 );
 
                 // Write whatever is left in the chunk.
@@ -124,7 +124,7 @@ impl EntryWriter {
             self.page_cache.set(
                 (DATA_FILE_EXT, self.files_index),
                 (self.data_written - data_left) as u64,
-                self.data_buf,
+                Page::new(self.data_buf),
             );
         }
         let index_left = self.index_written % PAGE_SIZE;
@@ -132,7 +132,7 @@ impl EntryWriter {
             self.page_cache.set(
                 (INDEX_FILE_EXT, self.files_index),
                 (self.index_written - index_left) as u64,
-                self.index_buf,
+                Page::new(self.index_buf),
             );
         }
 
