@@ -399,21 +399,21 @@ impl LSMTree {
                     MEMTABLE_FILE_EXT,
                 );
                 let (data_file_path, index_file_path) =
-                    get_data_file_paths(&dir, unflashed_file_index);
+                    get_data_file_paths(&dir, wal_file_index);
                 let memtable = Self::read_memtable_from_wal_file(
                     &unflashed_file_path,
                     tree_capacity,
                 )
                 .await?;
                 let (data_file, index_file) = try_join!(
-                    DmaFile::open(&data_file_path),
-                    DmaFile::open(&index_file_path)
+                    DmaFile::create(&data_file_path),
+                    DmaFile::create(&index_file_path)
                 )?;
                 Self::flush_memtable_to_disk(
                     memtable.into_iter().collect(),
                     data_file,
                     index_file,
-                    unflashed_file_index,
+                    wal_file_index,
                     page_cache.clone(),
                 )
                 .await?;
