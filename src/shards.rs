@@ -307,11 +307,18 @@ impl MyShard {
 
     async fn create_lsm_tree(&self, name: String) -> Result<LSMTree> {
         let cache = self.cache.clone();
+
+        let wal_sync_delay = if self.args.wal_sync {
+            Some(Duration::from_micros(self.args.wal_sync_delay))
+        } else {
+            None
+        };
+
         LSMTree::open_or_create_ex(
             self.get_collection_dir(&name),
             PartitionPageCache::new(name, cache),
             DEFAULT_TREE_CAPACITY,
-            Duration::from_micros(self.args.wal_sync_delay),
+            wal_sync_delay,
         )
         .await
     }

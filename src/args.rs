@@ -141,6 +141,13 @@ Note that on many systems, the effective resolution of sleep delays is 10 \
         default_value = "0"
     )]
     pub wal_sync_delay: u64,
+
+    #[clap(
+        long,
+        help = "Call fdatasync on the WAL file after each write.",
+        default_value = "false"
+    )]
+    pub wal_sync: bool,
 }
 
 pub fn parse_args() -> Args {
