@@ -1,8 +1,9 @@
 use clap::Parser;
+use futures::future::join_all;
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
-    net::TcpStream, timer::sleep, CpuLocation, CpuSet, LocalExecutorBuilder,
-    Placement,
+    net::TcpStream, spawn_local, timer::sleep, CpuLocation, CpuSet,
+    LocalExecutorBuilder, Placement,
 };
 use murmur3::murmur3_32;
 use rand::{seq::SliceRandom, thread_rng};
@@ -39,6 +40,13 @@ struct Args {
         default_value = "5000"
     )]
     requests: usize,
+
+    #[clap(
+        long,
+        help = "Number of async tasks per core.",
+        default_value = "2"
+    )]
+    tasks: usize,
 }
 
 const COLLECTION_NAME: &str = "dbeel";
@@ -121,44 +129,57 @@ async fn run_benchmark(
     base_port: u16,
     num_clients: usize,
     num_requests: usize,
+    num_tasks: usize,
     set: bool,
 ) -> Vec<(usize, Vec<Duration>)> {
     let mut handles = Vec::new();
 
     let cpus: Vec<CpuLocation> =
         CpuSet::online().unwrap().into_iter().collect();
-    let cpus_num = cpus.len() / 2;
+    let half_cpus = cpus.len() / 2;
 
     for client_index in 0..num_clients {
         let executor = LocalExecutorBuilder::new(Placement::Fixed(
-            cpus_num + client_index % cpus_num,
+            half_cpus + client_index % half_cpus,
         ));
 
         let ip = ip.clone();
         let handle = executor
             .name(format!("client-{}", client_index).as_str())
             .spawn(move || async move {
-                let mut stats = Vec::new();
-
                 let mut indices: Vec<usize> = (0..num_requests).collect();
                 indices.shuffle(&mut thread_rng());
 
-                for request_index in indices {
-                    if let Some(duration) = request(
-                        set,
-                        cpus_num,
-                        &ip,
-                        base_port,
-                        client_index,
-                        request_index,
-                    )
-                    .await
-                    {
-                        stats.push(duration);
-                    }
+                let mut tasks = Vec::with_capacity(num_tasks);
+                for request_indices in indices.chunks(num_requests / num_tasks)
+                {
+                    let chunk = request_indices
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let ip = ip.clone();
+                    tasks.push(spawn_local(async move {
+                        let mut stats = Vec::new();
+                        for request_index in chunk {
+                            if let Some(duration) = request(
+                                set,
+                                half_cpus,
+                                &ip,
+                                base_port,
+                                client_index,
+                                request_index,
+                            )
+                            .await
+                            {
+                                stats.push(duration);
+                            }
+                        }
+                        stats
+                    }));
                 }
 
-                stats
+                let results = join_all(tasks).await;
+                results.into_iter().flatten().collect::<Vec<_>>()
             })
             .unwrap();
 
@@ -257,6 +278,7 @@ fn main() {
                 address.1,
                 args.clients,
                 args.requests,
+                args.tasks,
                 true,
             )
             .await;
@@ -266,6 +288,7 @@ fn main() {
                 address.1,
                 args.clients,
                 args.requests,
+                args.tasks,
                 false,
             )
             .await;
