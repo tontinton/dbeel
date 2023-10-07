@@ -1,9 +1,14 @@
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+use event_listener::Event;
 use glommio::io::DmaFile;
 
 use super::page_cache::{align_down, align_up, PartitionPageCache, PAGE_SIZE};
 use crate::error::Result;
+
+/// Number of times to try to get from the cache right after waiting for the
+/// page to be read.
+const RETRIES: usize = 2;
 
 pub type FileId = (&'static str, usize);
 
@@ -11,6 +16,7 @@ pub struct CachedFileReader {
     id: FileId,
     file: DmaFile,
     cache: Rc<PartitionPageCache<FileId>>,
+    read_events: RefCell<HashMap<u64, Rc<Event>>>,
 }
 
 impl CachedFileReader {
@@ -19,7 +25,12 @@ impl CachedFileReader {
         file: DmaFile,
         cache: Rc<PartitionPageCache<FileId>>,
     ) -> Self {
-        Self { id, file, cache }
+        Self {
+            id,
+            file,
+            cache,
+            read_events: RefCell::new(HashMap::new()),
+        }
     }
 
     pub async fn read_at_into(
@@ -46,15 +57,40 @@ impl CachedFileReader {
             let end = std::cmp::min(PAGE_SIZE, size - written + start);
             let write_size = end - start;
 
-            match &self.cache.get(self.id, address) {
-                Some(page) => {
+            for i in 0..RETRIES {
+                if let Some(page) = &self.cache.get(self.id, address) {
                     output_buf[written..written + write_size]
                         .copy_from_slice(&page[start..end]);
                     written += write_size;
-                }
-                None => {
+                } else {
+                    let mut first_reader = false;
+                    if i < RETRIES - 1 {
+                        let maybe_event =
+                            self.read_events.borrow().get(&address).cloned();
+                        if let Some(event) = maybe_event {
+                            event.listen().await;
+                            continue;
+                        } else {
+                            first_reader = true;
+                        }
+                    }
+
+                    if first_reader {
+                        self.read_events
+                            .borrow_mut()
+                            .insert(address, Rc::new(Event::new()));
+                    }
+
                     let page =
                         self.file.read_at_aligned(address, PAGE_SIZE).await?;
+
+                    if first_reader {
+                        if let Some(event) =
+                            self.read_events.borrow_mut().remove(&address)
+                        {
+                            event.notify(usize::MAX);
+                        }
+                    }
 
                     output_buf[written..written + write_size]
                         .copy_from_slice(&page[start..end]);
@@ -65,6 +101,8 @@ impl CachedFileReader {
 
                     self.cache.set(self.id, address, page_buf);
                 }
+
+                break;
             }
         }
 
