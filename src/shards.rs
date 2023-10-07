@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use async_channel::{Receiver, Sender};
@@ -28,6 +29,7 @@ use crate::gossip::{
     serialize_gossip_message, GossipEvent, GossipEventKind, GossipMessage,
 };
 use crate::messages::{NodeMetadata, ShardRequest, ShardResponse};
+use crate::storage_engine::DEFAULT_TREE_CAPACITY;
 use crate::tasks::migration::{
     spawn_migration_actions_tasks, MigrationAction, RangeAndAction,
 };
@@ -305,9 +307,11 @@ impl MyShard {
 
     async fn create_lsm_tree(&self, name: String) -> Result<LSMTree> {
         let cache = self.cache.clone();
-        LSMTree::open_or_create(
+        LSMTree::open_or_create_ex(
             self.get_collection_dir(&name),
             PartitionPageCache::new(name, cache),
+            DEFAULT_TREE_CAPACITY,
+            Duration::from_micros(self.args.wal_sync_delay),
         )
         .await
     }

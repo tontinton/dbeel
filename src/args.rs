@@ -131,6 +131,16 @@ retransmitting the event again.",
         default_value = "1073741824"
     )]
     pub page_cache_size: usize,
+
+    #[clap(
+        long,
+        help = "How much time (in microseconds) to delay the WAL sync.
+0 means no delay, sync on every write.
+Note that on many systems, the effective resolution of sleep delays is 10 \
+            milliseconds, so test your system before setting this value.",
+        default_value = "0"
+    )]
+    pub wal_sync_delay: u64,
 }
 
 pub fn parse_args() -> Args {
