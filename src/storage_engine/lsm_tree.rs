@@ -39,9 +39,6 @@ use crate::{
     utils::{bincode::bincode_options, get_first_capture},
 };
 
-// Whether to ensure full durability against system crashes.
-const SYNC_WAL_FILE: bool = false;
-
 type MemTable = RedBlackTree<Vec<u8>, EntryValue>;
 
 #[derive(Eq, PartialEq)]
@@ -290,7 +287,8 @@ pub struct LSMTree {
     wal_offset: Cell<u64>,
 
     /// The fsync delay, for when throughput is more desirable than latency.
-    wal_sync_delay: Duration,
+    /// When None, never sync after a write.
+    wal_sync_delay: Option<Duration>,
 
     /// Used for waiting for a scheduled wal sync.
     wal_sync_event: RefCell<Option<Rc<Event>>>,
@@ -301,20 +299,15 @@ impl LSMTree {
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<Self> {
-        Self::open_or_create_ex(
-            dir,
-            page_cache,
-            DEFAULT_TREE_CAPACITY,
-            Duration::ZERO,
-        )
-        .await
+        Self::open_or_create_ex(dir, page_cache, DEFAULT_TREE_CAPACITY, None)
+            .await
     }
 
     pub async fn open_or_create_ex(
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
         tree_capacity: usize,
-        wal_sync_delay: Duration,
+        wal_sync_delay: Option<Duration>,
     ) -> Result<Self> {
         assert_eq!(
             bincode_options()
@@ -706,10 +699,11 @@ impl LSMTree {
 
         file.write_at(buf, offset).await?;
 
-        if SYNC_WAL_FILE {
-            if self.wal_sync_delay.is_zero() {
+        match self.wal_sync_delay {
+            Some(delay) if delay.is_zero() => {
                 file.fdatasync().await?;
-            } else {
+            }
+            Some(delay) => {
                 let maybe_event =
                     self.wal_sync_event.borrow().as_ref().cloned();
                 if let Some(event) = maybe_event {
@@ -718,13 +712,14 @@ impl LSMTree {
                     let event = Rc::new(Event::new());
 
                     self.wal_sync_event.replace(Some(event.clone()));
-                    sleep(self.wal_sync_delay).await;
+                    sleep(delay).await;
                     self.wal_sync_event.replace(None);
 
                     file.fdatasync().await?;
                     event.notify(usize::MAX);
                 }
             }
+            None => {}
         }
 
         Ok(())
@@ -1056,13 +1051,8 @@ mod tests {
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<LSMTree> {
-        LSMTree::open_or_create_ex(
-            dir,
-            page_cache,
-            TEST_TREE_CAPACITY,
-            Duration::ZERO,
-        )
-        .await
+        LSMTree::open_or_create_ex(dir, page_cache, TEST_TREE_CAPACITY, None)
+            .await
     }
 
     fn partitioned_cache(cache: &GlobalCache) -> PartitionPageCache<FileId> {
