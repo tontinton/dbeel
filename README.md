@@ -68,7 +68,7 @@ total: 61.716233278s, min: 69.543µs, p50: 533.423µs, p90: 1.081879ms, p99: 1.7
 
 Meaning the median user will have ~3 writes in a millisecond and ~2 reads in a millisecond.
 
-Running with `--wal-sync` (`fdatasync`) results in the following output for Set (note that `fdatasync` on my machine takes 6-10ms):
+Running with `--wal-sync` (calls `fdatasync` after each write to the WAL file) results in the following output for Set (note that `fdatasync` on my machine takes 6-10ms):
 
 ```
 Set:
