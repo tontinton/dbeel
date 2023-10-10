@@ -136,11 +136,11 @@ async fn run_benchmark(
 
     let cpus: Vec<CpuLocation> =
         CpuSet::online().unwrap().into_iter().collect();
-    let half_cpus = cpus.len() / 2;
+    let cpus_len = cpus.len();
 
     for client_index in 0..num_clients {
         let executor = LocalExecutorBuilder::new(Placement::Fixed(
-            half_cpus + client_index % half_cpus,
+            client_index % cpus_len,
         ));
 
         let ip = ip.clone();
@@ -163,7 +163,7 @@ async fn run_benchmark(
                         for request_index in chunk {
                             if let Some(duration) = request(
                                 set,
-                                half_cpus,
+                                cpus_len,
                                 &ip,
                                 base_port,
                                 client_index,
