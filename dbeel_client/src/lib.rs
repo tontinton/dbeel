@@ -91,11 +91,13 @@ impl DbeelClient {
 
         let mut hash_ring = Vec::new();
         for node in metadata.nodes {
-            let address = format!("{}:{}", node.ip, node.db_port)
-                .to_socket_addrs()
-                .map_err(Error::ParsingSocketAddress)?
-                .collect::<Vec<_>>()[0];
             for shard_id in node.ids {
+                let address =
+                    format!("{}:{}", node.ip, node.db_port + shard_id)
+                        .to_socket_addrs()
+                        .map_err(Error::ParsingSocketAddress)?
+                        .collect::<Vec<_>>()[0];
+
                 let shard_name = format!("{}-{}", node.name, shard_id);
                 let hash =
                     hash_string(&shard_name).map_err(Error::HashShardName)?;
