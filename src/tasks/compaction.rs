@@ -1,7 +1,7 @@
 use std::{pin::Pin, rc::Rc};
 
 use event_listener::EventListener;
-use futures::future::{select, select_all, Either};
+use futures::future::{join_all, select, select_all, Either};
 use glommio::{spawn_local, Task};
 use log::error;
 
@@ -29,10 +29,48 @@ async fn get_trees_and_listeners(
     (trees, listeners)
 }
 
+async fn compact_tree(tree: Rc<LSMTree>, compaction_factor: usize) {
+    'current_tree_compaction: loop {
+        let (even, mut odd): (Vec<usize>, Vec<usize>) =
+            tree.sstable_indices().iter().partition(|i| *i % 2 == 0);
+
+        if even.len() >= compaction_factor {
+            let new_index = even[even.len() - 1] + 1;
+            if let Err(e) = tree.compact(even, new_index, odd.is_empty()).await
+            {
+                error!("Failed to compact files: {}", e);
+            }
+            continue 'current_tree_compaction;
+        }
+
+        if odd.len() >= compaction_factor && !even.is_empty() {
+            debug_assert!(even[0] > odd[odd.len() - 1]);
+
+            odd.push(even[0]);
+
+            let new_index = even[0] + 1;
+            if let Err(e) = tree.compact(odd, new_index, true).await {
+                error!("Failed to compact files: {}", e);
+            }
+            continue 'current_tree_compaction;
+        }
+
+        break 'current_tree_compaction;
+    }
+}
+
 async fn run_compaction_loop(my_shard: Rc<MyShard>) {
     let compaction_factor = my_shard.args.compaction_factor;
 
     let (mut trees, mut listeners) = get_trees_and_listeners(&my_shard).await;
+
+    // Try to compact once, in case we return from a crash and want to compact
+    // whatever files are currently saved.
+    let futures = trees
+        .iter()
+        .cloned()
+        .map(|tree| compact_tree(tree, compaction_factor));
+    join_all(futures).await;
 
     loop {
         match select(
@@ -47,38 +85,7 @@ async fn run_compaction_loop(my_shard: Rc<MyShard>) {
             Either::Right(((_, i, _), _)) => {
                 let tree = &trees[i];
                 listeners[i] = tree.get_flush_event_listener();
-
-                'current_tree_compaction: loop {
-                    let (even, mut odd): (Vec<usize>, Vec<usize>) = tree
-                        .sstable_indices()
-                        .iter()
-                        .partition(|i| *i % 2 == 0);
-
-                    if even.len() >= compaction_factor {
-                        let new_index = even[even.len() - 1] + 1;
-                        if let Err(e) =
-                            tree.compact(even, new_index, odd.is_empty()).await
-                        {
-                            error!("Failed to compact files: {}", e);
-                        }
-                        continue 'current_tree_compaction;
-                    }
-
-                    if odd.len() >= compaction_factor && !even.is_empty() {
-                        debug_assert!(even[0] > odd[odd.len() - 1]);
-
-                        odd.push(even[0]);
-
-                        let new_index = even[0] + 1;
-                        if let Err(e) = tree.compact(odd, new_index, true).await
-                        {
-                            error!("Failed to compact files: {}", e);
-                        }
-                        continue 'current_tree_compaction;
-                    }
-
-                    break 'current_tree_compaction;
-                }
+                compact_tree(tree.clone(), compaction_factor).await;
             }
         };
     }
