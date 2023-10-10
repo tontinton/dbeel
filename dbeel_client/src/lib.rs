@@ -21,14 +21,14 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Shard {
     hash: u32,
     address: SocketAddr,
     node_name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DbeelClient {
     seed_shards: Vec<SocketAddr>,
     hash_ring: Vec<Shard>,
@@ -37,9 +37,9 @@ pub struct DbeelClient {
     write_timeout: Duration,
 }
 
-#[derive(Debug)]
-pub struct Collection<'a> {
-    client: &'a DbeelClient,
+#[derive(Debug, Clone)]
+pub struct Collection {
+    client: DbeelClient,
     name: Utf8String,
     metadata: CollectionMetadata,
 }
@@ -142,7 +142,7 @@ impl DbeelClient {
         let metadata: CollectionMetadata = from_slice(&response)?;
 
         Ok(Collection {
-            client: self,
+            client: self.clone(),
             name: name.into(),
             metadata,
         })
@@ -322,7 +322,7 @@ impl DbeelClient {
         self.send_request(&self.seed_shards, request).await?;
 
         Ok(Collection {
-            client: self,
+            client: self.clone(),
             name: name.into(),
             metadata: CollectionMetadata { replication_factor },
         })
@@ -349,7 +349,7 @@ impl DbeelClient {
     }
 }
 
-impl<'a> Collection<'a> {
+impl Collection {
     pub async fn get_consistent<I>(
         &self,
         key: Value,
