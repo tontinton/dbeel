@@ -217,10 +217,9 @@ name = "blackbox_bench"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dbeel_client",
  "futures",
- "futures-lite",
  "glommio",
- "murmur3",
  "rand",
  "rmpv",
 ]
