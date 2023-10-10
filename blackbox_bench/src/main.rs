@@ -1,14 +1,16 @@
 use clap::Parser;
+use dbeel_client::{Collection, DbeelClient};
 use futures::future::join_all;
-use futures_lite::{AsyncReadExt, AsyncWriteExt};
 use glommio::{
-    net::TcpStream, spawn_local, timer::sleep, CpuLocation, CpuSet,
-    LocalExecutorBuilder, Placement,
+    spawn_local, timer::sleep, CpuLocation, CpuSet, LocalExecutorBuilder,
+    Placement,
 };
-use murmur3::murmur3_32;
 use rand::{seq::SliceRandom, thread_rng};
-use rmpv::{decode::read_value_ref, encode::write_value, Value, ValueRef};
-use std::time::{Duration, Instant};
+use rmpv::{decode::read_value_ref, Value, ValueRef};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -51,82 +53,65 @@ struct Args {
 
 const COLLECTION_NAME: &str = "dbeel";
 
-async fn request(
-    set: bool,
-    cpus: usize,
-    ip: &str,
-    base_port: u16,
+async fn set_request(
+    collection: &Collection,
     client_index: usize,
     request_index: usize,
 ) -> Option<Duration> {
-    let mut data_encoded: Vec<u8> = Vec::new();
     let key = format!("{}_{}", client_index, request_index);
     let key_str = key.as_str();
 
-    let hash = murmur3_32(&mut std::io::Cursor::new(key_str), 0).unwrap();
-    let port = base_port + (hash % (cpus as u32)) as u16;
-
-    let request_type = if set { "set" } else { "get" };
-
-    let mut parameters = vec![
-        (
-            Value::String("type".into()),
-            Value::String(request_type.into()),
-        ),
-        (
-            Value::String("collection".into()),
-            Value::String(COLLECTION_NAME.into()),
-        ),
-        (Value::String("key".into()), Value::String(key_str.into())),
-    ];
-    if set {
-        parameters.push((
-            Value::String("value".into()),
-            Value::String(key_str.into()),
-        ));
-    };
-    let map = Value::Map(parameters);
-    write_value(&mut data_encoded, &map).unwrap();
-
     let start_time = Instant::now();
-    let mut stream = TcpStream::connect((ip, port)).await.unwrap();
 
-    let size_buffer = (data_encoded.len() as u16).to_le_bytes();
-    if let Err(e) = stream.write_all(&size_buffer).await {
-        eprintln!("Failed to send size: {}", e);
-        return None;
-    }
-
-    if let Err(e) = stream.write_all(&data_encoded).await {
-        eprintln!("Failed to send data: {}", e);
-        return None;
-    }
-
-    let mut response_buffer = Vec::new();
-    if let Err(e) = stream.read_to_end(&mut response_buffer).await {
-        eprintln!("Failed to receive response: {}", e);
-        return None;
-    }
-
-    let response =
-        read_value_ref(&mut &response_buffer[..response_buffer.len() - 1])
-            .unwrap();
-    if set {
-        if response != ValueRef::String("OK".into()) {
-            eprintln!("Response not OK: {}", response);
+    match collection
+        .set_from_str_key(key_str, Value::String(key_str.into()))
+        .await
+    {
+        Ok(response_buffer) => {
+            let response = read_value_ref(&mut &response_buffer[..]).unwrap();
+            if response != ValueRef::String("OK".into()) {
+                eprintln!("Response not OK: {}", response);
+                return None;
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to receive response: {}", e);
             return None;
         }
-    } else if response != ValueRef::String(key_str.into()) {
-        eprintln!("Response not OK: {}", response);
-        return None;
+    }
+
+    Some(Instant::now().duration_since(start_time))
+}
+
+async fn get_request(
+    collection: &Collection,
+    client_index: usize,
+    request_index: usize,
+) -> Option<Duration> {
+    let key = format!("{}_{}", client_index, request_index);
+    let key_str = key.as_str();
+
+    let start_time = Instant::now();
+
+    match collection.get_from_str_key(key_str).await {
+        Ok(response_buffer) => {
+            let response = read_value_ref(&mut &response_buffer[..]).unwrap();
+            if response != ValueRef::String(key_str.into()) {
+                eprintln!("Response not OK: {}", response);
+                return None;
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to receive response: {}", e);
+            return None;
+        }
     }
 
     Some(Instant::now().duration_since(start_time))
 }
 
 async fn run_benchmark(
-    ip: String,
-    base_port: u16,
+    collection: Arc<Collection>,
     num_clients: usize,
     num_requests: usize,
     num_tasks: usize,
@@ -143,7 +128,7 @@ async fn run_benchmark(
             client_index % cpus_len,
         ));
 
-        let ip = ip.clone();
+        let collection = collection.clone();
         let handle = executor
             .name(format!("client-{}", client_index).as_str())
             .spawn(move || async move {
@@ -153,27 +138,33 @@ async fn run_benchmark(
                 let mut tasks = Vec::with_capacity(num_tasks);
                 for request_indices in indices.chunks(num_requests / num_tasks)
                 {
-                    let chunk = request_indices
-                        .into_iter()
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    let ip = ip.clone();
+                    let chunk = request_indices.to_vec();
+                    let collection = collection.clone();
                     tasks.push(spawn_local(async move {
-                        let mut stats = Vec::new();
+                        let mut stats = Vec::with_capacity(chunk.len());
+
                         for request_index in chunk {
-                            if let Some(duration) = request(
-                                set,
-                                cpus_len,
-                                &ip,
-                                base_port,
-                                client_index,
-                                request_index,
-                            )
-                            .await
-                            {
+                            let maybe_duration = if set {
+                                set_request(
+                                    &collection,
+                                    client_index,
+                                    request_index,
+                                )
+                                .await
+                            } else {
+                                get_request(
+                                    &collection,
+                                    client_index,
+                                    request_index,
+                                )
+                                .await
+                            };
+
+                            if let Some(duration) = maybe_duration {
                                 stats.push(duration);
                             }
                         }
+
                         stats
                     }));
                 }
@@ -190,53 +181,6 @@ async fn run_benchmark(
         .into_iter()
         .map(|(i, handle)| (i, handle.join().unwrap()))
         .collect()
-}
-
-async fn send_collection_request(
-    address: &(String, u16),
-    request_type: &str,
-) -> std::io::Result<()> {
-    let map = Value::Map(vec![
-        (
-            Value::String("type".into()),
-            Value::String(request_type.into()),
-        ),
-        (
-            Value::String("name".into()),
-            Value::String(COLLECTION_NAME.into()),
-        ),
-    ]);
-    let mut data_encoded: Vec<u8> = Vec::new();
-    write_value(&mut data_encoded, &map).unwrap();
-
-    let mut stream = TcpStream::connect(address).await.unwrap();
-
-    let size_buffer = (data_encoded.len() as u16).to_le_bytes();
-    stream.write_all(&size_buffer).await?;
-    stream.write_all(&data_encoded).await?;
-
-    let mut response_buffer = Vec::new();
-    stream.read_to_end(&mut response_buffer).await?;
-
-    let response =
-        read_value_ref(&mut &response_buffer[..response_buffer.len() - 1])
-            .unwrap();
-    if response != ValueRef::String("OK".into()) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Response not OK: {}", response),
-        ));
-    }
-
-    Ok(())
-}
-
-async fn create_collection(address: &(String, u16)) -> std::io::Result<()> {
-    send_collection_request(address, "create_collection").await
-}
-
-async fn drop_collection(address: &(String, u16)) -> std::io::Result<()> {
-    send_collection_request(address, "drop_collection").await
 }
 
 fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
@@ -268,14 +212,19 @@ fn main() {
         .name("bb-bench")
         .spawn(move || async move {
             let address = (args.ip.clone(), args.port);
-            create_collection(&address).await.unwrap();
+
+            let seed_nodes = [address.clone()];
+            let client =
+                DbeelClient::from_seed_nodes(&seed_nodes).await.unwrap();
+            let collection = Arc::new(
+                client.create_collection(COLLECTION_NAME).await.unwrap(),
+            );
 
             // Wait for creation of collection to get through all shards.
             sleep(Duration::from_millis(100)).await;
 
             let set_results = run_benchmark(
-                address.0.clone(),
-                address.1,
+                collection.clone(),
                 args.clients,
                 args.requests,
                 args.tasks,
@@ -284,8 +233,7 @@ fn main() {
             .await;
 
             let get_results = run_benchmark(
-                address.0.clone(),
-                address.1,
+                collection.clone(),
                 args.clients,
                 args.requests,
                 args.tasks,
@@ -293,7 +241,11 @@ fn main() {
             )
             .await;
 
-            if let Err(e) = drop_collection(&address).await {
+            if let Err(e) = Arc::<Collection>::into_inner(collection)
+                .unwrap()
+                .drop()
+                .await
+            {
                 eprintln!("Failed to drop collection: {}", e);
             }
 
