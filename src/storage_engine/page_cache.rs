@@ -1,11 +1,14 @@
 use core::hash::Hash;
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{RefCell, RefMut},
+    rc::Rc,
+};
 
 use wtinylfu::WTinyLfuCache;
 
 pub const PAGE_SIZE: usize = 4096;
 
-pub type Page = Rc<[u8; PAGE_SIZE]>;
+pub type Page = [u8; PAGE_SIZE];
 
 type CacheKey<K> = (String, K, u64);
 pub type PageCache<K> = WTinyLfuCache<CacheKey<K>, Page>;
@@ -28,16 +31,19 @@ impl<K: Hash + Eq> PartitionPageCache<K> {
         Self { name, cache }
     }
 
-    #[inline]
-    fn full_key(&self, partial_key: K, address: u64) -> CacheKey<K> {
+    pub fn full_key(&self, partial_key: K, address: u64) -> CacheKey<K> {
         (self.name.clone(), partial_key, address)
     }
 
-    pub fn get(&self, key: K, address: u64) -> Option<Page> {
+    pub fn get_copied(&self, key: K, address: u64) -> Option<Page> {
         self.cache
             .borrow_mut()
             .get(&self.full_key(key, address))
             .cloned()
+    }
+
+    pub fn borrow_mut(&self) -> RefMut<PageCache<K>> {
+        self.cache.borrow_mut()
     }
 
     pub fn set(&self, key: K, address: u64, value: Page) {

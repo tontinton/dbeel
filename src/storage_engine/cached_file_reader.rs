@@ -4,7 +4,7 @@ use event_listener::Event;
 use glommio::io::DmaFile;
 
 use super::page_cache::{align_down, align_up, PartitionPageCache, PAGE_SIZE};
-use crate::{error::Result, storage_engine::page_cache::Page};
+use crate::error::Result;
 
 /// Number of times to try to get from the cache right after waiting for the
 /// page to be read.
@@ -58,49 +58,56 @@ impl CachedFileReader {
             let write_size = end - start;
 
             for i in 0..RETRIES {
-                if let Some(page) = self.cache.get(self.id, address) {
+                if let Some(page) = self
+                    .cache
+                    .borrow_mut()
+                    .get(&self.cache.full_key(self.id, address))
+                {
                     output_buf[written..written + write_size]
                         .copy_from_slice(&page[start..end]);
                     written += write_size;
-                } else {
-                    let mut first_reader = false;
-                    if i < RETRIES - 1 {
-                        let maybe_event =
-                            self.read_events.borrow().get(&address).cloned();
-                        if let Some(event) = maybe_event {
-                            event.listen().await;
-                            continue;
-                        } else {
-                            first_reader = true;
-                        }
-                    }
-
-                    if first_reader {
-                        self.read_events
-                            .borrow_mut()
-                            .insert(address, Rc::new(Event::new()));
-                    }
-
-                    let page =
-                        self.file.read_at_aligned(address, PAGE_SIZE).await?;
-
-                    if first_reader {
-                        if let Some(event) =
-                            self.read_events.borrow_mut().remove(&address)
-                        {
-                            event.notify(usize::MAX);
-                        }
-                    }
-
-                    output_buf[written..written + write_size]
-                        .copy_from_slice(&page[start..end]);
-                    written += write_size;
-
-                    let mut page_buf = [0; PAGE_SIZE];
-                    page_buf[..page.len()].copy_from_slice(&page);
-
-                    self.cache.set(self.id, address, Page::new(page_buf));
+                    break;
                 }
+
+                // Read from disk / wait for someone to read from disk.
+
+                let mut first_reader = false;
+                if i < RETRIES - 1 {
+                    let maybe_event =
+                        self.read_events.borrow().get(&address).cloned();
+                    if let Some(event) = maybe_event {
+                        event.listen().await;
+                        continue;
+                    } else {
+                        first_reader = true;
+                    }
+                }
+
+                if first_reader {
+                    self.read_events
+                        .borrow_mut()
+                        .insert(address, Rc::new(Event::new()));
+                }
+
+                let page =
+                    self.file.read_at_aligned(address, PAGE_SIZE).await?;
+
+                if first_reader {
+                    if let Some(event) =
+                        self.read_events.borrow_mut().remove(&address)
+                    {
+                        event.notify(usize::MAX);
+                    }
+                }
+
+                output_buf[written..written + write_size]
+                    .copy_from_slice(&page[start..end]);
+                written += write_size;
+
+                let mut page_buf = [0; PAGE_SIZE];
+                page_buf[..page.len()].copy_from_slice(&page);
+
+                self.cache.set(self.id, address, page_buf);
 
                 break;
             }
