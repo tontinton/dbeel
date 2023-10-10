@@ -44,7 +44,7 @@ struct Args {
     #[clap(
         long,
         help = "Number of async tasks per core.",
-        default_value = "2"
+        default_value = "1"
     )]
     tasks: usize,
 }
