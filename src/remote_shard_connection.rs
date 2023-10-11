@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use bincode::Options;
-use futures::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use glommio::net::TcpStream;
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     error::{Error, Result},
     messages::{NodeMetadata, ShardMessage, ShardRequest, ShardResponse},
     response_to_empty_result, response_to_result,
-    utils::{bincode::bincode_options, read_exactly::read_exactly},
+    utils::bincode::bincode_options,
 };
 
 #[derive(Debug, Clone)]
@@ -94,9 +94,11 @@ impl RemoteShardConnection {
 pub async fn get_message_from_stream(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<ShardMessage> {
-    let size_buf = read_exactly(stream, 4).await?;
-    let size = u32::from_le_bytes(size_buf.as_slice().try_into().unwrap());
-    let request_buf = read_exactly(stream, size as usize).await?;
+    let mut size_buf = [0; 4];
+    stream.read_exact(&mut size_buf).await?;
+    let size = u32::from_le_bytes(size_buf);
+    let mut request_buf = vec![0; size as usize];
+    stream.read_exact(&mut request_buf).await?;
 
     Ok(bincode_options()
         .deserialize_from::<_, ShardMessage>(&mut &request_buf[..])?)
