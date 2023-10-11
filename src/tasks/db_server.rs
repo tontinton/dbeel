@@ -1,7 +1,9 @@
 use std::{cmp::min, rc::Rc, time::Duration};
 
 use from_num::FromNum;
-use futures::{future::try_join, AsyncRead, AsyncWrite, AsyncWriteExt};
+use futures::{
+    future::try_join, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+};
 use glommio::{enclose, net::TcpListener, spawn_local, Task};
 use log::{error, trace};
 use rmp_serde::Serializer;
@@ -20,7 +22,7 @@ use crate::{
     response_to_empty_result, response_to_result,
     shards::MyShard,
     storage_engine::TOMBSTONE,
-    utils::{read_exactly::read_exactly, timeout::timeout},
+    utils::timeout::timeout,
 };
 
 const DEFAULT_SET_TIMEOUT_MS: u64 = 15000;
@@ -319,9 +321,11 @@ async fn handle_client(
     my_shard: Rc<MyShard>,
     client: &mut (impl AsyncRead + AsyncWrite + Unpin),
 ) -> Result<()> {
-    let size_buf = read_exactly(client, 2).await?;
-    let size = u16::from_le_bytes(size_buf.as_slice().try_into().unwrap());
-    let request_buf = read_exactly(client, size.into()).await?;
+    let mut size_buf = [0; 2];
+    client.read_exact(&mut size_buf).await?;
+    let size = u16::from_le_bytes(size_buf);
+    let mut request_buf = vec![0; size as usize];
+    client.read_exact(&mut request_buf).await?;
 
     match handle_request(my_shard, request_buf).await {
         Ok(None) => {

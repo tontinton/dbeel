@@ -3,7 +3,6 @@ use std::fs::DirEntry;
 use regex::Regex;
 
 pub mod bincode;
-pub mod read_exactly;
 pub mod timeout;
 pub mod timestamp_nanos;
 
