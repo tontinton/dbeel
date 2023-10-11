@@ -151,22 +151,9 @@ impl DbeelClient {
     }
 
     async fn send_buffer(
-        address: &SocketAddr,
-        buffer: &Vec<u8>,
-        connect_timeout: Duration,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
+        stream: &mut TcpStream,
+        buffer: &[u8],
     ) -> Result<Vec<u8>> {
-        let mut stream = TcpStream::connect_timeout(address, connect_timeout)
-            .await
-            .map_err(Error::ConnectToShard)?;
-        stream
-            .set_read_timeout(read_timeout)
-            .map_err(Error::SetTimeout)?;
-        stream
-            .set_write_timeout(write_timeout)
-            .map_err(Error::SetTimeout)?;
-
         let size_buffer = (buffer.len() as u16).to_le_bytes();
         stream
             .write_all(&size_buffer)
@@ -217,15 +204,23 @@ impl DbeelClient {
 
         let mut errors = vec![];
         for address in addresses {
-            match Self::send_buffer(
-                address,
-                &data_encoded,
-                connect_timeout,
-                read_timeout,
-                write_timeout,
-            )
-            .await
-            {
+            let mut stream =
+                TcpStream::connect_timeout(address, connect_timeout)
+                    .await
+                    .map_err(Error::ConnectToShard)?;
+            stream
+                .set_read_timeout(read_timeout)
+                .map_err(Error::SetTimeout)?;
+            stream
+                .set_write_timeout(write_timeout)
+                .map_err(Error::SetTimeout)?;
+
+            let response_result =
+                Self::send_buffer(&mut stream, &data_encoded).await;
+
+            let _ = stream.close().await;
+
+            match response_result {
                 Ok(mut response_encoded)
                     if response_encoded.last()
                         != Some(ResponseType::Err.into()).as_ref() =>
