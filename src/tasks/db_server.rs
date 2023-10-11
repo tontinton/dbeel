@@ -317,6 +317,16 @@ async fn handle_request(
     Ok(None)
 }
 
+async fn send_buffer(
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    buf: &[u8],
+) -> Result<()> {
+    let size_buffer = (buf.len() as u32).to_le_bytes();
+    stream.write_all(&size_buffer).await?;
+    stream.write_all(&buf).await?;
+    Ok(())
+}
+
 async fn handle_client(
     my_shard: Rc<MyShard>,
     client: &mut (impl AsyncRead + AsyncWrite + Unpin),
@@ -332,11 +342,11 @@ async fn handle_client(
             let mut buf: Vec<u8> = Vec::new();
             write_value_ref(&mut buf, &ValueRef::String("OK".into()))?;
             buf.push(ResponseType::Bytes.into());
-            client.write_all(&buf).await?;
+            send_buffer(client, &buf).await?;
         }
         Ok(Some(mut buf)) => {
             buf.push(ResponseType::Ok.into());
-            client.write_all(&buf).await?;
+            send_buffer(client, &buf).await?;
         }
         Err(e) => {
             if !matches!(e, Error::KeyNotFound) {
@@ -346,7 +356,7 @@ async fn handle_client(
             let mut buf: Vec<u8> = Vec::new();
             ResponseError::new(&e).serialize(&mut Serializer::new(&mut buf))?;
             buf.push(ResponseType::Err.into());
-            client.write_all(&buf).await?;
+            send_buffer(client, &buf).await?;
         }
     }
 
