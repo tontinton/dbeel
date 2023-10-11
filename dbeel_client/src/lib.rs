@@ -10,7 +10,7 @@ use dbeel::{
     shards::{hash_bytes, hash_string, ClusterMetadata, CollectionMetadata},
     tasks::db_server::{ResponseError, ResponseType},
 };
-use futures_lite::{AsyncReadExt, AsyncWriteExt};
+use futures_lite::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use glommio::net::TcpStream;
 use rmp_serde::from_slice;
 use rmpv::{encode::write_value, Integer, Utf8String, Value};
@@ -151,7 +151,7 @@ impl DbeelClient {
     }
 
     async fn send_buffer(
-        stream: &mut TcpStream,
+        stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
         buffer: &[u8],
     ) -> Result<Vec<u8>> {
         let size_buffer = (buffer.len() as u16).to_le_bytes();
@@ -164,9 +164,15 @@ impl DbeelClient {
             .await
             .map_err(Error::CommunicateWithShard)?;
 
-        let mut response_buffer = Vec::new();
+        let mut size_buf = [0; 4];
         stream
-            .read_to_end(&mut response_buffer)
+            .read_exact(&mut size_buf)
+            .await
+            .map_err(Error::CommunicateWithShard)?;
+        let size = u32::from_le_bytes(size_buf);
+        let mut response_buffer = vec![0; size as usize];
+        stream
+            .read_exact(&mut response_buffer)
             .await
             .map_err(Error::CommunicateWithShard)?;
 
