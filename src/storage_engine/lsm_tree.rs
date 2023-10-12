@@ -72,6 +72,20 @@ struct CompactionAction {
 struct SSTable {
     index: usize,
     size: u64,
+    data_path: PathBuf,
+    index_path: PathBuf,
+}
+
+impl SSTable {
+    fn new(dir: &Path, index: usize, size: u64) -> Self {
+        let (data_path, index_path) = get_data_file_paths(dir, index);
+        Self {
+            index,
+            size,
+            data_path,
+            index_path,
+        }
+    }
 }
 
 enum IterState {
@@ -363,7 +377,7 @@ impl LSMTree {
                 let path = get_file_path(&dir, index, INDEX_FILE_EXT);
                 let size =
                     std::fs::metadata(path)?.len() / INDEX_ENTRY_SIZE as u64;
-                sstables.push(SSTable { index, size });
+                sstables.push(SSTable::new(&dir, index, size));
             }
             sstables
         };
@@ -581,17 +595,14 @@ impl LSMTree {
         // oldest.
         let sstables = self.sstables.borrow().clone();
         for sstable in sstables.iter().rev() {
-            let (data_filename, index_filename) =
-                get_data_file_paths(&self.dir, sstable.index);
-
             let data_file = CachedFileReader::new(
                 (DATA_FILE_EXT, sstable.index),
-                DmaFile::open(&data_filename).await?,
+                DmaFile::open(&sstable.data_path).await?,
                 self.page_cache.clone(),
             );
             let index_file = CachedFileReader::new(
                 (INDEX_FILE_EXT, sstable.index),
-                DmaFile::open(&index_filename).await?,
+                DmaFile::open(&sstable.index_path).await?,
                 self.page_cache.clone(),
             );
 
@@ -794,10 +805,10 @@ impl LSMTree {
         {
             let mut sstables: Vec<SSTable> =
                 self.sstables.borrow().iter().cloned().collect();
-            sstables.push(SSTable {
-                index: self.write_sstable_index.get(),
-                size: items_written as u64,
-            });
+
+            let index = self.write_sstable_index.get();
+            sstables.push(SSTable::new(&self.dir, index, items_written as u64));
+
             self.sstables.replace(Rc::new(sstables));
         }
         self.write_sstable_index
@@ -958,12 +969,11 @@ impl LSMTree {
         {
             let mut sstables: Vec<SSTable> =
                 old_sstables.iter().cloned().collect();
+
             sstables.retain(|x| !indices_to_compact.contains(&x.index));
-            sstables.push(SSTable {
-                index: output_index,
-                size: items_written,
-            });
+            sstables.push(SSTable::new(&self.dir, output_index, items_written));
             sstables.sort_unstable_by_key(|t| t.index);
+
             self.sstables.replace(Rc::new(sstables));
         }
 
