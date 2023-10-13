@@ -30,7 +30,7 @@ event-listener = "3.0.0"
 from-num = { path = "from_num" }
 futures = "0.3.28"
 futures-lite = "1.12.0"
-glommio = "0.8.0"
+glommio = { git = "https://github.com/tontinton/glommio.git", branch = "my-master" }
 itertools = "0.11.0"
 kinded = "0.3.0"
 log = "0.4.17"
