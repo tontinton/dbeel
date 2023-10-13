@@ -1209,8 +1209,7 @@ checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
 [[package]]
 name = "glommio"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac1f09bf53139d5680da6325b4e79c6bc1518e94a65ab74df14b7e3693a8c78b"
+source = "git+https://github.com/tontinton/glommio.git?branch=my-master#7775ccb98d980f62c27b605e0fdb3837cb07c40b"
 dependencies = [
  "ahash",
  "backtrace",

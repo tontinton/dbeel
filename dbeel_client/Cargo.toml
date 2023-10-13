@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 dbeel = { path = ".." }
 futures-lite = "1.13.0"
-glommio = "0.8.0"
+glommio = { git = "https://github.com/tontinton/glommio.git", branch = "my-master" }
 rmp-serde = "1.1.2"
 rmpv = "1.0.0"
 rpm = "0.12.0"
