@@ -184,6 +184,10 @@ async fn run_benchmark(
 }
 
 fn print_stats(client_stats: Vec<(usize, Vec<Duration>)>) {
+    if client_stats.is_empty() {
+        return;
+    }
+
     let mut stats: Vec<Duration> = client_stats
         .into_iter()
         .flat_map(|(_, stats)| stats)
