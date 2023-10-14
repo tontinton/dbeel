@@ -920,7 +920,7 @@ impl LSMTree {
     /// to the output file given.
     pub async fn compact(
         &self,
-        indices_to_compact: Vec<usize>,
+        indices_to_compact: &[usize],
         output_index: usize,
         remove_tombstones: bool,
     ) -> Result<()> {
@@ -1392,7 +1392,7 @@ mod tests {
                 ]
             );
 
-            tree.compact(vec![0, 2, 4], 5, true).await?;
+            tree.compact(&[0, 2, 4], 5, true).await?;
             validate_tree_after_compaction(&tree).await?;
         }
 
