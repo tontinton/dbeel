@@ -10,6 +10,7 @@ use dbeel::{
     shards::{hash_bytes, hash_string, ClusterMetadata, CollectionMetadata},
     tasks::db_server::{ResponseError, ResponseType},
 };
+use error::VecError;
 use futures_lite::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use glommio::net::TcpStream;
 use rmp_serde::from_slice;
@@ -245,7 +246,7 @@ impl DbeelClient {
             }
         }
 
-        Err(Error::SendRequestToCluster(errors))
+        Err(Error::SendRequestToCluster(VecError(errors)))
     }
 
     async fn send_sharded_request(
@@ -303,7 +304,7 @@ impl DbeelClient {
                 (start_shard_index + i as usize) % self.hash_ring.len();
         }
 
-        Err(Error::SendRequestToCluster(errors))
+        Err(Error::SendRequestToCluster(VecError(errors)))
     }
 
     pub async fn create_collection_with_replication(
