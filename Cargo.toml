@@ -54,8 +54,8 @@ wtinylfu = "0.1.0"
 color-backtrace = "0.5.1"
 ctor = "0.2.3"
 tempfile = "3.4.0"
-test_utils = { path = "test_utils" }
-dbeel_client = { path = "dbeel_client" }
+test-utils = { path = "test_utils" }
+dbeel-client = { path = "dbeel_client" }
 rstest = "0.18.1"
 serial_test = "2.0.0"
 dbeel = { path = ".", features = ["flow-events"] }
