@@ -148,6 +148,14 @@ Note that on many systems, the effective resolution of sleep delays is 10 \
         default_value = "false"
     )]
     pub wal_sync: bool,
+
+    #[clap(
+        long,
+        help = "The minimum size of an sstable (in bytes) to calculate and \
+            store its bloom filter.",
+        default_value = "1048576"
+    )]
+    pub sstable_bloom_min_size: u64,
 }
 
 pub fn parse_args() -> Args {

@@ -1,4 +1,5 @@
 use bincode::Options;
+use bloomfilter::Bloom;
 use event_listener::{Event, EventListener};
 use futures::{try_join, AsyncReadExt, AsyncWriteExt};
 use glommio::{
@@ -29,15 +30,19 @@ use super::{
     cached_file_reader::{CachedFileReader, FileId},
     entry_writer::EntryWriter,
     page_cache::{PartitionPageCache, PAGE_SIZE},
-    Entry, EntryOffset, EntryValue, COMPACT_ACTION_FILE_EXT,
-    COMPACT_DATA_FILE_EXT, COMPACT_INDEX_FILE_EXT, DATA_FILE_EXT,
-    DEFAULT_TREE_CAPACITY, DMA_STREAM_NUMBER_OF_BUFFERS, INDEX_ENTRY_SIZE,
-    INDEX_FILE_EXT, INDEX_PADDING, MEMTABLE_FILE_EXT, TOMBSTONE,
+    Entry, EntryOffset, EntryValue, BLOOM_FILE_EXT, COMPACT_ACTION_FILE_EXT,
+    COMPACT_BLOOM_FILE_EXT, COMPACT_DATA_FILE_EXT, COMPACT_INDEX_FILE_EXT,
+    DATA_FILE_EXT, DEFAULT_SSTABLE_BLOOM_MIN_SIZE, DEFAULT_TREE_CAPACITY,
+    DMA_STREAM_NUMBER_OF_BUFFERS, INDEX_ENTRY_SIZE, INDEX_FILE_EXT,
+    INDEX_PADDING, MEMTABLE_FILE_EXT, TOMBSTONE,
 };
 use crate::{
     error::{Error, Result},
     utils::{bincode::bincode_options, get_first_capture},
 };
+
+/// The acceptable error rate in the bloom filter value in (0, 1].
+const BLOOM_MAX_ALLOWED_ERROR: f64 = 0.01;
 
 type MemTable = RedBlackTree<Vec<u8>, EntryValue>;
 
@@ -74,16 +79,40 @@ struct SSTable {
     size: u64,
     data_path: PathBuf,
     index_path: PathBuf,
+    bloom: Option<Rc<Bloom<Vec<u8>>>>,
 }
 
 impl SSTable {
-    fn new(dir: &Path, index: usize, size: u64) -> Self {
+    async fn new_with_bloom_read(
+        dir: &Path,
+        index: usize,
+        size: u64,
+    ) -> Result<Self> {
+        let bloom_path = get_file_path(dir, index, BLOOM_FILE_EXT);
+        let bloom = if bloom_path.exists() {
+            let buf = read_file(&bloom_path).await?;
+            let bloom: Bloom<Vec<u8>> = bincode_options().deserialize(&buf)?;
+            Some(Rc::new(bloom))
+        } else {
+            None
+        };
+
+        Ok(Self::new(dir, index, size, bloom))
+    }
+
+    fn new(
+        dir: &Path,
+        index: usize,
+        size: u64,
+        bloom: Option<Rc<Bloom<Vec<u8>>>>,
+    ) -> Self {
         let (data_path, index_path) = get_data_file_paths(dir, index);
         Self {
             index,
             size,
             data_path,
             index_path,
+            bloom,
         }
     }
 }
@@ -251,10 +280,14 @@ fn get_data_file_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
     (data_path, index_path)
 }
 
-fn get_compaction_file_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
+fn get_compaction_file_paths(
+    dir: &Path,
+    index: usize,
+) -> (PathBuf, PathBuf, PathBuf) {
     let data_path = get_file_path(dir, index, COMPACT_DATA_FILE_EXT);
     let index_path = get_file_path(dir, index, COMPACT_INDEX_FILE_EXT);
-    (data_path, index_path)
+    let bloom_path = get_file_path(dir, index, COMPACT_BLOOM_FILE_EXT);
+    (data_path, index_path, bloom_path)
 }
 
 fn create_file_path_regex(file_ext: &'static str) -> Result<Regex> {
@@ -329,6 +362,9 @@ pub struct LSMTree {
 
     /// Used for waiting for a scheduled wal sync.
     wal_sync_event: RefCell<Option<Rc<Event>>>,
+
+    ///The minimum size of an sstable (in bytes) to calculate and store its bloom filter.
+    sstable_bloom_min_size: u64,
 }
 
 impl LSMTree {
@@ -336,8 +372,14 @@ impl LSMTree {
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<Self> {
-        Self::open_or_create_ex(dir, page_cache, DEFAULT_TREE_CAPACITY, None)
-            .await
+        Self::open_or_create_ex(
+            dir,
+            page_cache,
+            DEFAULT_TREE_CAPACITY,
+            None,
+            DEFAULT_SSTABLE_BLOOM_MIN_SIZE,
+        )
+        .await
     }
 
     pub async fn open_or_create_ex(
@@ -345,6 +387,7 @@ impl LSMTree {
         page_cache: PartitionPageCache<FileId>,
         tree_capacity: usize,
         wal_sync_delay: Option<Duration>,
+        sstable_bloom_min_size: u64,
     ) -> Result<Self> {
         assert_eq!(
             bincode_options()
@@ -392,7 +435,9 @@ impl LSMTree {
                 let path = get_file_path(&dir, index, INDEX_FILE_EXT);
                 let size =
                     std::fs::metadata(path)?.len() / INDEX_ENTRY_SIZE as u64;
-                sstables.push(SSTable::new(&dir, index, size));
+                sstables.push(
+                    SSTable::new_with_bloom_read(&dir, index, size).await?,
+                );
             }
             sstables
         };
@@ -479,6 +524,7 @@ impl LSMTree {
             wal_offset: Cell::new(wal_offset),
             wal_sync_delay,
             wal_sync_event: RefCell::new(None),
+            sstable_bloom_min_size,
         })
     }
 
@@ -605,6 +651,13 @@ impl LSMTree {
         // oldest.
         let sstables = self.sstables.borrow().clone();
         for sstable in sstables.iter().rev() {
+            // Skip keys that are not in the sstable.
+            if let Some(bloom) = &sstable.bloom {
+                if !bloom.check(key) {
+                    continue;
+                }
+            }
+
             let data_file = CachedFileReader::new(
                 (DATA_FILE_EXT, sstable.index),
                 DmaFile::open(&sstable.data_path).await?,
@@ -817,7 +870,12 @@ impl LSMTree {
                 self.sstables.borrow().iter().cloned().collect();
 
             let index = self.write_sstable_index.get();
-            sstables.push(SSTable::new(&self.dir, index, items_written as u64));
+            sstables.push(SSTable::new(
+                &self.dir,
+                index,
+                items_written as u64,
+                None,
+            ));
 
             self.sstables.replace(Rc::new(sstables));
         }
@@ -862,17 +920,34 @@ impl LSMTree {
         output_index: usize,
         remove_tombstones: bool,
     ) -> Result<()> {
-        let sstable_paths: Vec<(PathBuf, PathBuf)> = indices_to_compact
-            .iter()
-            .map(|i| get_data_file_paths(&self.dir, *i))
-            .collect();
+        let sstable_paths: Vec<(PathBuf, PathBuf, PathBuf)> =
+            indices_to_compact
+                .iter()
+                .map(|i| {
+                    let (data_path, index_path) =
+                        get_data_file_paths(&self.dir, *i);
+                    let bloom_path =
+                        get_file_path(&self.dir, *i, BLOOM_FILE_EXT);
+                    (data_path, index_path, bloom_path)
+                })
+                .collect();
 
         // No stable AsyncIterator yet...
         // If there was, itertools::kmerge would probably solve it all.
         let mut sstable_readers = Vec::with_capacity(sstable_paths.len());
-        for (data_path, index_path) in &sstable_paths {
+        let mut max_items_after_compaction = 0usize;
+        let mut max_data_size_after_compaction = 0u64;
+
+        for (data_path, index_path, _) in &sstable_paths {
             let (data_file, index_file) =
                 try_join!(DmaFile::open(data_path), DmaFile::open(index_path))?;
+
+            let index_file_size = index_file.file_size().await?;
+            let num_entries = index_file_size / INDEX_ENTRY_SIZE as u64;
+            max_items_after_compaction += num_entries as usize;
+
+            max_data_size_after_compaction += data_file.file_size().await?;
+
             let data_reader = DmaStreamReaderBuilder::new(data_file)
                 .with_buffer_size(PAGE_SIZE)
                 .with_read_ahead(DMA_STREAM_NUMBER_OF_BUFFERS)
@@ -884,7 +959,7 @@ impl LSMTree {
             sstable_readers.push((data_reader, index_reader));
         }
 
-        let (compact_data_path, compact_index_path) =
+        let (compact_data_path, compact_index_path, compact_bloom_path) =
             get_compaction_file_paths(&self.dir, output_index);
         let (compact_data_file, compact_index_file) = try_join!(
             DmaFile::create(&compact_data_path),
@@ -914,6 +989,17 @@ impl LSMTree {
             output_index,
             self.page_cache.clone(),
         );
+
+        let mut maybe_bloom =
+            if max_data_size_after_compaction > self.sstable_bloom_min_size {
+                Some(Bloom::new_for_fp_rate(
+                    max_items_after_compaction,
+                    BLOOM_MAX_ALLOWED_ERROR,
+                ))
+            } else {
+                None
+            };
+
         let mut items_written = 0;
 
         while let Some(current) = heap.pop() {
@@ -927,6 +1013,9 @@ impl LSMTree {
                 !remove_tombstones || current.entry.value.data != TOMBSTONE;
 
             if should_write_current {
+                if let Some(ref mut bloom) = maybe_bloom {
+                    bloom.set(&current.entry.key);
+                }
                 entry_writer.write(&current.entry).await?;
                 items_written += 1;
             }
@@ -945,23 +1034,34 @@ impl LSMTree {
 
         entry_writer.close().await?;
 
-        let mut files_to_delete = Vec::with_capacity(sstable_paths.len() * 2);
-        for (data_path, index_path) in sstable_paths {
+        if let Some(ref bloom) = maybe_bloom {
+            write_file(
+                &compact_bloom_path,
+                &bincode_options().serialize(&bloom)?,
+            )
+            .await?;
+        }
+
+        let mut files_to_delete = Vec::with_capacity(sstable_paths.len() * 3);
+        for (data_path, index_path, bloom_path) in sstable_paths {
             files_to_delete.push(data_path);
             files_to_delete.push(index_path);
+            files_to_delete.push(bloom_path);
         }
 
         let (output_data_path, output_index_path) =
             get_data_file_paths(&self.dir, output_index);
+        let output_bloom_path =
+            get_file_path(&self.dir, output_index, BLOOM_FILE_EXT);
 
         let action = CompactionAction {
             renames: vec![
                 (compact_data_path, output_data_path),
                 (compact_index_path, output_index_path),
+                (compact_bloom_path, output_bloom_path),
             ],
             deletes: files_to_delete,
         };
-        let action_encoded = bincode_options().serialize(&action)?;
 
         let compact_action_path =
             get_file_path(&self.dir, output_index, COMPACT_ACTION_FILE_EXT);
@@ -978,14 +1078,21 @@ impl LSMTree {
                 old_sstables.iter().cloned().collect();
 
             sstables.retain(|x| !indices_to_compact.contains(&x.index));
-            sstables.push(SSTable::new(&self.dir, output_index, items_written));
+            sstables.push(SSTable::new(
+                &self.dir,
+                output_index,
+                items_written,
+                maybe_bloom.map(|bloom| Rc::new(bloom)),
+            ));
             sstables.sort_unstable_by_key(|t| t.index);
 
             self.sstables.replace(Rc::new(sstables));
         }
 
         for (source_path, destination_path) in &action.renames {
-            std::fs::rename(source_path, destination_path)?;
+            if source_path.exists() {
+                std::fs::rename(source_path, destination_path)?;
+            }
         }
 
         // Block the current execution task until all currently running read
@@ -1068,8 +1175,14 @@ mod tests {
         dir: PathBuf,
         page_cache: PartitionPageCache<FileId>,
     ) -> Result<LSMTree> {
-        LSMTree::open_or_create_ex(dir, page_cache, TEST_TREE_CAPACITY, None)
-            .await
+        LSMTree::open_or_create_ex(
+            dir,
+            page_cache,
+            TEST_TREE_CAPACITY,
+            None,
+            DEFAULT_SSTABLE_BLOOM_MIN_SIZE,
+        )
+        .await
     }
 
     fn partitioned_cache(cache: &GlobalCache) -> PartitionPageCache<FileId> {
