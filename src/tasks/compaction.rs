@@ -52,8 +52,8 @@ async fn compact_tree(tree: Rc<LSMTree>, compaction_factor: usize) {
         for items in groups {
             has_groups = true;
 
-            let indices = items.into_iter().map(|(i, _)| i).collect();
-            if let Err(e) = tree.compact(indices, index_to_compact, true).await
+            let indices = items.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
+            if let Err(e) = tree.compact(&indices, index_to_compact, true).await
             {
                 error!("Failed to compact files: {}", e);
             }
