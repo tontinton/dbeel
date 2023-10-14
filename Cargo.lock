@@ -220,7 +220,7 @@ name = "blackbox_bench"
 version = "0.1.0"
 dependencies = [
  "clap",
- "dbeel_client",
+ "dbeel-client",
  "futures",
  "glommio",
  "rand",
@@ -714,7 +714,7 @@ dependencies = [
  "color-backtrace",
  "ctor",
  "dbeel",
- "dbeel_client",
+ "dbeel-client",
  "event-listener 3.0.0",
  "from-num",
  "futures",
@@ -737,14 +737,14 @@ dependencies = [
  "serde",
  "serial_test",
  "tempfile",
- "test_utils",
+ "test-utils",
  "thiserror",
  "time 0.3.23",
  "wtinylfu",
 ]
 
 [[package]]
-name = "dbeel_client"
+name = "dbeel-client"
 version = "0.1.0"
 dependencies = [
  "dbeel",
@@ -2540,7 +2540,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "test_utils"
+name = "test-utils"
 version = "0.1.0"
 dependencies = [
  "async-channel",
