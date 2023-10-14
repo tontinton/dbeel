@@ -3,6 +3,7 @@ use std::{pin::Pin, rc::Rc};
 use event_listener::EventListener;
 use futures::future::{join_all, select, select_all, Either};
 use glommio::{spawn_local, Task};
+use itertools::Itertools;
 use log::error;
 
 use crate::{
@@ -30,32 +31,38 @@ async fn get_trees_and_listeners(
 }
 
 async fn compact_tree(tree: Rc<LSMTree>, compaction_factor: usize) {
-    'current_tree_compaction: loop {
-        let (even, mut odd): (Vec<usize>, Vec<usize>) =
-            tree.sstable_indices().iter().partition(|i| *i % 2 == 0);
+    loop {
+        let indices_and_sizes = tree.sstable_indices_and_sizes();
 
-        if even.len() >= compaction_factor {
-            let new_index = even[even.len() - 1] + 1;
-            if let Err(e) = tree.compact(even, new_index, odd.is_empty()).await
+        let mut index_to_compact = indices_and_sizes
+            .iter()
+            .map(|(i, _)| *i)
+            .filter(|i| i % 2 != 0)
+            .max()
+            .map(|i| i + 2)
+            .unwrap_or(1);
+
+        let groups = indices_and_sizes
+            .into_iter()
+            .into_group_map_by(|(_, size)| size.leading_zeros())
+            .into_values()
+            .filter(|items| items.len() >= compaction_factor);
+
+        let mut has_groups = false;
+        for items in groups {
+            has_groups = true;
+
+            let indices = items.into_iter().map(|(i, _)| i).collect();
+            if let Err(e) = tree.compact(indices, index_to_compact, true).await
             {
                 error!("Failed to compact files: {}", e);
             }
-            continue 'current_tree_compaction;
+            index_to_compact += 2;
         }
 
-        if odd.len() >= compaction_factor && !even.is_empty() {
-            debug_assert!(even[0] > odd[odd.len() - 1]);
-
-            odd.push(even[0]);
-
-            let new_index = even[0] + 1;
-            if let Err(e) = tree.compact(odd, new_index, true).await {
-                error!("Failed to compact files: {}", e);
-            }
-            continue 'current_tree_compaction;
+        if !has_groups {
+            break;
         }
-
-        break 'current_tree_compaction;
     }
 }
 
