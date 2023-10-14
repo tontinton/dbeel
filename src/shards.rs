@@ -319,6 +319,7 @@ impl MyShard {
             PartitionPageCache::new(name, cache),
             DEFAULT_TREE_CAPACITY,
             wal_sync_delay,
+            self.args.sstable_bloom_min_size,
         )
         .await
     }
