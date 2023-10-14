@@ -49,6 +49,9 @@ struct Args {
         default_value = "1"
     )]
     tasks: usize,
+
+    #[clap(long, help = "Don't drop the created collection at the end.")]
+    dont_drop: bool,
 }
 
 const COLLECTION_NAME: &str = "dbeel";
@@ -245,12 +248,14 @@ fn main() {
             )
             .await;
 
-            if let Err(e) = Arc::<Collection>::into_inner(collection)
-                .unwrap()
-                .drop()
-                .await
-            {
-                eprintln!("Failed to drop collection: {}", e);
+            if !args.dont_drop {
+                if let Err(e) = Arc::<Collection>::into_inner(collection)
+                    .unwrap()
+                    .drop()
+                    .await
+                {
+                    eprintln!("Failed to drop collection: {}", e);
+                }
             }
 
             (set_results, get_results)
