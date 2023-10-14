@@ -47,7 +47,7 @@ jobs:
         run: |
           cat << EOF > "run.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
-          RUST_BACKTRACE=1 cargo test -p redblacktree
+          RUST_BACKTRACE=1 cargo test -p rbtree-arena
           EOF
           sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run.sh"
 

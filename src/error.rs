@@ -20,7 +20,7 @@ pub enum Error {
     #[error(transparent)]
     BincodeSerdeError(#[from] bincode::Error),
     #[error(transparent)]
-    RedBlackTreeError(#[from] redblacktree::Error),
+    RedBlackTreeError(#[from] rbtree_arena::Error),
 
     #[error(transparent)]
     ShardReceiverError(#[from] RecvError),

@@ -11,7 +11,7 @@ use glommio::{
     timer::sleep,
 };
 use log::{error, trace};
-use redblacktree::RedBlackTree;
+use rbtree_arena::RedBlackTree;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

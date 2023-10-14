@@ -728,7 +728,7 @@ dependencies = [
  "pin-project-lite",
  "pretty_env_logger 0.4.0",
  "rand",
- "redblacktree",
+ "rbtree-arena",
  "regex",
  "rmp",
  "rmp-serde",
@@ -2051,7 +2051,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "redblacktree"
+name = "rbtree-arena"
 version = "0.1.0"
 dependencies = [
  "thiserror",
