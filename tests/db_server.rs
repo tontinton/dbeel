@@ -21,9 +21,9 @@ fn response_equals_error(
 ) -> bool {
     if let dbeel_client::error::Error::SendRequestToCluster(errors) = response {
         let re = ResponseError::new(error);
-        errors.into_iter().all(|e| {
+        errors.iter().all(|e| {
             if let dbeel_client::error::Error::ServerErr(name, message) = e {
-                name == re.name && message == re.message
+                name == &re.name && message == &re.message
             } else {
                 panic!("Expected server error");
             }
