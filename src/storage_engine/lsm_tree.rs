@@ -573,8 +573,12 @@ impl LSMTree {
         Ok(())
     }
 
-    pub fn sstable_indices(&self) -> Vec<usize> {
-        self.sstables.borrow().iter().map(|t| t.index).collect()
+    pub fn sstable_indices_and_sizes(&self) -> Vec<(usize, u64)> {
+        self.sstables
+            .borrow()
+            .iter()
+            .map(|sstable| (sstable.index, sstable.size))
+            .collect()
     }
 
     fn active_memtable_full(&self) -> bool {
@@ -1335,7 +1339,10 @@ mod tests {
         }
 
         async fn validate_tree_after_compaction(tree: &LSMTree) -> Result<()> {
-            assert_eq!(*tree.sstable_indices(), vec![5]);
+            assert_eq!(
+                *tree.sstable_indices_and_sizes(),
+                vec![(5, (TEST_TREE_CAPACITY as u64) * 3 - 4)]
+            );
             assert_eq!(tree.write_sstable_index.get(), 6);
             assert_eq!(tree.get(&vec![0, 0]).await?, Some(vec![0, 0]));
             assert_eq!(tree.get(&vec![2, 0]).await?, Some(vec![2, 0]));
@@ -1357,7 +1364,7 @@ mod tests {
                 test_lsm_tree(dir.clone(), partitioned_cache(&cache)).await?,
             );
             assert_eq!(tree.write_sstable_index.get(), 0);
-            assert_eq!(*tree.sstable_indices(), vec![]);
+            assert_eq!(*tree.sstable_indices_and_sizes(), vec![]);
 
             let values: Vec<Vec<u8>> = (0..((TEST_TREE_CAPACITY as u16) * 3)
                 - 2)
@@ -1376,7 +1383,14 @@ mod tests {
             tree.clone().flush().await?;
             validate_tree_iter_range_post_delete(&tree).await?;
 
-            assert_eq!(*tree.sstable_indices(), vec![0, 2, 4]);
+            assert_eq!(
+                *tree.sstable_indices_and_sizes(),
+                vec![
+                    (0, TEST_TREE_CAPACITY as u64),
+                    (2, TEST_TREE_CAPACITY as u64),
+                    (4, TEST_TREE_CAPACITY as u64)
+                ]
+            );
 
             tree.compact(vec![0, 2, 4], 5, true).await?;
             validate_tree_after_compaction(&tree).await?;
