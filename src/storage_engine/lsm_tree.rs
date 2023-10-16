@@ -302,7 +302,7 @@ async fn write_file(path: &Path, buf: &[u8]) -> Result<()> {
         .with_buffer_size(PAGE_SIZE)
         .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
         .build();
-    writer.write_all(&buf).await?;
+    writer.write_all(buf).await?;
     writer.close().await?;
     Ok(())
 }
@@ -534,7 +534,7 @@ impl LSMTree {
     }
 
     async fn read_memtable_from_wal_file(
-        wal_path: &PathBuf,
+        wal_path: &Path,
         tree_capacity: usize,
     ) -> Result<MemTable> {
         let wal_buf = read_file(wal_path).await?;
@@ -1084,7 +1084,7 @@ impl LSMTree {
                 &self.dir,
                 output_index,
                 items_written,
-                maybe_bloom.map(|bloom| Rc::new(bloom)),
+                maybe_bloom.map(Rc::new),
             ));
             sstables.sort_unstable_by_key(|t| t.index);
 

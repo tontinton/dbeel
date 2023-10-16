@@ -323,7 +323,7 @@ async fn send_buffer(
 ) -> Result<()> {
     let size_buffer = (buf.len() as u32).to_le_bytes();
     stream.write_all(&size_buffer).await?;
-    stream.write_all(&buf).await?;
+    stream.write_all(buf).await?;
     Ok(())
 }
 
