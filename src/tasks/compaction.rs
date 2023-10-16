@@ -96,6 +96,9 @@ async fn compact_tree(tree: Rc<LSMTree>, compaction_factor: usize) {
 
 async fn run_compaction_loop(my_shard: Rc<MyShard>) {
     let compaction_factor = my_shard.args.compaction_factor;
+    if compaction_factor < MIN_COMPACTION_FACTOR {
+        return;
+    }
 
     let (mut trees, mut listeners) = get_trees_and_listeners(&my_shard).await;
 
