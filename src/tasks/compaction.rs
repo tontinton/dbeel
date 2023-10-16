@@ -1,4 +1,4 @@
-use std::{pin::Pin, rc::Rc};
+use std::{collections::HashMap, pin::Pin, rc::Rc};
 
 use event_listener::EventListener;
 use futures::future::{join_all, select, select_all, Either};
@@ -9,6 +9,8 @@ use log::error;
 use crate::{
     error::Result, shards::MyShard, storage_engine::lsm_tree::LSMTree,
 };
+
+const MIN_COMPACTION_FACTOR: usize = 2;
 
 async fn get_trees_and_listeners(
     my_shard: &MyShard,
@@ -31,37 +33,64 @@ async fn get_trees_and_listeners(
 }
 
 async fn compact_tree(tree: Rc<LSMTree>, compaction_factor: usize) {
-    loop {
-        let indices_and_sizes = tree.sstable_indices_and_sizes();
+    let indices_and_sizes = tree.sstable_indices_and_sizes();
 
-        let mut index_to_compact = indices_and_sizes
+    let mut index_to_compact = indices_and_sizes
+        .iter()
+        .map(|(i, _)| *i)
+        .filter(|i| i % 2 != 0)
+        .max()
+        .map(|i| i + 2)
+        .unwrap_or(1);
+
+    let mut groups = indices_and_sizes
+        .into_iter()
+        .into_group_map_by(|(_, size)| size.leading_zeros())
+        .into_iter()
+        .filter(|(_, items)| !items.is_empty())
+        .collect::<Vec<_>>();
+
+    groups.sort_unstable_by(|(a, _), (b, _)| b.cmp(a));
+
+    // Possibly overshooting the amount of memory to limit allocations.
+    let mut optimized_groups = HashMap::with_capacity(groups.len());
+
+    for (size_order, mut items) in groups {
+        if let Some(smaller_items) = optimized_groups.remove(&size_order) {
+            items.extend(smaller_items);
+        }
+
+        // Doesn't currently take deletes into account.
+        let estimated_size_order_after_compaction = items
             .iter()
-            .map(|(i, _)| *i)
-            .filter(|i| i % 2 != 0)
-            .max()
-            .map(|i| i + 2)
-            .unwrap_or(1);
+            .map(|(_, size)| size)
+            .sum::<u64>()
+            .leading_zeros();
 
-        let groups = indices_and_sizes
-            .into_iter()
-            .into_group_map_by(|(_, size)| size.leading_zeros())
-            .into_values()
-            .filter(|items| items.len() >= compaction_factor);
+        let optimized_size_order =
+            if estimated_size_order_after_compaction < size_order {
+                estimated_size_order_after_compaction
+            } else {
+                size_order
+            };
 
-        let mut has_groups = false;
-        for items in groups {
-            has_groups = true;
+        optimized_groups
+            .entry(optimized_size_order)
+            .or_insert(vec![])
+            .extend(items);
+    }
 
-            let indices = items.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
-            if let Err(e) = tree.compact(&indices, index_to_compact).await {
-                error!("Failed to compact files: {}", e);
-            }
-            index_to_compact += 2;
+    for items in optimized_groups.into_values() {
+        if items.len() < MIN_COMPACTION_FACTOR
+            || items.len() < compaction_factor
+        {
+            continue;
         }
-
-        if !has_groups {
-            break;
+        let indices = items.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
+        if let Err(e) = tree.compact(&indices, index_to_compact).await {
+            error!("Failed to compact files: {}", e);
         }
+        index_to_compact += 2;
     }
 }
 
