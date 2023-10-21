@@ -1213,7 +1213,7 @@ checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
 [[package]]
 name = "glommio"
 version = "0.8.0"
-source = "git+https://github.com/tontinton/glommio.git?branch=my-master#7775ccb98d980f62c27b605e0fdb3837cb07c40b"
+source = "git+https://github.com/tontinton/glommio.git?branch=my-master#be91ddb82cd42cf4da9a57e2aeda6f5119c3e00a"
 dependencies = [
  "ahash",
  "backtrace",

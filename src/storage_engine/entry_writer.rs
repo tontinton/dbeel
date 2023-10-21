@@ -40,7 +40,6 @@ impl EntryWriter {
             DmaStreamWriterBuilder::new(index_file)
                 .with_write_behind(DMA_STREAM_NUMBER_OF_BUFFERS)
                 .with_buffer_size(INDEX_ENTRY_SIZE)
-                .with_truncate_on_close(true)
                 .build(),
         );
 
