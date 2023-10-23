@@ -22,6 +22,7 @@ use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
 use regex::Regex;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -189,7 +190,7 @@ pub struct MyShard {
 
     /// All registered flow event listeners (key is flow event type).
     #[cfg(feature = "flow-events")]
-    flow_event_listeners: RefCell<HashMap<FlowEventKind, Vec<Sender<()>>>>,
+    flow_event_listeners: RefCell<FxHashMap<FlowEventKind, Vec<Sender<()>>>>,
 }
 
 impl MyShard {
@@ -219,7 +220,7 @@ impl MyShard {
             stop_receiver,
             stop_sender,
             #[cfg(feature = "flow-events")]
-            flow_event_listeners: RefCell::new(HashMap::new()),
+            flow_event_listeners: RefCell::new(FxHashMap::default()),
         }
     }
 

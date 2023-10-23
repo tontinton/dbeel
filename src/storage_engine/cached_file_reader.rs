@@ -1,7 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use event_listener::Event;
 use glommio::io::DmaFile;
+use rustc_hash::FxHashMap;
 
 use super::page_cache::{align_down, align_up, PartitionPageCache, PAGE_SIZE};
 use crate::error::Result;
@@ -16,7 +17,7 @@ pub struct CachedFileReader {
     id: FileId,
     file: DmaFile,
     cache: Rc<PartitionPageCache<FileId>>,
-    read_events: RefCell<HashMap<u64, Rc<Event>>>,
+    read_events: RefCell<FxHashMap<u64, Rc<Event>>>,
 }
 
 impl CachedFileReader {
@@ -29,7 +30,7 @@ impl CachedFileReader {
             id,
             file,
             cache,
-            read_events: RefCell::new(HashMap::new()),
+            read_events: RefCell::new(FxHashMap::default()),
         }
     }
 
