@@ -30,6 +30,12 @@ fn main() -> Result<()> {
 
     let args = parse_args();
 
+    if !matches!(args.foreground_tasks_shares, 0..=1000)
+        || !matches!(args.background_tasks_shares, 0..=1000)
+    {
+        panic!("Shares must be between 0..=1000.");
+    }
+
     let cpu_set = CpuSet::online()?;
     assert!(!cpu_set.is_empty());
 

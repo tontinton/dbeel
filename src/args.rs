@@ -156,6 +156,20 @@ Note that on many systems, the effective resolution of sleep delays is 10 \
         default_value = "1048576"
     )]
     pub sstable_bloom_min_size: u64,
+
+    #[clap(
+        long,
+        help = "Foreground tasks shares (0 - 1000).",
+        default_value = "1000"
+    )]
+    pub foreground_tasks_shares: u16,
+
+    #[clap(
+        long,
+        help = "Background tasks shares (0 - 1000).",
+        default_value = "250"
+    )]
+    pub background_tasks_shares: u16,
 }
 
 pub fn parse_args() -> Args {

@@ -1,6 +1,9 @@
 use std::{rc::Rc, time::Duration};
 
-use glommio::{enclose, net::UdpSocket, spawn_local, timer::sleep, Task};
+use glommio::{
+    enclose, executor, net::UdpSocket, spawn_local, spawn_local_into,
+    timer::sleep, Latency, Shares, Task,
+};
 use log::{error, trace};
 
 use crate::{
@@ -91,11 +94,20 @@ async fn run_gossip_server(my_shard: Rc<MyShard>) -> Result<()> {
 }
 
 pub fn spawn_gossip_server_task(my_shard: Rc<MyShard>) -> Task<Result<()>> {
-    spawn_local(async move {
-        let result = run_gossip_server(my_shard).await;
-        if let Err(e) = &result {
-            error!("Error starting gossip server: {}", e);
-        }
-        result
-    })
+    let shares = my_shard.args.background_tasks_shares.into();
+    spawn_local_into(
+        async move {
+            let result = run_gossip_server(my_shard).await;
+            if let Err(e) = &result {
+                error!("Error starting gossip server: {}", e);
+            }
+            result
+        },
+        executor().create_task_queue(
+            Shares::Static(shares),
+            Latency::NotImportant,
+            "gossip-server",
+        ),
+    )
+    .unwrap()
 }

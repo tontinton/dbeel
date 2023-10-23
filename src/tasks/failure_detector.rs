@@ -1,6 +1,8 @@
 use std::{rc::Rc, time::Duration};
 
-use glommio::{spawn_local, timer::sleep, Task};
+use glommio::{
+    executor, spawn_local_into, timer::sleep, Latency, Shares, Task,
+};
 use log::{error, info};
 use rand::{seq::IteratorRandom, thread_rng};
 
@@ -84,11 +86,20 @@ async fn run_failure_detector(my_shard: Rc<MyShard>) -> Result<()> {
 }
 
 pub fn spawn_failure_detector_task(my_shard: Rc<MyShard>) -> Task<Result<()>> {
-    spawn_local(async move {
-        let result = run_failure_detector(my_shard).await;
-        if let Err(e) = &result {
-            error!("Error starting failure detector: {}", e);
-        }
-        result
-    })
+    let shares = my_shard.args.background_tasks_shares.into();
+    spawn_local_into(
+        async move {
+            let result = run_failure_detector(my_shard).await;
+            if let Err(e) = &result {
+                error!("Error starting failure detector: {}", e);
+            }
+            result
+        },
+        executor().create_task_queue(
+            Shares::Static(shares),
+            Latency::NotImportant,
+            "failure-detector",
+        ),
+    )
+    .unwrap()
 }
