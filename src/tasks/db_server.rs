@@ -4,7 +4,10 @@ use from_num::FromNum;
 use futures::{
     future::try_join, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
 };
-use glommio::{enclose, net::TcpListener, spawn_local, Task};
+use glommio::{
+    enclose, executor, net::TcpListener, spawn_local, spawn_local_into,
+    Latency, Shares, Task,
+};
 use log::{error, trace};
 use rmp_serde::Serializer;
 use rmpv::{
@@ -389,11 +392,20 @@ async fn run_server(my_shard: Rc<MyShard>) -> Result<()> {
 }
 
 pub fn spawn_db_server_task(my_shard: Rc<MyShard>) -> Task<Result<()>> {
-    spawn_local(async move {
-        let result = run_server(my_shard).await;
-        if let Err(e) = &result {
-            error!("Error running server: {}", e);
-        }
-        result
-    })
+    let shares = my_shard.args.foreground_tasks_shares.into();
+    spawn_local_into(
+        async move {
+            let result = run_server(my_shard).await;
+            if let Err(e) = &result {
+                error!("Error running server: {}", e);
+            }
+            result
+        },
+        executor().create_task_queue(
+            Shares::Static(shares),
+            Latency::NotImportant,
+            "db-server",
+        ),
+    )
+    .unwrap()
 }

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use glommio::{spawn_local, Task};
+use glommio::{executor, spawn_local_into, Latency, Shares, Task};
 use log::error;
 
 use crate::{error::Result, shards::MyShard};
@@ -35,11 +35,20 @@ async fn run_shard_messages_receiver(my_shard: Rc<MyShard>) -> Result<()> {
 pub fn spawn_local_shard_server_task(
     my_shard: Rc<MyShard>,
 ) -> Task<Result<()>> {
-    spawn_local(async move {
-        let result = run_shard_messages_receiver(my_shard).await;
-        if let Err(e) = &result {
-            error!("Error running shard messages receiver: {}", e);
-        }
-        result
-    })
+    let shares = my_shard.args.background_tasks_shares.into();
+    spawn_local_into(
+        async move {
+            let result = run_shard_messages_receiver(my_shard).await;
+            if let Err(e) = &result {
+                error!("Error running shard messages receiver: {}", e);
+            }
+            result
+        },
+        executor().create_task_queue(
+            Shares::Static(shares),
+            Latency::NotImportant,
+            "gossip-server",
+        ),
+    )
+    .unwrap()
 }

@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use glommio::{enclose, net::TcpListener, spawn_local, Task};
+use glommio::{
+    enclose, executor, net::TcpListener, spawn_local, spawn_local_into,
+    Latency, Shares, Task,
+};
 use log::{error, trace};
 
 use crate::{
@@ -82,11 +85,20 @@ async fn run_remote_shard_server(my_shard: Rc<MyShard>) -> Result<()> {
 pub fn spawn_remote_shard_server_task(
     my_shard: Rc<MyShard>,
 ) -> Task<Result<()>> {
-    spawn_local(async move {
-        let result = run_remote_shard_server(my_shard).await;
-        if let Err(e) = &result {
-            error!("Error starting remote shard server: {}", e);
-        }
-        result
-    })
+    let shares = my_shard.args.background_tasks_shares.into();
+    spawn_local_into(
+        async move {
+            let result = run_remote_shard_server(my_shard).await;
+            if let Err(e) = &result {
+                error!("Error starting remote shard server: {}", e);
+            }
+            result
+        },
+        executor().create_task_queue(
+            Shares::Static(shares),
+            Latency::NotImportant,
+            "remote-shard-server",
+        ),
+    )
+    .unwrap()
 }

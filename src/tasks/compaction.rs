@@ -2,7 +2,7 @@ use std::{collections::HashMap, pin::Pin, rc::Rc};
 
 use event_listener::EventListener;
 use futures::future::{join_all, select, select_all, Either};
-use glommio::{spawn_local, Task};
+use glommio::{executor, spawn_local_into, Latency, Shares, Task};
 use itertools::Itertools;
 use log::error;
 
@@ -130,8 +130,17 @@ async fn run_compaction_loop(my_shard: Rc<MyShard>) {
 }
 
 pub fn spawn_compaction_task(my_shard: Rc<MyShard>) -> Task<Result<()>> {
-    spawn_local(async move {
-        run_compaction_loop(my_shard).await;
-        Ok(())
-    })
+    let shares = my_shard.args.foreground_tasks_shares.into();
+    spawn_local_into(
+        async move {
+            run_compaction_loop(my_shard).await;
+            Ok(())
+        },
+        executor().create_task_queue(
+            Shares::Static(shares),
+            Latency::NotImportant,
+            "compaction",
+        ),
+    )
+    .unwrap()
 }
