@@ -45,6 +45,7 @@ regex = "1.7.1"
 rmp = "0.8.11"
 rmp-serde = "1.1.2"
 rmpv = "1.0.0"
+rustc-hash = "1.1.0"
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.40"
 time = { version = "0.3.22", features = ["serde"] }
