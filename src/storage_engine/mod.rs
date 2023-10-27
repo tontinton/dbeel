@@ -41,6 +41,7 @@ pub enum FileType {
     Bloom,
 }
 
+// Remember to change the INDEX_ENTRY_SIZE const when you change this struct.
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct EntryOffset {
     offset: u64,
