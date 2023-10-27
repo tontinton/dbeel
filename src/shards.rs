@@ -22,7 +22,6 @@ use murmur3::murmur3_32;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
 use regex::Regex;
-use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -47,6 +46,9 @@ use crate::{
         page_cache::{PageCache, PartitionPageCache},
     },
 };
+
+#[cfg(feature = "flow-events")]
+use rustc_hash::FxHashMap;
 
 #[cfg(feature = "flow-events")]
 use crate::flow_events::{FlowEvent, FlowEventKind};
