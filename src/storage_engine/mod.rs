@@ -30,7 +30,7 @@ const COMPACT_BLOOM_FILE_EXT: &str = "compact_bloom";
 const COMPACT_ACTION_FILE_EXT: &str = "compact_action";
 
 /// An EntryOffset item size ater serialization with bincode.
-const INDEX_ENTRY_SIZE: usize = 16;
+const INDEX_ENTRY_SIZE: usize = 12;
 
 #[derive(Kinded)]
 #[kinded(derive(Hash))]
@@ -44,7 +44,7 @@ pub enum FileType {
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct EntryOffset {
     offset: u64,
-    size: usize,
+    size: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

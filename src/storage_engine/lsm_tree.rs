@@ -244,7 +244,10 @@ impl<'a> AsyncIter<'a> {
                     bincode_options().deserialize(&self.index_buffer)?;
                 let entry: Entry = bincode_options().deserialize(
                     &data_file
-                        .read_at(entry_offset.offset, entry_offset.size)
+                        .read_at(
+                            entry_offset.offset,
+                            entry_offset.size as usize,
+                        )
                         .await?,
                 )?;
 
@@ -610,7 +613,9 @@ impl LSMTree {
                 bincode_options().deserialize(&index_buf)?;
 
             let entry: Entry = bincode_options().deserialize(
-                &data_file.read_at(current.offset, current.size).await?,
+                &data_file
+                    .read_at(current.offset, current.size as usize)
+                    .await?,
             )?;
 
             match entry.key.cmp(key) {
@@ -1122,7 +1127,7 @@ impl LSMTree {
         index_reader.read_exact(offset_bytes).await?;
         let entry_offset: EntryOffset =
             bincode_options().deserialize(offset_bytes)?;
-        let mut data_bytes = vec![0; entry_offset.size];
+        let mut data_bytes = vec![0; entry_offset.size as usize];
         data_reader.read_exact(&mut data_bytes).await?;
         let entry: Entry = bincode_options().deserialize(&data_bytes)?;
         Ok(entry)
