@@ -75,9 +75,12 @@ impl EntryWriter {
         let data_encoded = bincode_options().serialize(entry)?;
         let data_size = data_encoded.len();
 
+        let key_size = bincode_options().serialized_size(&entry.key)? as u32;
+
         let entry_index = EntryOffset {
             offset: self.data_written as u64,
-            size: data_size as u32,
+            key_size,
+            full_size: data_size as u32,
         };
         let index_encoded = bincode_options().serialize(&entry_index)?;
         let index_size = index_encoded.len();
