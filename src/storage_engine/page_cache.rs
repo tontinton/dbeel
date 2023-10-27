@@ -4,13 +4,14 @@ use std::{
     rc::Rc,
 };
 
+use murmur3::murmur3_32;
 use wtinylfu::WTinyLfuCache;
 
 pub const PAGE_SIZE: usize = 4096;
 
 pub type Page = [u8; PAGE_SIZE];
 
-type CacheKey<K> = (String, K, u64);
+type CacheKey<K> = (u32, K, u64);
 pub type PageCache<K> = WTinyLfuCache<CacheKey<K>, Page>;
 
 pub fn align_up(address: u64) -> u64 {
@@ -22,17 +23,25 @@ pub fn align_down(address: u64) -> u64 {
 }
 
 pub struct PartitionPageCache<K: Hash + Eq> {
-    name: String,
+    name_hash: u32,
     cache: Rc<RefCell<PageCache<K>>>,
 }
 
 impl<K: Hash + Eq> PartitionPageCache<K> {
-    pub fn new(name: String, cache: Rc<RefCell<PageCache<K>>>) -> Self {
-        Self { name, cache }
+    pub fn new(name_hash: u32, cache: Rc<RefCell<PageCache<K>>>) -> Self {
+        Self { name_hash, cache }
+    }
+
+    pub fn new_named(
+        name: &str,
+        cache: Rc<RefCell<PageCache<K>>>,
+    ) -> std::io::Result<Self> {
+        let name_hash = murmur3_32(&mut std::io::Cursor::new(name), 0)?;
+        Ok(Self::new(name_hash, cache))
     }
 
     pub fn full_key(&self, partial_key: K, address: u64) -> CacheKey<K> {
-        (self.name.clone(), partial_key, address)
+        (self.name_hash, partial_key, address)
     }
 
     pub fn get_copied(&self, key: K, address: u64) -> Option<Page> {

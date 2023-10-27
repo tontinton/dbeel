@@ -308,7 +308,7 @@ impl MyShard {
         dir
     }
 
-    async fn create_lsm_tree(&self, name: String) -> Result<LSMTree> {
+    async fn create_lsm_tree(&self, name: &str) -> Result<LSMTree> {
         let cache = self.cache.clone();
 
         let wal_sync_delay = if self.args.wal_sync {
@@ -318,8 +318,8 @@ impl MyShard {
         };
 
         LSMTree::open_or_create_ex(
-            self.get_collection_dir(&name),
-            PartitionPageCache::new(name, cache),
+            self.get_collection_dir(name),
+            PartitionPageCache::new_named(name, cache)?,
             DEFAULT_TREE_CAPACITY,
             wal_sync_delay,
             self.args.sstable_bloom_min_size,
@@ -335,7 +335,7 @@ impl MyShard {
         if self.collections.borrow().contains_key(&name) {
             return Err(Error::CollectionAlreadyExists(name));
         }
-        let tree = self.create_lsm_tree(name.clone()).await?;
+        let tree = self.create_lsm_tree(&name).await?;
         let metadata = CollectionMetadata { replication_factor };
 
         let path = self.get_collection_metadata_path(&name);

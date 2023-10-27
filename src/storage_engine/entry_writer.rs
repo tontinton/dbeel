@@ -7,8 +7,8 @@ use glommio::io::{DmaFile, DmaStreamWriterBuilder};
 use super::{
     cached_file_reader::FileId,
     page_cache::{PartitionPageCache, PAGE_SIZE},
-    Entry, EntryOffset, DATA_FILE_EXT, DMA_STREAM_NUMBER_OF_BUFFERS,
-    INDEX_ENTRY_SIZE, INDEX_FILE_EXT,
+    Entry, EntryOffset, FileTypeKind, DMA_STREAM_NUMBER_OF_BUFFERS,
+    INDEX_ENTRY_SIZE,
 };
 use crate::{error::Result, utils::bincode::bincode_options};
 
@@ -87,10 +87,18 @@ impl EntryWriter {
     }
 
     fn write_to_cache(&mut self, bytes: Vec<u8>, is_data_file: bool) {
-        let (buf, written, ext) = if is_data_file {
-            (&mut self.data_buf, &mut self.data_written, DATA_FILE_EXT)
+        let (buf, written, file_type) = if is_data_file {
+            (
+                &mut self.data_buf,
+                &mut self.data_written,
+                FileTypeKind::Data,
+            )
         } else {
-            (&mut self.index_buf, &mut self.index_written, INDEX_FILE_EXT)
+            (
+                &mut self.index_buf,
+                &mut self.index_written,
+                FileTypeKind::Index,
+            )
         };
 
         for chunk in bytes.chunks(PAGE_SIZE) {
@@ -105,7 +113,7 @@ impl EntryWriter {
             if *written % PAGE_SIZE == 0 {
                 // Filled a page, write it to cache.
                 self.page_cache.set(
-                    (ext, self.files_index),
+                    (file_type, self.files_index),
                     *written as u64 - PAGE_SIZE as u64,
                     std::mem::replace(buf, [0; PAGE_SIZE]),
                 );
@@ -122,7 +130,7 @@ impl EntryWriter {
         let data_left = self.data_written % PAGE_SIZE;
         if data_left != 0 {
             self.page_cache.set(
-                (DATA_FILE_EXT, self.files_index),
+                (FileTypeKind::Data, self.files_index),
                 (self.data_written - data_left) as u64,
                 self.data_buf,
             );
@@ -130,7 +138,7 @@ impl EntryWriter {
         let index_left = self.index_written % PAGE_SIZE;
         if self.index_written % PAGE_SIZE != 0 {
             self.page_cache.set(
-                (INDEX_FILE_EXT, self.files_index),
+                (FileTypeKind::Index, self.files_index),
                 (self.index_written - index_left) as u64,
                 self.index_buf,
             );

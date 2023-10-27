@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use kinded::Kinded;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -30,6 +31,15 @@ const COMPACT_ACTION_FILE_EXT: &str = "compact_action";
 
 /// An EntryOffset item size ater serialization with bincode.
 const INDEX_ENTRY_SIZE: usize = 16;
+
+#[derive(Kinded)]
+#[kinded(derive(Hash))]
+pub enum FileType {
+    Memtable,
+    Data,
+    Index,
+    Bloom,
+}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct EntryOffset {

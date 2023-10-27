@@ -4,14 +4,17 @@ use event_listener::Event;
 use glommio::io::DmaFile;
 use rustc_hash::FxHashMap;
 
-use super::page_cache::{align_down, align_up, PartitionPageCache, PAGE_SIZE};
+use super::{
+    page_cache::{align_down, align_up, PartitionPageCache, PAGE_SIZE},
+    FileTypeKind,
+};
 use crate::error::Result;
 
 /// Number of times to try to get from the cache right after waiting for the
 /// page to be read.
 const RETRIES: usize = 2;
 
-pub type FileId = (&'static str, usize);
+pub type FileId = (FileTypeKind, usize);
 
 pub struct CachedFileReader {
     id: FileId,
