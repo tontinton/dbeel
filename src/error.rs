@@ -53,6 +53,8 @@ pub enum Error {
     CollectionNotFound(String),
     #[error("collection '{0}' already exists")]
     CollectionAlreadyExists(String),
+    #[error("item too large")]
+    ItemTooLarge,
     #[error("key not found")]
     KeyNotFound,
     #[error("msgpack decode failed")]

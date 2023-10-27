@@ -10,7 +10,10 @@ use super::{
     Entry, EntryOffset, FileTypeKind, DMA_STREAM_NUMBER_OF_BUFFERS,
     INDEX_ENTRY_SIZE,
 };
-use crate::{error::Result, utils::bincode::bincode_options};
+use crate::{
+    error::{Error, Result},
+    utils::bincode::bincode_options,
+};
 
 pub struct EntryWriter {
     data_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
@@ -65,12 +68,16 @@ impl EntryWriter {
     }
 
     pub async fn write(&mut self, entry: &Entry) -> Result<(usize, usize)> {
+        if bincode_options().serialized_size(entry)? > u32::MAX as u64 {
+            return Err(Error::ItemTooLarge);
+        }
+
         let data_encoded = bincode_options().serialize(entry)?;
         let data_size = data_encoded.len();
 
         let entry_index = EntryOffset {
             offset: self.data_written as u64,
-            size: data_size,
+            size: data_size as u32,
         };
         let index_encoded = bincode_options().serialize(&entry_index)?;
         let index_size = index_encoded.len();
