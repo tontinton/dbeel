@@ -246,7 +246,7 @@ impl<'a> AsyncIter<'a> {
                     &data_file
                         .read_at(
                             entry_offset.offset,
-                            entry_offset.size as usize,
+                            entry_offset.full_size as usize,
                         )
                         .await?,
                 )?;
@@ -612,14 +612,28 @@ impl LSMTree {
             let current: EntryOffset =
                 bincode_options().deserialize(&index_buf)?;
 
-            let entry: Entry = bincode_options().deserialize(
+            let raw_key: Vec<u8> = bincode_options().deserialize(
                 &data_file
-                    .read_at(current.offset, current.size as usize)
+                    .read_at(current.offset, current.key_size as usize)
                     .await?,
             )?;
 
-            match entry.key.cmp(key) {
+            match raw_key.cmp(key) {
                 Ordering::Equal => {
+                    let entry_value: EntryValue = bincode_options()
+                        .deserialize(
+                            &data_file
+                                .read_at(
+                                    current.offset + current.key_size as u64,
+                                    (current.full_size - current.key_size)
+                                        as usize,
+                                )
+                                .await?,
+                        )?;
+                    let entry = Entry {
+                        key: raw_key,
+                        value: entry_value,
+                    };
                     return Ok(Some((entry, current_index_offset)));
                 }
                 Ordering::Less => low_index = half + 1,
@@ -1127,7 +1141,7 @@ impl LSMTree {
         index_reader.read_exact(offset_bytes).await?;
         let entry_offset: EntryOffset =
             bincode_options().deserialize(offset_bytes)?;
-        let mut data_bytes = vec![0; entry_offset.size as usize];
+        let mut data_bytes = vec![0; entry_offset.full_size as usize];
         data_reader.read_exact(&mut data_bytes).await?;
         let entry: Entry = bincode_options().deserialize(&data_bytes)?;
         Ok(entry)
