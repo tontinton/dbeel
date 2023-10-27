@@ -30,11 +30,11 @@ use super::{
     cached_file_reader::{CachedFileReader, FileId},
     entry_writer::EntryWriter,
     page_cache::{PartitionPageCache, PAGE_SIZE},
-    Entry, EntryOffset, EntryValue, BLOOM_FILE_EXT, COMPACT_ACTION_FILE_EXT,
-    COMPACT_BLOOM_FILE_EXT, COMPACT_DATA_FILE_EXT, COMPACT_INDEX_FILE_EXT,
-    DATA_FILE_EXT, DEFAULT_SSTABLE_BLOOM_MIN_SIZE, DEFAULT_TREE_CAPACITY,
-    DMA_STREAM_NUMBER_OF_BUFFERS, INDEX_ENTRY_SIZE, INDEX_FILE_EXT,
-    INDEX_PADDING, MEMTABLE_FILE_EXT, TOMBSTONE,
+    Entry, EntryOffset, EntryValue, FileTypeKind, BLOOM_FILE_EXT,
+    COMPACT_ACTION_FILE_EXT, COMPACT_BLOOM_FILE_EXT, COMPACT_DATA_FILE_EXT,
+    COMPACT_INDEX_FILE_EXT, DATA_FILE_EXT, DEFAULT_SSTABLE_BLOOM_MIN_SIZE,
+    DEFAULT_TREE_CAPACITY, DMA_STREAM_NUMBER_OF_BUFFERS, INDEX_ENTRY_SIZE,
+    INDEX_FILE_EXT, INDEX_PADDING, MEMTABLE_FILE_EXT, TOMBSTONE,
 };
 use crate::{
     error::{Error, Result},
@@ -206,7 +206,7 @@ impl<'a> AsyncIter<'a> {
                     get_data_file_paths(&self.tree.dir, sstable.index);
 
                 let data_file = CachedFileReader::new(
-                    (DATA_FILE_EXT, sstable.index),
+                    (FileTypeKind::Data, sstable.index),
                     DmaFile::open(&data_filename).await?,
                     self.tree.page_cache.clone(),
                 );
@@ -214,7 +214,7 @@ impl<'a> AsyncIter<'a> {
                 let index_file = DmaFile::open(&index_filename).await?;
                 let index_file_size = sstable.size * (INDEX_ENTRY_SIZE as u64);
                 let index_file = CachedFileReader::new(
-                    (INDEX_FILE_EXT, sstable.index),
+                    (FileTypeKind::Index, sstable.index),
                     index_file,
                     self.tree.page_cache.clone(),
                 );
@@ -663,12 +663,12 @@ impl LSMTree {
             }
 
             let data_file = CachedFileReader::new(
-                (DATA_FILE_EXT, sstable.index),
+                (FileTypeKind::Data, sstable.index),
                 DmaFile::open(&sstable.data_path).await?,
                 self.page_cache.clone(),
             );
             let index_file = CachedFileReader::new(
-                (INDEX_FILE_EXT, sstable.index),
+                (FileTypeKind::Index, sstable.index),
                 DmaFile::open(&sstable.index_path).await?,
                 self.page_cache.clone(),
             );
@@ -898,7 +898,7 @@ impl LSMTree {
         data_file: DmaFile,
         index_file: DmaFile,
         files_index: usize,
-        page_cache: Rc<PartitionPageCache<(&'static str, usize)>>,
+        page_cache: Rc<PartitionPageCache<FileId>>,
     ) -> Result<usize> {
         let table_length = memtable.len();
 
@@ -1188,7 +1188,7 @@ mod tests {
     }
 
     fn partitioned_cache(cache: &GlobalCache) -> PartitionPageCache<FileId> {
-        PartitionPageCache::new("test".to_string(), cache.clone())
+        PartitionPageCache::new_named("test", cache.clone()).unwrap()
     }
 
     fn run_with_glommio<G, F, T>(fut_gen: G) -> Result<()>
@@ -1483,7 +1483,7 @@ mod tests {
 
         let cache_pages = (0..data_written).step_by(PAGE_SIZE).map(|address| {
             test_partition_cache
-                .get_copied((DATA_FILE_EXT, 0), address as u64)
+                .get_copied((FileTypeKind::Data, 0), address as u64)
                 .unwrap_or_else(|| panic!("No cache on address: {}", address))
         });
 
@@ -1496,7 +1496,7 @@ mod tests {
         let cache_pages =
             (0..index_written).step_by(PAGE_SIZE).map(|address| {
                 test_partition_cache
-                    .get_copied((INDEX_FILE_EXT, 0), address as u64)
+                    .get_copied((FileTypeKind::Index, 0), address as u64)
                     .unwrap_or_else(|| {
                         panic!("No cache on address: {}", address)
                     })
