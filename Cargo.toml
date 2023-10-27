@@ -19,6 +19,10 @@ authors = ["Tony Solomonik"]
 strip = true
 lto = true
 
+[profile.release-thin-lto]
+inherits = "release"
+lto = "thin"
+
 [features]
 flow-events = []
 
