@@ -40,6 +40,7 @@ impl<K: Hash + Eq> PartitionPageCache<K> {
         Ok(Self::new(name_hash, cache))
     }
 
+    #[inline]
     pub fn full_key(&self, partial_key: K, address: u64) -> CacheKey<K> {
         (self.name_hash, partial_key, address)
     }
