@@ -1120,7 +1120,7 @@ impl MyShard {
         self.flow_event_listeners
             .borrow_mut()
             .entry(event)
-            .or_insert(vec![])
+            .or_default()
             .push(sender);
         receiver
     }
