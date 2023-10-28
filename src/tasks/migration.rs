@@ -1,7 +1,7 @@
-use std::{cmp::Ordering, net::Shutdown, rc::Rc};
+use std::{cmp::Ordering, net::Shutdown, rc::Rc, time::Duration};
 
 use async_channel::Sender;
-use glommio::{net::TcpStream, spawn_local};
+use glommio::{net::TcpStream, spawn_local, timer::sleep};
 use log::error;
 
 use crate::{
@@ -132,6 +132,7 @@ async fn migrate_actions(
 pub fn spawn_migration_actions_tasks(
     my_shard: Rc<MyShard>,
     collections_to_ranges_and_actions: Vec<(String, Vec<RangeAndAction>)>,
+    sleep_duration: Option<Duration>,
 ) {
     for (collection_name, ranges_and_actions) in
         collections_to_ranges_and_actions
@@ -146,6 +147,12 @@ pub fn spawn_migration_actions_tasks(
             let s = my_shard.clone();
 
             spawn_local(async move {
+                // Migration may happen before one of the new shards has fully
+                // initialized.
+                if let Some(duration) = sleep_duration {
+                    sleep(duration).await;
+                }
+
                 let result =
                     migrate_actions(collection_name, tree, &ranges_and_actions)
                         .await;
