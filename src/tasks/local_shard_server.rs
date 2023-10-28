@@ -47,7 +47,7 @@ pub fn spawn_local_shard_server_task(
         executor().create_task_queue(
             Shares::Static(shares),
             Latency::NotImportant,
-            "gossip-server",
+            "local-shard-server",
         ),
     )
     .unwrap()
