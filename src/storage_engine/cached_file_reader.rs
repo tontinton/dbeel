@@ -1,6 +1,5 @@
 use std::{cell::RefCell, rc::Rc};
 
-use event_listener::Event;
 use glommio::io::DmaFile;
 use rustc_hash::FxHashMap;
 
@@ -8,7 +7,7 @@ use super::{
     page_cache::{align_down, align_up, PartitionPageCache, PAGE_SIZE},
     FileTypeKind,
 };
-use crate::error::Result;
+use crate::{error::Result, utils::local_event::LocalEvent};
 
 /// Number of times to try to get from the cache right after waiting for the
 /// page to be read.
@@ -20,7 +19,7 @@ pub struct CachedFileReader {
     id: FileId,
     file: DmaFile,
     cache: Rc<PartitionPageCache<FileId>>,
-    read_events: RefCell<FxHashMap<u64, Rc<Event>>>,
+    read_events: RefCell<FxHashMap<u64, Rc<LocalEvent>>>,
 }
 
 impl CachedFileReader {
@@ -90,7 +89,7 @@ impl CachedFileReader {
                 if first_reader {
                     self.read_events
                         .borrow_mut()
-                        .insert(address, Rc::new(Event::new()));
+                        .insert(address, Rc::new(LocalEvent::new()));
                 }
 
                 let page =
@@ -100,7 +99,7 @@ impl CachedFileReader {
                     if let Some(event) =
                         self.read_events.borrow_mut().remove(&address)
                     {
-                        event.notify(usize::MAX);
+                        event.notify();
                     }
                 }
 

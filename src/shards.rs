@@ -4,7 +4,6 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use async_channel::{Receiver, Sender};
 use bincode::Options;
-use event_listener::Event;
 use futures::{
     future::join_all,
     stream::{FuturesUnordered, StreamExt},
@@ -33,6 +32,7 @@ use crate::storage_engine::DEFAULT_TREE_CAPACITY;
 use crate::tasks::migration::{
     spawn_migration_actions_tasks, MigrationAction, RangeAndAction,
 };
+use crate::utils::local_event::LocalEvent;
 use crate::utils::{bincode::bincode_options, get_first_capture};
 use crate::{
     args::Args,
@@ -176,7 +176,7 @@ pub struct MyShard {
     pub collections: RefCell<HashMap<String, Collection>>,
 
     /// Used for notfying any insertions / removals from |collections|.
-    pub collections_change_event: Event,
+    pub collections_change_event: LocalEvent,
 
     /// The shard's page cache.
     cache: Rc<RefCell<PageCache<FileId>>>,
@@ -216,7 +216,7 @@ impl MyShard {
             nodes: RefCell::new(HashMap::new()),
             gossip_requests: RefCell::new(HashMap::new()),
             collections: RefCell::new(HashMap::new()),
-            collections_change_event: Event::new(),
+            collections_change_event: LocalEvent::new(),
             cache: Rc::new(RefCell::new(cache)),
             local_shards_packet_receiver,
             stop_receiver,
@@ -351,7 +351,7 @@ impl MyShard {
         self.collections
             .borrow_mut()
             .insert(name, Collection::new(tree, metadata));
-        self.collections_change_event.notify(usize::MAX);
+        self.collections_change_event.notify();
 
         notify_flow_event!(self, FlowEvent::CollectionCreated);
 
@@ -367,7 +367,7 @@ impl MyShard {
             .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?
             .tree
             .purge()?;
-        self.collections_change_event.notify(usize::MAX);
+        self.collections_change_event.notify();
 
         Ok(())
     }
