@@ -1,6 +1,5 @@
 use bincode::Options;
 use bloomfilter::Bloom;
-use event_listener::{Event, EventListener};
 use futures::{try_join, AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
@@ -21,7 +20,6 @@ use std::{
     cmp::Ordering,
     collections::BinaryHeap,
     path::{Path, PathBuf},
-    pin::Pin,
     rc::Rc,
     time::Duration,
 };
@@ -38,7 +36,11 @@ use super::{
 };
 use crate::{
     error::{Error, Result},
-    utils::{bincode::bincode_options, get_first_capture},
+    utils::{
+        bincode::bincode_options,
+        get_first_capture,
+        local_event::{LocalEvent, LocalEventListener},
+    },
 };
 
 /// The acceptable error rate in the bloom filter value in (0, 1].
@@ -336,7 +338,7 @@ pub struct LSMTree {
     flush_memtable: RefCell<Option<MemTable>>,
 
     /// Used for waiting on flushes.
-    flush_event: Event,
+    flush_event: LocalEvent,
 
     /// The next sstable index that is going to be written.
     write_sstable_index: Cell<usize>,
@@ -364,7 +366,7 @@ pub struct LSMTree {
     wal_sync_delay: Option<Duration>,
 
     /// Used for waiting for a scheduled wal sync.
-    wal_sync_event: RefCell<Option<Rc<Event>>>,
+    wal_sync_event: RefCell<Option<Rc<LocalEvent>>>,
 
     ///The minimum size of an sstable (in bytes) to calculate and store its bloom filter.
     sstable_bloom_min_size: u64,
@@ -519,7 +521,7 @@ impl LSMTree {
             page_cache,
             active_memtable: RefCell::new(active_memtable),
             flush_memtable: RefCell::new(None),
-            flush_event: Event::new(),
+            flush_event: LocalEvent::new(),
             write_sstable_index: Cell::new(write_file_index),
             sstables: RefCell::new(Rc::new(sstables)),
             memtable_index: Cell::new(wal_file_index),
@@ -806,14 +808,14 @@ impl LSMTree {
                 if let Some(event) = maybe_event {
                     event.listen().await;
                 } else {
-                    let event = Rc::new(Event::new());
+                    let event = Rc::new(LocalEvent::new());
 
                     self.wal_sync_event.replace(Some(event.clone()));
                     sleep(delay).await;
                     self.wal_sync_event.replace(None);
 
                     file.fdatasync().await?;
-                    event.notify(usize::MAX);
+                    event.notify();
                 }
             }
             None => {}
@@ -823,7 +825,7 @@ impl LSMTree {
     }
 
     /// Wait until a flush occures.
-    pub fn get_flush_event_listener(&self) -> Pin<Box<EventListener<()>>> {
+    pub fn get_flush_event_listener(&self) -> LocalEventListener {
         self.flush_event.listen()
     }
 
@@ -905,7 +907,7 @@ impl LSMTree {
         self.write_sstable_index
             .set(self.write_sstable_index.get() + 2);
 
-        self.flush_event.notify(usize::MAX);
+        self.flush_event.notify();
 
         std::fs::remove_file(&flush_wal_path)?;
 

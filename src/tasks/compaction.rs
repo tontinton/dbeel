@@ -1,6 +1,5 @@
-use std::{collections::HashMap, pin::Pin, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
-use event_listener::EventListener;
 use futures::future::{join_all, select, select_all, Either};
 use glommio::{executor, spawn_local_into, Latency, Shares, Task};
 use itertools::Itertools;
@@ -8,13 +7,14 @@ use log::error;
 
 use crate::{
     error::Result, shards::MyShard, storage_engine::lsm_tree::LSMTree,
+    utils::local_event::LocalEventListener,
 };
 
 const MIN_COMPACTION_FACTOR: usize = 2;
 
 async fn get_trees_and_listeners(
     my_shard: &MyShard,
-) -> (Vec<Rc<LSMTree>>, Vec<Pin<Box<EventListener<()>>>>) {
+) -> (Vec<Rc<LSMTree>>, Vec<LocalEventListener>) {
     while my_shard.collections.borrow().is_empty() {
         my_shard.collections_change_event.listen().await;
     }
