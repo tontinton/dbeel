@@ -61,6 +61,9 @@ macro_rules! notify_flow_event {
     };
 }
 
+const NEW_NODE_MIGARTION_DELAY: Option<Duration> =
+    Some(Duration::from_millis(500));
+
 #[derive(Serialize, Deserialize)]
 pub struct ClusterMetadata {
     pub nodes: Vec<NodeMetadata>,
@@ -835,7 +838,7 @@ impl MyShard {
             ));
         }
 
-        spawn_migration_actions_tasks(self, migration_actions);
+        spawn_migration_actions_tasks(self, migration_actions, None);
     }
 
     fn migrate_data_on_node_addition(self: Rc<Self>, added_shards: &[Shard]) {
@@ -979,7 +982,11 @@ impl MyShard {
 
         // Step 4.
         // Execute migration actions on background tasks.
-        spawn_migration_actions_tasks(self, migration_actions);
+        spawn_migration_actions_tasks(
+            self,
+            migration_actions,
+            NEW_NODE_MIGARTION_DELAY,
+        );
     }
 
     fn get_last_owning_shard(
