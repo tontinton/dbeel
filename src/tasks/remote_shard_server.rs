@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use glommio::{
@@ -85,7 +85,7 @@ async fn run_remote_shard_server(my_shard: Rc<MyShard>) -> Result<()> {
 pub fn spawn_remote_shard_server_task(
     my_shard: Rc<MyShard>,
 ) -> Task<Result<()>> {
-    let shares = my_shard.args.background_tasks_shares.into();
+    let shares = my_shard.args.foreground_tasks_shares.into();
     spawn_local_into(
         async move {
             let result = run_remote_shard_server(my_shard).await;
@@ -96,7 +96,7 @@ pub fn spawn_remote_shard_server_task(
         },
         executor().create_task_queue(
             Shares::Static(shares),
-            Latency::NotImportant,
+            Latency::Matters(Duration::from_millis(50)),
             "remote-shard-server",
         ),
     )
