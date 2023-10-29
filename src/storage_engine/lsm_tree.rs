@@ -901,9 +901,9 @@ impl LSMTree {
             ));
 
             self.sstables.replace(Rc::new(sstables));
+
+            self.write_sstable_index.set(index + 2);
         }
-        self.write_sstable_index
-            .set(self.write_sstable_index.get() + 2);
 
         self.flush_event.notify();
 
