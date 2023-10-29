@@ -9,7 +9,7 @@ use futures::{
     stream::{FuturesUnordered, StreamExt},
     AsyncReadExt, AsyncWriteExt,
 };
-use glommio::io::StreamWriterBuilder;
+use glommio::io::{remove, StreamWriterBuilder};
 use glommio::{
     io::{BufferedFile, StreamReaderBuilder},
     net::UdpSocket,
@@ -361,8 +361,8 @@ impl MyShard {
         Ok(())
     }
 
-    pub fn drop_collection(&self, name: &str) -> Result<()> {
-        let _ = std::fs::remove_file(self.get_collection_metadata_path(name));
+    pub async fn drop_collection(&self, name: &str) -> Result<()> {
+        let _ = remove(self.get_collection_metadata_path(name)).await;
 
         self.collections
             .borrow_mut()
@@ -1104,7 +1104,7 @@ impl MyShard {
                 false
             }
             GossipEvent::DropCollection(name) => {
-                match self.drop_collection(&name) {
+                match self.drop_collection(&name).await {
                     Ok(()) | Err(Error::CollectionNotFound(_)) => {}
                     Err(e) => {
                         return Err(e);
