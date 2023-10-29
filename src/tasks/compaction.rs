@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, rc::Rc, time::Duration};
 
 use futures::future::{join_all, select, select_all, Either};
 use glommio::{executor, spawn_local_into, Latency, Shares, Task};
@@ -138,7 +138,7 @@ pub fn spawn_compaction_task(my_shard: Rc<MyShard>) -> Task<Result<()>> {
         },
         executor().create_task_queue(
             Shares::Static(shares),
-            Latency::NotImportant,
+            Latency::Matters(Duration::from_millis(50)),
             "compaction",
         ),
     )
