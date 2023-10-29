@@ -80,8 +80,8 @@ struct CompactionAction {
 struct SSTable {
     index: usize,
     size: u64,
-    data_path: PathBuf,
-    index_path: PathBuf,
+    data_file: Rc<DmaFile>,
+    index_file: Rc<DmaFile>,
     bloom: Option<Rc<Bloom<Vec<u8>>>>,
 }
 
@@ -100,23 +100,25 @@ impl SSTable {
             None
         };
 
-        Ok(Self::new(dir, index, size, bloom))
+        Self::new(dir, index, size, bloom).await
     }
 
-    fn new(
+    async fn new(
         dir: &Path,
         index: usize,
         size: u64,
         bloom: Option<Rc<Bloom<Vec<u8>>>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let (data_path, index_path) = get_data_file_paths(dir, index);
-        Self {
+        let data_file = Rc::new(DmaFile::open(&data_path).await?);
+        let index_file = Rc::new(DmaFile::open(&index_path).await?);
+        Ok(Self {
             index,
             size,
-            data_path,
-            index_path,
+            data_file,
+            index_file,
             bloom,
-        }
+        })
     }
 }
 
@@ -207,15 +209,15 @@ impl<'a> AsyncIter<'a> {
 
                 let data_file = CachedFileReader::new(
                     (FileTypeKind::Data, sstable.index),
-                    DmaFile::open(&sstable.data_path).await?,
+                    sstable.data_file.clone(),
                     self.tree.page_cache.clone(),
                 );
 
-                let index_file = DmaFile::open(&sstable.index_path).await?;
+                // let index_file = DmaFile::open(&sstable.index_path).await?;
                 let index_file_size = sstable.size * (INDEX_ENTRY_SIZE as u64);
                 let index_file = CachedFileReader::new(
                     (FileTypeKind::Index, sstable.index),
-                    index_file,
+                    sstable.index_file.clone(),
                     self.tree.page_cache.clone(),
                 );
 
@@ -683,12 +685,12 @@ impl LSMTree {
 
             let data_file = CachedFileReader::new(
                 (FileTypeKind::Data, sstable.index),
-                DmaFile::open(&sstable.data_path).await?,
+                sstable.data_file.clone(),
                 self.page_cache.clone(),
             );
             let index_file = CachedFileReader::new(
                 (FileTypeKind::Index, sstable.index),
-                DmaFile::open(&sstable.index_path).await?,
+                sstable.index_file.clone(),
                 self.page_cache.clone(),
             );
 
@@ -893,12 +895,10 @@ impl LSMTree {
                 self.sstables.borrow().iter().cloned().collect();
 
             let index = self.write_sstable_index.get();
-            sstables.push(SSTable::new(
-                &self.dir,
-                index,
-                items_written as u64,
-                None,
-            ));
+            sstables.push(
+                SSTable::new(&self.dir, index, items_written as u64, None)
+                    .await?,
+            );
 
             self.sstables.replace(Rc::new(sstables));
 
@@ -1105,12 +1105,15 @@ impl LSMTree {
                 old_sstables.iter().cloned().collect();
 
             sstables.retain(|x| !indices_to_compact.contains(&x.index));
-            sstables.push(SSTable::new(
-                &self.dir,
-                output_index,
-                items_written,
-                maybe_bloom.map(Rc::new),
-            ));
+            sstables.push(
+                SSTable::new(
+                    &self.dir,
+                    output_index,
+                    items_written,
+                    maybe_bloom.map(Rc::new),
+                )
+                .await?,
+            );
             sstables.sort_unstable_by_key(|t| t.index);
 
             self.sstables.replace(Rc::new(sstables));
