@@ -403,7 +403,7 @@ pub fn spawn_db_server_task(my_shard: Rc<MyShard>) -> Task<Result<()>> {
         },
         executor().create_task_queue(
             Shares::Static(shares),
-            Latency::NotImportant,
+            Latency::Matters(Duration::from_millis(20)),
             "db-server",
         ),
     )
