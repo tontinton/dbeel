@@ -60,13 +60,11 @@ Running the benchmark on my machine ([System76 lemp11](https://tech-docs.system7
 
 ```
 Set:
-total: 42.987212632s, min: 97.298µs, p50: 375.032µs, p90: 716.749µs, p99: 1.25213ms, p999: 1.965492ms, max: 12.534306ms
+total: 54.424290449s, min: 80.219µs, p50: 446.851µs, p90: 905.422µs, p99: 1.806261ms, p999: 7.463916ms, max: 35.385961ms
 
 Get:
-total: 61.716233278s, min: 69.543µs, p50: 533.423µs, p90: 1.081879ms, p99: 1.733866ms, p999: 2.231455ms, max: 4.155056ms
+total: 29.250702124s, min: 36.826µs, p50: 231.513µs, p90: 481.016µs, p99: 1.184196ms, p999: 3.25635ms, max: 8.646192ms
 ```
-
-Meaning the median user will have ~3 writes in a millisecond and ~2 reads in a millisecond.
 
 Running with `--wal-sync` (calls `fdatasync` after each write to the WAL file) results in the following output for Set (note that `fdatasync` on my machine takes 6-10ms):
 
