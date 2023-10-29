@@ -73,4 +73,4 @@ Set:
 total: 1253.611595658s, min: 6.625024ms, p50: 12.57609ms, p90: 12.858347ms, p99: 13.4931ms, p999: 19.062725ms, max: 31.880792ms
 ```
 
-P90 / P99 are very important to me personally, because usually the most demanding users are the ones getting tail latencies, and they are the most important customer as they probably also use the service the most.
+Remember that you can always configure `--wal-sync` to achieve better throughput, with lower latencies, by setting `--wal-sync-delay` (try setting half the time it takes to `fdatasync` a file on average in your setup).
