@@ -141,7 +141,7 @@ async fn handle_request(
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
-                my_shard.drop_collection(&name)?;
+                my_shard.drop_collection(&name).await?;
                 my_shard.gossip(GossipEvent::DropCollection(name)).await?;
             }
             Some("set") => {

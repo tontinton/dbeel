@@ -4,7 +4,8 @@ use futures::{try_join, AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
     io::{
-        DmaFile, DmaStreamReaderBuilder, DmaStreamWriterBuilder, OpenOptions,
+        remove, rename, DmaFile, DmaStreamReaderBuilder,
+        DmaStreamWriterBuilder, OpenOptions,
     },
     spawn_local,
     timer::sleep,
@@ -418,9 +419,9 @@ impl LSMTree {
             while let Ok(action) = bincode_options()
                 .deserialize_from::<_, CompactionAction>(&mut &buf[..])
             {
-                Self::run_compaction_action(&action)?;
+                Self::run_compaction_action(&action).await?;
             }
-            Self::remove_file_log_on_err(compact_action_path);
+            Self::remove_file_log_on_err(compact_action_path).await;
         }
 
         let pattern = create_file_path_regex(DATA_FILE_EXT)?;
@@ -493,7 +494,7 @@ impl LSMTree {
                     page_cache.clone(),
                 )
                 .await?;
-                std::fs::remove_file(&unflashed_file_path)?;
+                remove(&unflashed_file_path).await?;
                 wal_file_index
             }
             _ => panic!("Cannot have more than 2 WAL files"),
@@ -559,16 +560,16 @@ impl LSMTree {
         Ok(memtable)
     }
 
-    fn run_compaction_action(action: &CompactionAction) -> Result<()> {
+    async fn run_compaction_action(action: &CompactionAction) -> Result<()> {
         for path_to_delete in &action.deletes {
             if path_to_delete.exists() {
-                Self::remove_file_log_on_err(path_to_delete);
+                Self::remove_file_log_on_err(path_to_delete).await;
             }
         }
 
         for (source_path, destination_path) in &action.renames {
             if source_path.exists() {
-                std::fs::rename(source_path, destination_path)?;
+                rename(source_path, destination_path).await?;
             }
         }
 
@@ -906,7 +907,7 @@ impl LSMTree {
 
         self.flush_event.notify();
 
-        std::fs::remove_file(&flush_wal_path)?;
+        remove(&flush_wal_path).await?;
 
         Ok(())
     }
@@ -1091,6 +1092,12 @@ impl LSMTree {
         )
         .await?;
 
+        for (source_path, destination_path) in &action.renames {
+            if source_path.exists() {
+                rename(source_path, destination_path).await?;
+            }
+        }
+
         let old_sstables = self.sstables.borrow().clone();
 
         {
@@ -1109,12 +1116,6 @@ impl LSMTree {
             self.sstables.replace(Rc::new(sstables));
         }
 
-        for (source_path, destination_path) in &action.renames {
-            if source_path.exists() {
-                std::fs::rename(source_path, destination_path)?;
-            }
-        }
-
         // Block the current execution task until all currently running read
         // tasks finish, to make sure we don't delete files that are being read.
         while Rc::strong_count(&old_sstables) > 1 {
@@ -1123,11 +1124,11 @@ impl LSMTree {
 
         for path_to_delete in &action.deletes {
             if path_to_delete.exists() {
-                Self::remove_file_log_on_err(path_to_delete);
+                Self::remove_file_log_on_err(path_to_delete).await;
             }
         }
 
-        Self::remove_file_log_on_err(&compact_action_path);
+        Self::remove_file_log_on_err(&compact_action_path).await;
 
         Ok(())
     }
@@ -1146,8 +1147,8 @@ impl LSMTree {
         Ok(entry)
     }
 
-    fn remove_file_log_on_err(file_path: &PathBuf) {
-        if let Err(e) = std::fs::remove_file(file_path) {
+    async fn remove_file_log_on_err(file_path: &PathBuf) {
+        if let Err(e) = remove(file_path).await {
             error!(
                 "Failed to remove file '{}', that is irrelevant after \
                  compaction: {}",
