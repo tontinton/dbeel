@@ -204,16 +204,13 @@ impl<'a> AsyncIter<'a> {
                 let i = *i;
                 let sstable = &self.sstables[i];
 
-                let (data_filename, index_filename) =
-                    get_data_file_paths(&self.tree.dir, sstable.index);
-
                 let data_file = CachedFileReader::new(
                     (FileTypeKind::Data, sstable.index),
-                    DmaFile::open(&data_filename).await?,
+                    DmaFile::open(&sstable.data_path).await?,
                     self.tree.page_cache.clone(),
                 );
 
-                let index_file = DmaFile::open(&index_filename).await?;
+                let index_file = DmaFile::open(&sstable.index_path).await?;
                 let index_file_size = sstable.size * (INDEX_ENTRY_SIZE as u64);
                 let index_file = CachedFileReader::new(
                     (FileTypeKind::Index, sstable.index),
