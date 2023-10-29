@@ -12,14 +12,14 @@ pub type FileId = (FileTypeKind, usize);
 
 pub struct CachedFileReader {
     id: FileId,
-    file: DmaFile,
+    file: Rc<DmaFile>,
     cache: Rc<PartitionPageCache<FileId>>,
 }
 
 impl CachedFileReader {
     pub fn new(
         id: FileId,
-        file: DmaFile,
+        file: Rc<DmaFile>,
         cache: Rc<PartitionPageCache<FileId>>,
     ) -> Self {
         Self { id, file, cache }
