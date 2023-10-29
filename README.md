@@ -73,4 +73,4 @@ Set:
 total: 1253.611595658s, min: 6.625024ms, p50: 12.57609ms, p90: 12.858347ms, p99: 13.4931ms, p999: 19.062725ms, max: 31.880792ms
 ```
 
-Remember that you can always configure `--wal-sync` to achieve better throughput, with lower latencies, by setting `--wal-sync-delay` (try setting half the time it takes to `fdatasync` a file on average in your setup).
+You can always configure `--wal-sync` to achieve better throughput, with worse tail latencies, by setting `--wal-sync-delay` (try setting half the time it takes to `fdatasync` a file on average in your setup).
