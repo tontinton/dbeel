@@ -4,7 +4,7 @@ use futures::{try_join, AsyncReadExt, AsyncWriteExt};
 use glommio::{
     enclose,
     io::{
-        remove, rename, DmaFile, DmaStreamReaderBuilder,
+        remove, rename, DmaBuffer, DmaFile, DmaStreamReaderBuilder,
         DmaStreamWriterBuilder, OpenOptions,
     },
     spawn_local,
@@ -727,8 +727,15 @@ impl LSMTree {
         timestamp: Option<OffsetDateTime>,
     ) -> Result<Option<EntryValue>> {
         let value = EntryValue::new(value, timestamp);
+        let entry = Entry { key, value };
 
-        // Wait until the current flush ends.
+        let entry_size = bincode_options().serialized_size(&entry)? as usize;
+        let size_padded = entry_size + PAGE_SIZE - (entry_size % PAGE_SIZE);
+        let mut dma_buffer =
+            self.wal_file.borrow().alloc_dma_buffer(size_padded);
+        bincode_options().serialize_into(dma_buffer.as_bytes_mut(), &entry)?;
+
+        // Wait until the active tree has space to fill.
         while self.active_memtable_full() {
             self.flush_start_event.listen().await;
         }
@@ -737,7 +744,7 @@ impl LSMTree {
         let result = self
             .active_memtable
             .borrow_mut()
-            .set(key.clone(), value.clone())?;
+            .set(entry.key, entry.value)?;
 
         if self.active_memtable_full() {
             // Capacity is full, flush memtable to disk in background.
@@ -750,7 +757,7 @@ impl LSMTree {
         }
 
         // Write to WAL for persistance.
-        self.write_to_wal(&Entry { key, value }).await?;
+        self.write_to_wal(dma_buffer).await?;
 
         Ok(result)
     }
@@ -787,20 +794,13 @@ impl LSMTree {
         self.set_with_timestamp(key, TOMBSTONE, timestamp).await
     }
 
-    async fn write_to_wal(&self, entry: &Entry) -> Result<()> {
+    async fn write_to_wal(&self, buffer: DmaBuffer) -> Result<()> {
         let file = self.wal_file.borrow().clone();
 
-        let entry_size = bincode_options().serialized_size(entry)?;
-        let size_padded =
-            entry_size + (PAGE_SIZE as u64) - entry_size % (PAGE_SIZE as u64);
-        let mut buf = file.alloc_dma_buffer(size_padded as usize);
-
-        bincode_options().serialize_into(buf.as_bytes_mut(), entry)?;
-
         let offset = self.wal_offset.get();
-        self.wal_offset.set(offset + size_padded);
+        self.wal_offset.set(offset + buffer.len() as u64);
 
-        file.write_at(buf, offset).await?;
+        file.write_at(buffer, offset).await?;
 
         match self.wal_sync_delay {
             Some(delay) if delay.is_zero() => {
