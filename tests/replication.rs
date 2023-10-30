@@ -48,7 +48,7 @@ fn three_nodes_replication_test(
             .send(vec![format!(
                 "{}:{}",
                 shard.args.ip,
-                shard.args.remote_shard_port + shard.id as u16
+                shard.args.remote_shard_port + shard.id
             )])
             .await
             .unwrap();

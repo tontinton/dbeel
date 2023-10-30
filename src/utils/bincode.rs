@@ -5,6 +5,7 @@ use bincode::{
     DefaultOptions, Options,
 };
 
+#[must_use]
 pub fn bincode_options() -> WithOtherIntEncoding<
     WithOtherTrailing<DefaultOptions, RejectTrailing>,
     FixintEncoding,

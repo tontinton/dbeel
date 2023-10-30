@@ -38,9 +38,10 @@ pub struct ResponseError {
 }
 
 impl ResponseError {
+    #[must_use]
     pub fn new(e: &Error) -> Self {
         Self {
-            message: format!("{}", e),
+            message: format!("{e}"),
             name: e.kind().to_string(),
         }
     }
@@ -78,7 +79,7 @@ fn extract_field_as_u64(map: &Value, field_name: &str) -> Result<u64> {
 
 fn extract_field_as_u16(map: &Value, field_name: &str) -> Result<u16> {
     let number = extract_field_as_u64(map, field_name)?;
-    if (0..u16::MAX as u64).contains(&number) {
+    if (0..u64::from(u16::MAX)).contains(&number) {
         Ok(number as u16)
     } else {
         Err(Error::FieldNotU16(field_name.to_string()))
@@ -101,7 +102,7 @@ async fn handle_request(
     let msgpack_request = read_value_ref(&mut &buffer[..])?.to_owned();
     if let Some(map_vec) = msgpack_request.as_map() {
         let timestamp = OffsetDateTime::now_utc();
-        let map = Value::Map(map_vec.to_vec());
+        let map = Value::Map(map_vec.clone());
         match map["type"].as_str() {
             Some("get_cluster_metadata") => {
                 let mut response = Vec::new();

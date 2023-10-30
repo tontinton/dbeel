@@ -172,6 +172,7 @@ Note that on many systems, the effective resolution of sleep delays is 10 \
     pub background_tasks_shares: u16,
 }
 
+#[must_use]
 pub fn parse_args() -> Args {
     Args::parse()
 }

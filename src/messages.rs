@@ -41,8 +41,8 @@ pub enum ShardResponse {
     Error(String),
 }
 
-/// Map a ShardResponse with a value to Result<T>.
-/// Must also import ShardResponse to compile.
+/// Map a `ShardResponse` with a value to Result<T>.
+/// Must also import `ShardResponse` to compile.
 #[macro_export]
 macro_rules! response_to_result {
     ($response:expr, $identifier:path) => {
@@ -54,8 +54,8 @@ macro_rules! response_to_result {
     };
 }
 
-/// Map a ShardResponse with no value to Result<()>.
-/// Must also import ShardResponse to compile.
+/// Map a `ShardResponse` with no value to Result<()>.
+/// Must also import `ShardResponse` to compile.
 #[macro_export]
 macro_rules! response_to_empty_result {
     ($response:expr, $identifier:path) => {
@@ -82,6 +82,7 @@ pub struct ShardPacket {
 }
 
 impl ShardPacket {
+    #[must_use]
     pub fn new(id: u16, message: ShardMessage) -> Self {
         Self {
             source_id: id,
@@ -90,6 +91,7 @@ impl ShardPacket {
         }
     }
 
+    #[must_use]
     pub fn new_request(
         id: u16,
         message: ShardMessage,

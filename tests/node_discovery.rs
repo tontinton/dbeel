@@ -71,7 +71,7 @@ fn node_discovery_and_shutdown_detect_(
         async_channel::bounded(1);
 
     let first_handle = test_node(
-        number_of_shards_first_node.into(),
+        number_of_shards_first_node,
         args.clone(),
         move |node_shard, other_shards| async move {
             let mut all_shards = other_shards.clone();
@@ -90,7 +90,7 @@ fn node_discovery_and_shutdown_detect_(
                 .send(vec![format!(
                     "{}:{}",
                     node_shard.args.ip,
-                    node_shard.args.remote_shard_port + node_shard.id as u16
+                    node_shard.args.remote_shard_port + node_shard.id
                 )])
                 .await
                 .unwrap();
@@ -134,7 +134,7 @@ fn node_discovery_and_shutdown_detect_(
     second_args.seed_nodes = seed_nodes;
 
     let second_handle = test_node_ex(
-        number_of_shards_second_node.into(),
+        number_of_shards_second_node,
         second_args.clone(),
         crash_at_shutdown,
         move |node_shard, other_shards| async move {

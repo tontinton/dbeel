@@ -17,7 +17,7 @@ pub fn deserialize<'a, D: Deserializer<'a>>(
     let value = <_>::deserialize(deserializer)?;
     OffsetDateTime::from_unix_timestamp_nanos(value).map_err(|err| {
         de::Error::invalid_value(
-            de::Unexpected::Signed((value / 1000000000i128) as _),
+            de::Unexpected::Signed((value / 1_000_000_000_i128) as _),
             &err,
         )
     })

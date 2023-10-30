@@ -22,6 +22,7 @@ pub struct GossipMessage {
 }
 
 impl GossipMessage {
+    #[must_use]
     pub fn new(source: String, event: GossipEvent) -> Self {
         Self { source, event }
     }

@@ -51,7 +51,7 @@ fn main() -> Result<()> {
         .enumerate()
         .map(|(i, cpu)| {
             LocalExecutorBuilder::new(Placement::Fixed(cpu as usize))
-                .name(format!("executor({})", cpu).as_str())
+                .name(format!("executor({cpu})").as_str())
                 .spawn(enclose!((local_connections.clone() => connections,
                                 args.clone() => args) move || async move {
                     let shard = create_shard(args, cpu, connections);

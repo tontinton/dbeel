@@ -65,6 +65,7 @@ impl Default for LocalEvent {
 }
 
 impl LocalEvent {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             listeners: Rc::new(RefCell::new(BTreeMap::new())),
@@ -133,7 +134,7 @@ mod tests {
             let listener = event.listen();
             event.notify();
             listener.await;
-        })
+        });
     }
 
     #[test]
@@ -153,7 +154,7 @@ mod tests {
 
             listener.await;
             assert!(set.get());
-        })
+        });
     }
 
     #[test]
@@ -172,6 +173,6 @@ mod tests {
             event.notify();
             listener3.await;
             listener2.await;
-        })
+        });
     }
 }

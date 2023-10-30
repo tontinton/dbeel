@@ -40,8 +40,7 @@ async fn compact_tree(tree: Rc<LSMTree>, compaction_factor: usize) {
         .map(|(i, _)| *i)
         .filter(|i| i % 2 != 0)
         .max()
-        .map(|i| i + 2)
-        .unwrap_or(1);
+        .map_or(1, |i| i + 2);
 
     let mut groups = indices_and_sizes
         .into_iter()
@@ -120,7 +119,7 @@ async fn run_compaction_loop(my_shard: Rc<MyShard>) {
             Either::Left(..) => {
                 (trees, listeners) = get_trees_and_listeners(&my_shard).await;
             }
-            Either::Right(((_, i, _), _)) => {
+            Either::Right((((), i, _), _)) => {
                 let tree = &trees[i];
                 listeners[i] = tree.get_flush_event_listener();
                 compact_tree(tree.clone(), compaction_factor).await;

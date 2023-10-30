@@ -22,6 +22,7 @@ pub struct RemoteShardConnection {
 }
 
 impl RemoteShardConnection {
+    #[must_use]
     pub fn from_args(address: String, args: &Args) -> Self {
         Self::new(
             address,
@@ -31,6 +32,7 @@ impl RemoteShardConnection {
         )
     }
 
+    #[must_use]
     pub fn new(
         address: String,
         connect_timeout: Duration,
