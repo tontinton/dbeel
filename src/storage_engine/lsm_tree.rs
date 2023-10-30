@@ -275,7 +275,7 @@ impl<'a> AsyncIter<'a> {
 
 fn get_file_path(dir: &Path, index: usize, ext: &str) -> PathBuf {
     let mut path = dir.to_path_buf();
-    path.push(format!("{0:01$}.{2}", index, INDEX_PADDING, ext));
+    path.push(format!("{index:0INDEX_PADDING$}.{ext}"));
     path
 }
 
@@ -296,7 +296,7 @@ fn get_compaction_file_paths(
 }
 
 fn create_file_path_regex(file_ext: &'static str) -> Result<Regex> {
-    let pattern = format!(r#"^(\d+)\.{}$"#, file_ext);
+    let pattern = format!(r#"^(\d+)\.{file_ext}$"#);
     Regex::new(pattern.as_str())
         .map_err(|source| Error::RegexCreationError { source, pattern })
 }
@@ -454,8 +454,7 @@ impl LSMTree {
             .iter()
             .map(|t| t.index)
             .max()
-            .map(|i| (i + 2 - (i & 1)))
-            .unwrap_or(0);
+            .map_or(0, |i| (i + 2 - (i & 1)));
 
         let pattern = create_file_path_regex(MEMTABLE_FILE_EXT)?;
         let wal_indices: Vec<usize> = {
@@ -630,7 +629,8 @@ impl LSMTree {
                         .deserialize(
                             &data_file
                                 .read_at(
-                                    current.offset + current.key_size as u64,
+                                    current.offset
+                                        + u64::from(current.key_size),
                                     (current.full_size - current.key_size)
                                         as usize,
                                 )
@@ -715,7 +715,7 @@ impl LSMTree {
     }
 
     /// Get the raw value saved for a key.
-    /// If you prefer to also get metadata of the value, use get_entry().
+    /// If you prefer to also get metadata of the value, use `get_entry`().
     pub async fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
         Ok(self.get_entry(key).await?.map(|v| v.data))
     }
@@ -1512,7 +1512,7 @@ mod tests {
         let cache_pages = (0..data_written).step_by(PAGE_SIZE).map(|address| {
             test_partition_cache
                 .get_copied((FileTypeKind::Data, 0), address as u64)
-                .unwrap_or_else(|| panic!("No cache on address: {}", address))
+                .unwrap_or_else(|| panic!("No cache on address: {address}"))
         });
 
         for (cache_page, chunk) in
@@ -1525,9 +1525,7 @@ mod tests {
             (0..index_written).step_by(PAGE_SIZE).map(|address| {
                 test_partition_cache
                     .get_copied((FileTypeKind::Index, 0), address as u64)
-                    .unwrap_or_else(|| {
-                        panic!("No cache on address: {}", address)
-                    })
+                    .unwrap_or_else(|| panic!("No cache on address: {address}"))
             });
 
         for (cache_page, chunk) in

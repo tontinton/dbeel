@@ -7,6 +7,7 @@ pub mod local_event;
 pub mod timeout;
 pub mod timestamp_nanos;
 
+#[must_use]
 pub fn get_first_capture(pattern: &Regex, entry: &DirEntry) -> Option<String> {
     let file_name = entry.file_name();
     file_name.to_str().and_then(|file_str| {

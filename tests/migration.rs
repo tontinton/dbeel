@@ -86,7 +86,7 @@ fn migration_on_death(args: Args) -> Result<()> {
             .send(vec![format!(
                 "{}:{}",
                 shard.args.ip,
-                shard.args.remote_shard_port + shard.id as u16
+                shard.args.remote_shard_port + shard.id
             )])
             .await
             .unwrap();
@@ -316,7 +316,7 @@ fn migration_on_new_node(args: Args) -> Result<()> {
             .send(vec![format!(
                 "{}:{}",
                 shard.args.ip,
-                shard.args.remote_shard_port + shard.id as u16
+                shard.args.remote_shard_port + shard.id
             )])
             .await
             .unwrap();

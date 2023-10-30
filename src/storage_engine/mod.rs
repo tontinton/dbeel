@@ -16,7 +16,7 @@ pub const TOMBSTONE: Vec<u8> = vec![];
 const DMA_STREAM_NUMBER_OF_BUFFERS: usize = 16;
 
 pub const DEFAULT_TREE_CAPACITY: usize = 4096;
-pub const DEFAULT_SSTABLE_BLOOM_MIN_SIZE: u64 = 1048576;
+pub const DEFAULT_SSTABLE_BLOOM_MIN_SIZE: u64 = 1_048_576;
 
 const INDEX_PADDING: usize = 20; // Number of integers in max u64.
 
@@ -29,7 +29,7 @@ const COMPACT_INDEX_FILE_EXT: &str = "compact_index";
 const COMPACT_BLOOM_FILE_EXT: &str = "compact_bloom";
 const COMPACT_ACTION_FILE_EXT: &str = "compact_action";
 
-/// An EntryOffset item size ater serialization with bincode.
+/// An `EntryOffset` item size ater serialization with bincode.
 const INDEX_ENTRY_SIZE: usize = 16;
 
 #[derive(Kinded)]

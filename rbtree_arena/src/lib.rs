@@ -690,8 +690,8 @@ mod tests {
     #[test]
     fn tree_that_runs_all_rotations_and_coloring() {
         let mut tree = RedBlackTree::with_capacity(8);
-        for i in vec![8, 18, 5, 15, 17, 25, 40, 80] {
-            assert_eq!(tree.set(i, 0 as u8), Ok(None));
+        for i in [8, 18, 5, 15, 17, 25, 40, 80] {
+            assert_eq!(tree.set(i, 0_u8), Ok(None));
         }
         let seventeen = tree.root.unsafe_deref();
         assert_eq!(seventeen.color, Color::Black);

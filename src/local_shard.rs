@@ -15,6 +15,7 @@ pub struct LocalShardConnection {
 }
 
 impl LocalShardConnection {
+    #[must_use]
     pub fn new(id: u16) -> Self {
         let (sender, receiver) = async_channel::unbounded();
         let (stop_sender, stop_receiver) = async_channel::bounded(1);

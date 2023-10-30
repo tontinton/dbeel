@@ -30,6 +30,7 @@ pub struct RangeAndAction {
 }
 
 impl RangeAndAction {
+    #[must_use]
     pub fn new(start: u32, end: u32, action: MigrationAction) -> Self {
         Self { start, end, action }
     }

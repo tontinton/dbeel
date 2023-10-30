@@ -109,6 +109,7 @@ fn is_between(item: u32, start: u32, end: u32) -> bool {
 }
 
 impl Shard {
+    #[must_use]
     pub fn new(
         node_name: String,
         name: String,
@@ -199,6 +200,7 @@ pub struct MyShard {
 }
 
 impl MyShard {
+    #[must_use]
     pub fn new(
         args: Args,
         id: u16,
@@ -252,7 +254,7 @@ impl MyShard {
 
     fn get_collection_metadata_path(&self, name: &str) -> PathBuf {
         let mut dir = PathBuf::from(self.args.dir.clone());
-        dir.push(format!("{}.metadata", name));
+        dir.push(format!("{name}.metadata"));
         dir
     }
 
@@ -296,8 +298,7 @@ impl MyShard {
                     collections.push((name, metadata));
                 }
                 Err(e) => panic!(
-                    "Collection '{}' failed to open metadata file on disk: {}",
-                    name, e
+                    "Collection '{name}' failed to open metadata file on disk: {e}"
                 ),
             }
         }
@@ -380,7 +381,7 @@ impl MyShard {
             .shards
             .borrow()
             .iter()
-            .flat_map(|p| match &p.connection {
+            .filter_map(|p| match &p.connection {
                 ShardConnection::Local(c) => Some(c.stop_sender.clone()),
                 _ => None,
             })
@@ -399,7 +400,7 @@ impl MyShard {
             .shards
             .borrow()
             .iter()
-            .flat_map(|p| match &p.connection {
+            .filter_map(|p| match &p.connection {
                 ShardConnection::Local(c) => Some(c.sender.clone()),
                 _ => None,
             })
@@ -439,7 +440,7 @@ impl MyShard {
 
             let connections = my_shard.shards.borrow()
                 .iter()
-                .flat_map(|p| match &p.connection {
+                .filter_map(|p| match &p.connection {
                     ShardConnection::Remote(c)
                         if !nodes.contains(&p.node_name) =>
                     {
@@ -476,7 +477,7 @@ impl MyShard {
                             }
                         }
                         Err(e) => {
-                            error!("Failed to send request to replica: {}", e)
+                            error!("Failed to send request to replica: {}", e);
                         }
                     }
                 }
@@ -526,7 +527,7 @@ impl MyShard {
             .shards
             .borrow()
             .iter()
-            .flat_map(|shard| match &shard.connection {
+            .filter_map(|shard| match &shard.connection {
                 ShardConnection::Remote(_) => None,
                 ShardConnection::Local(c) => Some(c.id),
             })
@@ -563,7 +564,7 @@ impl MyShard {
                         .collect::<Vec<_>>()
                 })
                 .map(|(node_name, address, id)| {
-                    let shard_name = format!("{}-{}", node_name, id);
+                    let shard_name = format!("{node_name}-{id}");
                     Shard::new(
                         node_name,
                         shard_name,

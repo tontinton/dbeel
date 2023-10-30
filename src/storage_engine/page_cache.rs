@@ -14,10 +14,12 @@ pub type Page = [u8; PAGE_SIZE];
 type CacheKey<K> = (u32, K, u64);
 pub type PageCache<K> = WTinyLfuCache<CacheKey<K>, Page>;
 
+#[must_use]
 pub fn align_up(address: u64) -> u64 {
     (address + (PAGE_SIZE as u64) - 1) & !((PAGE_SIZE as u64) - 1)
 }
 
+#[must_use]
 pub fn align_down(address: u64) -> u64 {
     address & !((PAGE_SIZE as u64) - 1)
 }
@@ -49,9 +51,10 @@ impl<K: Hash + Eq> PartitionPageCache<K> {
         self.cache
             .borrow_mut()
             .get(&self.full_key(key, address))
-            .cloned()
+            .copied()
     }
 
+    #[must_use]
     pub fn borrow_mut(&self) -> RefMut<PageCache<K>> {
         self.cache.borrow_mut()
     }

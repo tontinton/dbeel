@@ -49,6 +49,7 @@ impl EntryWriter {
         Self::new(data_writer, index_writer, files_index, page_cache)
     }
 
+    #[must_use]
     pub fn new(
         data_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
         index_writer: Box<(dyn AsyncWrite + std::marker::Unpin)>,
@@ -68,7 +69,7 @@ impl EntryWriter {
     }
 
     pub async fn write(&mut self, entry: &Entry) -> Result<(usize, usize)> {
-        if bincode_options().serialized_size(entry)? > u32::MAX as u64 {
+        if bincode_options().serialized_size(entry)? > u64::from(u32::MAX) {
             return Err(Error::ItemTooLarge);
         }
 

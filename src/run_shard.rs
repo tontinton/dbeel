@@ -173,6 +173,7 @@ pub async fn run_shard(
     Ok(())
 }
 
+#[must_use]
 pub fn create_shard(
     args: Args,
     id: u16,
