@@ -337,8 +337,11 @@ pub struct LSMTree {
     /// The memtable that is currently being flushed to disk.
     flush_memtable: RefCell<Option<MemTable>>,
 
-    /// Used for waiting on flushes.
-    flush_event: LocalEvent,
+    /// Notified when a flush is started (active tree is empty + wal file updated).
+    flush_start_event: LocalEvent,
+
+    /// Notified when a flush is finished (sstables updated).
+    flush_done_event: LocalEvent,
 
     /// The next sstable index that is going to be written.
     write_sstable_index: Cell<usize>,
@@ -521,7 +524,8 @@ impl LSMTree {
             page_cache,
             active_memtable: RefCell::new(active_memtable),
             flush_memtable: RefCell::new(None),
-            flush_event: LocalEvent::new(),
+            flush_start_event: LocalEvent::new(),
+            flush_done_event: LocalEvent::new(),
             write_sstable_index: Cell::new(write_file_index),
             sstables: RefCell::new(Rc::new(sstables)),
             memtable_index: Cell::new(wal_file_index),
@@ -726,7 +730,7 @@ impl LSMTree {
 
         // Wait until the current flush ends.
         while self.active_memtable_full() {
-            self.get_flush_event_listener().await;
+            self.flush_start_event.listen().await;
         }
 
         // Write to memtable in memory.
@@ -826,7 +830,7 @@ impl LSMTree {
 
     /// Wait until a flush occures.
     pub fn get_flush_event_listener(&self) -> LocalEventListener {
-        self.flush_event.listen()
+        self.flush_done_event.listen()
     }
 
     pub async fn flush(&self) -> Result<()> {
@@ -862,6 +866,8 @@ impl LSMTree {
             .replace(Rc::new(DmaFile::create(&next_wal_path).await?));
         self.wal_offset.set(0);
         self.wal_sync_event.replace(None);
+
+        self.flush_start_event.notify();
 
         let (data_filename, index_filename) =
             get_data_file_paths(&self.dir, self.write_sstable_index.get());
@@ -905,7 +911,7 @@ impl LSMTree {
             self.write_sstable_index.set(index + 2);
         }
 
-        self.flush_event.notify();
+        self.flush_done_event.notify();
 
         remove(&flush_wal_path).await?;
 
