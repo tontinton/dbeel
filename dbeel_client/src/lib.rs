@@ -3,17 +3,18 @@ pub mod error;
 use std::{
     collections::HashSet,
     net::{SocketAddr, ToSocketAddrs},
-    rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
+use async_rwlock::RwLock;
 use dbeel::{
     shards::{hash_bytes, hash_string, ClusterMetadata, CollectionMetadata},
     tasks::db_server::{ResponseError, ResponseType},
 };
 use error::VecError;
 use futures_lite::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use glommio::{net::TcpStream, sync::RwLock};
+use glommio::net::TcpStream;
 use rmp_serde::from_slice;
 use rmpv::{encode::write_value, Integer, Utf8String, Value};
 
@@ -33,7 +34,7 @@ struct Shard {
 #[derive(Debug, Clone)]
 pub struct DbeelClient {
     seed_shards: Vec<SocketAddr>,
-    hash_ring: Rc<RwLock<Vec<Shard>>>,
+    hash_ring: Arc<RwLock<Vec<Shard>>>,
     connect_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
@@ -82,7 +83,7 @@ impl DbeelClient {
 
         let this = Self {
             seed_shards: seed_addresses,
-            hash_ring: Rc::new(RwLock::new(Vec::new())),
+            hash_ring: Arc::new(RwLock::new(Vec::new())),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             read_timeout: DEFAULT_READ_TIMEOUT,
             write_timeout: DEFAULT_WRITE_TIMEOUT,
@@ -131,11 +132,7 @@ impl DbeelClient {
         }
         hash_ring.sort_unstable_by_key(|s| s.hash);
 
-        let mut ring = self
-            .hash_ring
-            .write()
-            .await
-            .map_err(|_| Error::HashRingTakeWriteLock)?;
+        let mut ring = self.hash_ring.write().await;
         *ring = hash_ring;
 
         Ok(())
@@ -276,11 +273,7 @@ impl DbeelClient {
         request: &Value,
         replication_factor: u16,
     ) -> Result<ShardedRequestResult> {
-        let ring = self
-            .hash_ring
-            .read()
-            .await
-            .map_err(|_| Error::HashRingTakeReadLock)?;
+        let ring = self.hash_ring.read().await;
         let start_shard_index =
             ring.iter().position(|s| s.hash >= hash).unwrap_or(0);
 
