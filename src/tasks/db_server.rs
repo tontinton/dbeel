@@ -95,6 +95,19 @@ fn extract_field_encoded(map: &Value, field_name: &str) -> Result<Vec<u8>> {
     Ok(field_encoded)
 }
 
+/// Extract a field named "key", returns an error if the current shard doesn't own the key.
+fn extract_key(
+    my_shard: &MyShard,
+    map: &Value,
+    replica_index: usize,
+) -> Result<Vec<u8>> {
+    let key = extract_field_encoded(map, "key")?;
+    if !my_shard.owns_key(&key, replica_index)? {
+        return Err(Error::KeyNotOwnedByShard);
+    }
+    Ok(key)
+}
+
 async fn handle_request(
     my_shard: Rc<MyShard>,
     buffer: Vec<u8>,
@@ -147,7 +160,6 @@ async fn handle_request(
             }
             Some("set") => {
                 let collection_name = extract_field_as_str(&map, "collection")?;
-                let key = extract_field_encoded(&map, "key")?;
                 let value = extract_field_encoded(&map, "value")?;
                 let write_timeout = Duration::from_millis(
                     extract_field_as_u64(&map, "timeout")
@@ -155,6 +167,8 @@ async fn handle_request(
                 );
                 let client_iteration =
                     extract_field_as_u16(&map, "client_iteration").unwrap_or(0);
+                let key =
+                    extract_key(&my_shard, &map, client_iteration.into())?;
 
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
@@ -204,7 +218,6 @@ async fn handle_request(
             }
             Some("delete") => {
                 let collection_name = extract_field_as_str(&map, "collection")?;
-                let key = extract_field_encoded(&map, "key")?;
                 let delete_timeout = Duration::from_millis(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
@@ -215,6 +228,8 @@ async fn handle_request(
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
                 let replications = collection.metadata.replication_factor;
+                let key =
+                    extract_key(&my_shard, &map, client_iteration.into())?;
 
                 let delete_consistency = min(
                     extract_field_as_u16(&map, "consistency")
@@ -256,7 +271,6 @@ async fn handle_request(
             }
             Some("get") => {
                 let collection_name = extract_field_as_str(&map, "collection")?;
-                let key = extract_field_encoded(&map, "key")?;
                 let read_timeout = Duration::from_millis(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_GET_TIMEOUT_MS),
@@ -267,6 +281,8 @@ async fn handle_request(
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
                 let replications = collection.metadata.replication_factor;
+                let key =
+                    extract_key(&my_shard, &map, client_iteration.into())?;
 
                 let read_consistency = min(
                     extract_field_as_u16(&map, "consistency")
