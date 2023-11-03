@@ -165,10 +165,9 @@ async fn handle_request(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
                 );
-                let client_iteration =
-                    extract_field_as_u16(&map, "client_iteration").unwrap_or(0);
-                let key =
-                    extract_key(&my_shard, &map, client_iteration.into())?;
+                let replica_index =
+                    extract_field_as_u16(&map, "replica_index").unwrap_or(0);
+                let key = extract_key(&my_shard, &map, replica_index.into())?;
 
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
@@ -195,7 +194,7 @@ async fn handle_request(
                                 timestamp,
                             ),
                             write_consistency as usize - 1,
-                            (replications - client_iteration) as usize - 1,
+                            (replications - replica_index) as usize - 1,
                             |res| {
                                 response_to_empty_result!(
                                     res,
@@ -222,14 +221,13 @@ async fn handle_request(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_SET_TIMEOUT_MS),
                 );
-                let client_iteration =
-                    extract_field_as_u16(&map, "client_iteration").unwrap_or(0);
+                let replica_index =
+                    extract_field_as_u16(&map, "replica_index").unwrap_or(0);
 
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
                 let replications = collection.metadata.replication_factor;
-                let key =
-                    extract_key(&my_shard, &map, client_iteration.into())?;
+                let key = extract_key(&my_shard, &map, replica_index.into())?;
 
                 let delete_consistency = min(
                     extract_field_as_u16(&map, "consistency")
@@ -248,7 +246,7 @@ async fn handle_request(
                                 timestamp,
                             ),
                             delete_consistency as usize - 1,
-                            (replications - client_iteration) as usize - 1,
+                            (replications - replica_index) as usize - 1,
                             |res| {
                                 response_to_empty_result!(
                                     res,
@@ -275,14 +273,13 @@ async fn handle_request(
                     extract_field_as_u64(&map, "timeout")
                         .unwrap_or(DEFAULT_GET_TIMEOUT_MS),
                 );
-                let client_iteration =
-                    extract_field_as_u16(&map, "client_iteration").unwrap_or(0);
+                let replica_index =
+                    extract_field_as_u16(&map, "replica_index").unwrap_or(0);
 
                 let collection = my_shard.get_collection(&collection_name)?;
                 let tree = collection.tree;
                 let replications = collection.metadata.replication_factor;
-                let key =
-                    extract_key(&my_shard, &map, client_iteration.into())?;
+                let key = extract_key(&my_shard, &map, replica_index.into())?;
 
                 let read_consistency = min(
                     extract_field_as_u16(&map, "consistency")
@@ -296,7 +293,7 @@ async fn handle_request(
                         my_shard.clone().send_request_to_replicas(
                             ShardRequest::Get(collection_name, key.clone()),
                             read_consistency as usize - 1,
-                            (replications - client_iteration) as usize - 1,
+                            (replications - replica_index) as usize - 1,
                             |res| response_to_result!(res, ShardResponse::Get),
                         );
                     let (local_value, mut values) = timeout(
