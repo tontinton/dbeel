@@ -289,7 +289,7 @@ impl DbeelClient {
                 let mut replica_request = request.clone();
                 if let Value::Map(items) = &mut replica_request {
                     items.push((
-                        "client_iteration".into(),
+                        "replica_index".into(),
                         owning_shards_found.into(),
                     ));
                 }
