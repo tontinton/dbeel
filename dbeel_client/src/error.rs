@@ -65,14 +65,6 @@ pub enum Error {
     /// Server error.
     #[error("Server error ({0}): {1}")]
     ServerErr(String, String),
-
-    /// Failed to take read lock on hash ring.
-    #[error("Failed to take read lock on hash ring")]
-    HashRingTakeReadLock,
-
-    /// Failed to take write lock on hash ring.
-    #[error("Failed to take write lock on hash ring")]
-    HashRingTakeWriteLock,
 }
 
 #[derive(Debug)]
