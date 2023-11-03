@@ -103,9 +103,9 @@ impl DbeelClient {
         let buf = Self::send_request_ex(
             &self.seed_shards,
             request,
-            DEFAULT_CONNECT_TIMEOUT,
-            Some(DEFAULT_READ_TIMEOUT),
-            Some(DEFAULT_WRITE_TIMEOUT),
+            self.connect_timeout,
+            Some(self.read_timeout),
+            Some(self.write_timeout),
         )
         .await?;
 
