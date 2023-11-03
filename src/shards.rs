@@ -168,7 +168,7 @@ pub struct MyShard {
 
     /// The consistent hash ring (shards sorted by hash).
     /// Starts with the first hash that has a greater hash than our shard.
-    pub shards: RefCell<Vec<Shard>>,
+    shards: RefCell<Vec<Shard>>,
 
     /// All known nodes other than this node, key is node unique name.
     pub nodes: RefCell<HashMap<String, NodeMetadata>>,
@@ -541,6 +541,41 @@ impl MyShard {
             gossip_port: self.args.gossip_port,
             db_port: self.args.port,
         }
+    }
+
+    pub fn owns_key(&self, key: &[u8], replica_index: usize) -> Result<bool> {
+        let shards = self.shards.borrow();
+        if shards.len() < 2 {
+            return Ok(true);
+        }
+
+        let hash = hash_bytes(key)?;
+        if replica_index == 0 {
+            return Ok(is_between(
+                hash,
+                shards[shards.len() - 1].hash,
+                shards[0].hash,
+            ));
+        }
+
+        let mut nodes = HashSet::with_capacity(replica_index);
+
+        for i in (1..shards.len()).rev() {
+            let shard = &shards[i];
+            let previous_shard = &shards[i - 1];
+            if shard.node_name == previous_shard.node_name
+                || nodes.contains(&shard.node_name)
+            {
+                continue;
+            }
+
+            nodes.insert(&shard.node_name);
+            if nodes.len() == replica_index {
+                return Ok(is_between(hash, previous_shard.hash, shard.hash));
+            }
+        }
+
+        Ok(false)
     }
 
     pub fn add_shards_of_nodes(&self, nodes: Vec<NodeMetadata>) {

@@ -41,6 +41,9 @@ pub enum Error {
     #[error("no remote shards received from asking all seed nodes")]
     NoRemoteShardsFoundInSeedNodes,
 
+    #[error("shard doesn't own the key, maybe you need to update your cluster metadata")]
+    KeyNotOwnedByShard,
+
     #[error("field '{0}' is missing")]
     MissingField(String),
     #[error("field '{0}' is not a u16")]
