@@ -3,6 +3,7 @@ pub mod error;
 use std::{
     collections::HashSet,
     net::{SocketAddr, ToSocketAddrs},
+    rc::Rc,
     time::Duration,
 };
 
@@ -12,7 +13,7 @@ use dbeel::{
 };
 use error::VecError;
 use futures_lite::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use glommio::net::TcpStream;
+use glommio::{net::TcpStream, sync::RwLock};
 use rmp_serde::from_slice;
 use rmpv::{encode::write_value, Integer, Utf8String, Value};
 
@@ -32,7 +33,7 @@ struct Shard {
 #[derive(Debug, Clone)]
 pub struct DbeelClient {
     seed_shards: Vec<SocketAddr>,
-    hash_ring: Vec<Shard>,
+    hash_ring: Rc<RwLock<Vec<Shard>>>,
     connect_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
@@ -61,6 +62,11 @@ fn hash_key(key: &Value) -> Result<u32> {
     hash_bytes(&buf).map_err(Error::HashKey)
 }
 
+enum ShardedRequestResult {
+    Buf(Vec<u8>),
+    Resync,
+}
+
 impl DbeelClient {
     pub async fn from_seed_nodes<A>(addresses: &[A]) -> Result<Self>
     where
@@ -74,13 +80,27 @@ impl DbeelClient {
             };
         }
 
+        let this = Self {
+            seed_shards: seed_addresses,
+            hash_ring: Rc::new(RwLock::new(Vec::new())),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            read_timeout: DEFAULT_READ_TIMEOUT,
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
+        };
+
+        this.sync_hash_ring().await?;
+
+        Ok(this)
+    }
+
+    async fn sync_hash_ring(&self) -> Result<()> {
         let request = Value::Map(vec![(
             Value::String("type".into()),
             Value::String("get_cluster_metadata".into()),
         )]);
 
         let buf = Self::send_request_ex(
-            &seed_addresses,
+            &self.seed_shards,
             request,
             DEFAULT_CONNECT_TIMEOUT,
             Some(DEFAULT_READ_TIMEOUT),
@@ -111,13 +131,14 @@ impl DbeelClient {
         }
         hash_ring.sort_unstable_by_key(|s| s.hash);
 
-        Ok(Self {
-            seed_shards: seed_addresses,
-            hash_ring,
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            read_timeout: DEFAULT_READ_TIMEOUT,
-            write_timeout: DEFAULT_WRITE_TIMEOUT,
-        })
+        let mut ring = self
+            .hash_ring
+            .write()
+            .await
+            .map_err(|_| Error::HashRingTakeWriteLock)?;
+        *ring = hash_ring;
+
+        Ok(())
     }
 
     pub fn set_connect_timeout(&mut self, timeout: Duration) {
@@ -249,17 +270,19 @@ impl DbeelClient {
         Err(Error::SendRequestToCluster(VecError(errors)))
     }
 
-    async fn send_sharded_request(
+    async fn _send_sharded_request(
         &self,
         hash: u32,
-        request: Value,
+        request: &Value,
         replication_factor: u16,
-    ) -> Result<Vec<u8>> {
-        let start_shard_index = self
+    ) -> Result<ShardedRequestResult> {
+        let ring = self
             .hash_ring
-            .iter()
-            .position(|s| s.hash >= hash)
-            .unwrap_or(0);
+            .read()
+            .await
+            .map_err(|_| Error::HashRingTakeReadLock)?;
+        let start_shard_index =
+            ring.iter().position(|s| s.hash >= hash).unwrap_or(0);
 
         let mut errors = Vec::new();
 
@@ -268,7 +291,7 @@ impl DbeelClient {
         let mut i = 0;
         let mut shard_index = start_shard_index;
         while i == 0 || shard_index != start_shard_index {
-            let shard = &self.hash_ring[shard_index];
+            let shard = &ring[shard_index];
             if !nodes.contains(&shard.node_name) {
                 let mut replica_request = request.clone();
                 if let Value::Map(items) = &mut replica_request {
@@ -281,10 +304,19 @@ impl DbeelClient {
                 match self.send_request(&[shard.address], replica_request).await
                 {
                     Ok(response) => {
-                        return Ok(response);
+                        return Ok(ShardedRequestResult::Buf(response));
                     }
                     Err(Error::SendRequestToCluster(mut e)) => {
-                        errors.push(e.pop().unwrap());
+                        let request_err = e.pop().unwrap();
+                        if let Error::ServerErr(ref name, _) = request_err {
+                            let re = ResponseError::new(
+                                &dbeel::error::Error::KeyNotOwnedByShard,
+                            );
+                            if name == &re.name {
+                                return Ok(ShardedRequestResult::Resync);
+                            }
+                        }
+                        errors.push(request_err);
                     }
                     Err(e) => {
                         errors.push(e);
@@ -300,11 +332,29 @@ impl DbeelClient {
             }
 
             i += 1;
-            shard_index =
-                (start_shard_index + i as usize) % self.hash_ring.len();
+            shard_index = (start_shard_index + i as usize) % ring.len();
         }
 
         Err(Error::SendRequestToCluster(VecError(errors)))
+    }
+
+    async fn send_sharded_request(
+        &self,
+        hash: u32,
+        request: Value,
+        replication_factor: u16,
+    ) -> Result<Vec<u8>> {
+        loop {
+            match self
+                ._send_sharded_request(hash, &request, replication_factor)
+                .await?
+            {
+                ShardedRequestResult::Buf(buf) => return Ok(buf),
+                ShardedRequestResult::Resync => {
+                    self.sync_hash_ring().await?;
+                }
+            };
+        }
     }
 
     pub async fn create_collection_with_replication(
