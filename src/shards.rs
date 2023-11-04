@@ -540,6 +540,7 @@ impl MyShard {
             ids,
             gossip_port: self.args.gossip_port,
             db_port: self.args.port,
+            virtual_shards: self.args.virtual_shards,
         }
     }
 
@@ -594,21 +595,28 @@ impl MyShard {
                                     node.remote_shard_base_port + id
                                 ),
                                 id,
+                                node.virtual_shards,
                             )
                         })
                         .collect::<Vec<_>>()
                 })
-                .map(|(node_name, address, id)| {
-                    let shard_name = format!("{node_name}-{id}");
-                    Shard::new(
-                        node_name,
-                        shard_name,
-                        ShardConnection::Remote(
-                            RemoteShardConnection::from_args(
-                                address, &self.args,
-                            ),
-                        ),
-                    )
+                .flat_map(|(node_name, address, id, virtual_shards)| {
+                    (0..virtual_shards)
+                        .into_iter()
+                        .map(|vid| {
+                            let shard_name = format!("{node_name}-{id}-{vid}");
+                            Shard::new(
+                                node_name.clone(),
+                                shard_name,
+                                ShardConnection::Remote(
+                                    RemoteShardConnection::from_args(
+                                        address.clone(),
+                                        &self.args,
+                                    ),
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>()
                 }),
         );
 

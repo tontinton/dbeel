@@ -26,6 +26,7 @@ fn create_metadata_from_args(
         ids: (0..number_of_shards).collect::<Vec<_>>(),
         gossip_port: args.gossip_port,
         db_port: args.port,
+        virtual_shards: 3,
     }
 }
 
@@ -47,6 +48,8 @@ fn args() -> Args {
         "500",
         "--remote-shard-write-timeout",
         "500",
+        "--virtual-shards",
+        "3",
     ])
 }
 

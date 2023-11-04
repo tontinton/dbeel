@@ -120,14 +120,17 @@ impl DbeelClient {
                         .map_err(Error::ParsingSocketAddress)?
                         .collect::<Vec<_>>()[0];
 
-                let shard_name = format!("{}-{}", node.name, shard_id);
-                let hash =
-                    hash_string(&shard_name).map_err(Error::HashShardName)?;
-                hash_ring.push(Shard {
-                    hash,
-                    address,
-                    node_name: node.name.clone(),
-                });
+                for vid in 0..node.virtual_shards {
+                    let shard_name =
+                        format!("{}-{}-{}", node.name, shard_id, vid);
+                    let hash = hash_string(&shard_name)
+                        .map_err(Error::HashShardName)?;
+                    hash_ring.push(Shard {
+                        hash,
+                        address,
+                        node_name: node.name.clone(),
+                    });
+                }
             }
         }
         hash_ring.sort_unstable_by_key(|s| s.hash);

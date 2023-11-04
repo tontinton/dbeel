@@ -92,6 +92,15 @@ This port is for listening for distributed messages from \
 
     #[clap(
         long,
+        help = "Number of placements in the hash ring for a single shard.
+A bigger number means items will be more evenly distributed in the cluster, at \
+            the cost of cluster metadata taking more memory.",
+        default_value = "5"
+    )]
+    pub virtual_shards: u8,
+
+    #[clap(
+        long,
         help = "Gossip UDP server port.
 This port is for listening for gossip messages from \
                 remote nodes.",

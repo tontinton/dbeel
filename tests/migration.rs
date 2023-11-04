@@ -48,7 +48,7 @@ fn args() -> Args {
     let _ = std::fs::remove_dir_all("/tmp/test");
     let _ = std::fs::remove_dir_all("/tmp/test1");
     let _ = std::fs::remove_dir_all("/tmp/test2");
-    parse_args_from(["", "--dir", "/tmp/test"])
+    parse_args_from(["", "--dir", "/tmp/test", "--virtual-shards", "1"])
 }
 
 #[rstest]
