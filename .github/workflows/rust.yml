@@ -21,8 +21,11 @@ jobs:
       - name: Cache setup
         uses: ./.github/actions/cache-setup
 
-      - name: Build
+      - name: Build dbeel
         run: cargo build --verbose
+
+      - name: Build benchmark
+        run: cargo build -p blackbox-bench --verbose
 
   test:
     name: Test
