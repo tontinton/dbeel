@@ -578,13 +578,13 @@ impl MyShard {
         Ok(false)
     }
 
-    pub fn add_shards_of_nodes(&self, nodes: Vec<NodeMetadata>) {
+    pub fn add_shards_of_nodes(&self, nodes: &[NodeMetadata]) {
         self.shards.borrow_mut().extend(
             nodes
                 .into_iter()
                 .flat_map(|node| {
                     node.ids
-                        .into_iter()
+                        .iter()
                         .map(|id| {
                             (
                                 node.name.clone(),
@@ -1095,7 +1095,7 @@ impl MyShard {
                     .entry(node.name.clone())
                     .or_insert_with(|| node.clone());
                 let node_name = node.name.clone();
-                self.add_shards_of_nodes(vec![node]);
+                self.add_shards_of_nodes(&[node]);
                 trace!(
                     "After alive of {}: holding {} nodes and {} shards",
                     node_name,

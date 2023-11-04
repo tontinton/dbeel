@@ -102,7 +102,7 @@ async fn discover_nodes(
         my_shard.nodes.borrow().len()
     );
 
-    my_shard.add_shards_of_nodes(nodes);
+    my_shard.add_shards_of_nodes(&nodes);
 
     Ok(())
 }
