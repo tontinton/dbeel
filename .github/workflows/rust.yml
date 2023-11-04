@@ -27,6 +27,9 @@ jobs:
       - name: Build benchmark
         run: cargo build -p blackbox-bench --verbose
 
+      - name: Build tokio example
+        run: cargo build -p tokio-example --verbose
+
   test:
     name: Test
     runs-on: ubuntu-latest
