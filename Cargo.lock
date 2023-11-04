@@ -2637,6 +2637,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-example"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dbeel-client",
+ "rmpv",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2645,16 +2655,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.38",
-]
-
-[[package]]
-name = "tokio_example"
-version = "0.1.0"
-dependencies = [
- "clap",
- "dbeel-client",
- "rmpv",
- "tokio",
 ]
 
 [[package]]

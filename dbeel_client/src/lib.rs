@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
+    time::timeout,
 };
 
 #[cfg(feature = "glommio")]
@@ -114,8 +115,8 @@ impl DbeelClient {
             &self.seed_shards,
             request,
             self.connect_timeout,
-            Some(self.read_timeout),
-            Some(self.write_timeout),
+            self.read_timeout,
+            self.write_timeout,
         )
         .await?;
 
@@ -179,10 +180,10 @@ impl DbeelClient {
         })
     }
 
-    async fn send_buffer(
-        stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    async fn stream_write_buffer(
+        stream: &mut (impl AsyncWrite + Unpin),
         buffer: &[u8],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<()> {
         let size_buffer = (buffer.len() as u16).to_le_bytes();
         stream
             .write_all(&size_buffer)
@@ -192,7 +193,12 @@ impl DbeelClient {
             .write_all(buffer)
             .await
             .map_err(Error::CommunicateWithShard)?;
+        Ok(())
+    }
 
+    async fn stream_read_buffer(
+        stream: &mut (impl AsyncRead + Unpin),
+    ) -> Result<Vec<u8>> {
         let mut size_buf = [0; 4];
         stream
             .read_exact(&mut size_buf)
@@ -204,8 +210,22 @@ impl DbeelClient {
             .read_exact(&mut response_buffer)
             .await
             .map_err(Error::CommunicateWithShard)?;
-
         Ok(response_buffer)
+    }
+
+    #[cfg(feature = "tokio")]
+    async fn send_buffer(
+        stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+        buffer: &[u8],
+        read_timeout: Duration,
+        write_timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        timeout(write_timeout, Self::stream_write_buffer(stream, buffer))
+            .await
+            .map_err(|_| Error::CommunicateWithShardTimeout)??;
+        timeout(read_timeout, Self::stream_read_buffer(stream))
+            .await
+            .map_err(|_| Error::CommunicateWithShardTimeout)?
     }
 
     #[cfg(feature = "glommio")]
@@ -213,22 +233,22 @@ impl DbeelClient {
         address: &SocketAddr,
         data: &[u8],
         connect_timeout: Duration,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
+        read_timeout: Duration,
+        write_timeout: Duration,
     ) -> Result<Vec<u8>> {
         let mut stream = TcpStream::connect_timeout(address, connect_timeout)
             .await
             .map_err(Error::ConnectToShard)?;
 
         stream
-            .set_read_timeout(read_timeout)
+            .set_read_timeout(Some(read_timeout))
             .map_err(Error::SetTimeout)?;
-
         stream
-            .set_write_timeout(write_timeout)
+            .set_write_timeout(Some(write_timeout))
             .map_err(Error::SetTimeout)?;
 
-        let response_result = Self::send_buffer(&mut stream, &data).await?;
+        Self::stream_write_buffer(&mut stream, data).await?;
+        let response_result = Self::stream_read_buffer(&mut stream).await?;
 
         let _ = stream.close().await;
 
@@ -240,13 +260,14 @@ impl DbeelClient {
         address: &SocketAddr,
         data: &[u8],
         connect_timeout: Duration,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
+        read_timeout: Duration,
+        write_timeout: Duration,
     ) -> Result<Vec<u8>> {
-        let mut stream = TcpStream::connect(address)
+        let mut stream = timeout(connect_timeout, TcpStream::connect(address))
             .await
+            .map_err(|_| Error::CommunicateWithShardTimeout)?
             .map_err(Error::ConnectToShard)?;
-        Ok(Self::send_buffer(&mut stream, &data).await?)
+        Self::send_buffer(&mut stream, data, read_timeout, write_timeout).await
     }
 
     async fn send_request(
@@ -258,8 +279,8 @@ impl DbeelClient {
             addresses,
             request,
             self.connect_timeout,
-            Some(self.read_timeout),
-            Some(self.write_timeout),
+            self.read_timeout,
+            self.write_timeout,
         )
         .await
     }
@@ -268,8 +289,8 @@ impl DbeelClient {
         addresses: &[SocketAddr],
         request: Value,
         connect_timeout: Duration,
-        read_timeout: Option<Duration>,
-        write_timeout: Option<Duration>,
+        read_timeout: Duration,
+        write_timeout: Duration,
     ) -> Result<Vec<u8>> {
         if addresses.is_empty() {
             return Err(Error::NoAddresses);
@@ -281,7 +302,7 @@ impl DbeelClient {
         let mut errors = vec![];
         for address in addresses {
             let response_result = Self::send_buffer_to_address(
-                &address,
+                address,
                 &data_encoded,
                 connect_timeout,
                 read_timeout,

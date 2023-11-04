@@ -38,6 +38,10 @@ pub enum Error {
     #[error("Failed to communicate with a shard: {0}")]
     CommunicateWithShard(std::io::Error),
 
+    /// Failed to communicate with a shard, got timeout.
+    #[error("Failed to communicate with a shard, got timeout")]
+    CommunicateWithShardTimeout,
+
     /// Failed to communicate with remote cluster.
     /// Holds a Vec to each error that happened while trying to communicate
     /// with each shard.
