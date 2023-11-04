@@ -409,6 +409,7 @@ impl Collection {
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("get".into())),
             (Value::String("key".into()), key),
+            (Value::String("hash".into()), hash.into()),
             (
                 Value::String("collection".into()),
                 Value::String(self.name.clone()),
@@ -451,6 +452,7 @@ impl Collection {
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("set".into())),
             (Value::String("key".into()), key),
+            (Value::String("hash".into()), hash.into()),
             (Value::String("value".into()), value),
             (
                 Value::String("collection".into()),
@@ -494,6 +496,7 @@ impl Collection {
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("delete".into())),
             (Value::String("key".into()), key),
+            (Value::String("hash".into()), hash.into()),
             (
                 Value::String("collection".into()),
                 Value::String(self.name.clone()),
