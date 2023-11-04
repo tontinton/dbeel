@@ -1,5 +1,5 @@
 [package]
-name = "blackbox_bench"
+name = "blackbox-bench"
 version = "0.1.0"
 edition = "2021"
 
