@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.1.13", features = ["derive"] }
-dbeel-client = { path = "../dbeel_client" }
+dbeel-client = { path = "../dbeel_client", default-features = false, features = ["glommio"] }
 futures = "0.3.28"
 glommio = { git = "https://github.com/tontinton/glommio.git", branch = "my-master" }
 rand = "0.8.5"

@@ -13,12 +13,22 @@ use dbeel::{
     tasks::db_server::{ResponseError, ResponseType},
 };
 use error::VecError;
-use futures_lite::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use glommio::net::TcpStream;
 use rmp_serde::from_slice;
 use rmpv::{encode::write_value, Integer, Utf8String, Value};
 
 use crate::error::{Error, Result};
+
+#[cfg(feature = "tokio")]
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::TcpStream,
+};
+
+#[cfg(feature = "glommio")]
+use glommio::net::TcpStream;
+
+#[cfg(feature = "glommio")]
+use futures_lite::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -198,6 +208,47 @@ impl DbeelClient {
         Ok(response_buffer)
     }
 
+    #[cfg(feature = "glommio")]
+    async fn send_buffer_to_address(
+        address: &SocketAddr,
+        data: &[u8],
+        connect_timeout: Duration,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
+    ) -> Result<Vec<u8>> {
+        let mut stream = TcpStream::connect_timeout(address, connect_timeout)
+            .await
+            .map_err(Error::ConnectToShard)?;
+
+        stream
+            .set_read_timeout(read_timeout)
+            .map_err(Error::SetTimeout)?;
+
+        stream
+            .set_write_timeout(write_timeout)
+            .map_err(Error::SetTimeout)?;
+
+        let response_result = Self::send_buffer(&mut stream, &data).await?;
+
+        let _ = stream.close().await;
+
+        Ok(response_result)
+    }
+
+    #[cfg(feature = "tokio")]
+    async fn send_buffer_to_address(
+        address: &SocketAddr,
+        data: &[u8],
+        connect_timeout: Duration,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
+    ) -> Result<Vec<u8>> {
+        let mut stream = TcpStream::connect(address)
+            .await
+            .map_err(Error::ConnectToShard)?;
+        Ok(Self::send_buffer(&mut stream, &data).await?)
+    }
+
     async fn send_request(
         &self,
         addresses: &[SocketAddr],
@@ -229,22 +280,14 @@ impl DbeelClient {
 
         let mut errors = vec![];
         for address in addresses {
-            let mut stream =
-                TcpStream::connect_timeout(address, connect_timeout)
-                    .await
-                    .map_err(Error::ConnectToShard)?;
-            stream
-                .set_read_timeout(read_timeout)
-                .map_err(Error::SetTimeout)?;
-            stream
-                .set_write_timeout(write_timeout)
-                .map_err(Error::SetTimeout)?;
-
-            let response_result =
-                Self::send_buffer(&mut stream, &data_encoded).await;
-
-            let _ = stream.close().await;
-
+            let response_result = Self::send_buffer_to_address(
+                &address,
+                &data_encoded,
+                connect_timeout,
+                read_timeout,
+                write_timeout,
+            )
+            .await;
             match response_result {
                 Ok(mut response_encoded)
                     if response_encoded.last()
