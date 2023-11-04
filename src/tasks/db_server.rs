@@ -23,7 +23,7 @@ use crate::{
     gossip::GossipEvent,
     messages::{ShardRequest, ShardResponse},
     response_to_empty_result, response_to_result,
-    shards::MyShard,
+    shards::{hash_bytes, MyShard},
     storage_engine::TOMBSTONE,
     utils::timeout::timeout,
 };
@@ -77,6 +77,15 @@ fn extract_field_as_u64(map: &Value, field_name: &str) -> Result<u64> {
         .ok_or_else(|| Error::MissingField(field_name.to_string()))
 }
 
+fn extract_field_as_u32(map: &Value, field_name: &str) -> Result<u32> {
+    let number = extract_field_as_u64(map, field_name)?;
+    if (0..u64::from(u32::MAX)).contains(&number) {
+        Ok(number as u32)
+    } else {
+        Err(Error::FieldNotU16(field_name.to_string()))
+    }
+}
+
 fn extract_field_as_u16(map: &Value, field_name: &str) -> Result<u16> {
     let number = extract_field_as_u64(map, field_name)?;
     if (0..u64::from(u16::MAX)).contains(&number) {
@@ -102,9 +111,18 @@ fn extract_key(
     replica_index: usize,
 ) -> Result<Vec<u8>> {
     let key = extract_field_encoded(map, "key")?;
-    if !my_shard.owns_key(&key, replica_index)? {
+    let maybe_key_hash = extract_field_as_u32(map, "hash");
+
+    let key_hash = if let Ok(hash) = maybe_key_hash {
+        hash
+    } else {
+        hash_bytes(&key)?
+    };
+
+    if !my_shard.owns_key(key_hash, replica_index)? {
         return Err(Error::KeyNotOwnedByShard);
     }
+
     Ok(key)
 }
 

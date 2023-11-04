@@ -547,13 +547,12 @@ impl MyShard {
         }
     }
 
-    pub fn owns_key(&self, key: &[u8], replica_index: usize) -> Result<bool> {
+    pub fn owns_key(&self, hash: u32, replica_index: usize) -> Result<bool> {
         let shards = self.shards.borrow();
         if shards.len() < 2 {
             return Ok(true);
         }
 
-        let hash = hash_bytes(key)?;
         if replica_index == 0 {
             return Ok(is_between(
                 hash,
