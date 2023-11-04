@@ -212,7 +212,7 @@ impl MyShard {
     ) -> Self {
         let shard_name = format!("{}-{}", args.name, id);
         let hash = hash_string(&shard_name).unwrap();
-        Self {
+        let this = Self {
             args,
             id,
             shard_name,
@@ -228,7 +228,11 @@ impl MyShard {
             stop_sender,
             #[cfg(feature = "flow-events")]
             flow_event_listeners: RefCell::new(FxHashMap::default()),
-        }
+        };
+
+        this.sort_consistent_hash_ring();
+
+        this
     }
 
     pub async fn stop(&self) -> Result<()> {
