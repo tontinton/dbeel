@@ -80,16 +80,16 @@ pub enum ShardConnection {
 #[derive(Debug, Clone)]
 pub struct Shard {
     // The unique node name.
-    pub node_name: String,
+    node_name: String,
 
     // The unique shard name.
-    pub name: String,
+    name: String,
 
     // The hash of the unique name, used for consistent hashing.
-    pub hash: u32,
+    hash: u32,
 
     // Communicate with a shard by abstracting away if it's remote or local.
-    pub connection: ShardConnection,
+    connection: ShardConnection,
 }
 
 pub fn hash_string(s: &str) -> std::io::Result<u32> {
