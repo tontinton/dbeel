@@ -234,7 +234,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703642b98a00b3b90513279a8ede3fcfa479c126c5fb46e78f3051522f021403"
 
 [[package]]
-name = "blackbox_bench"
+name = "blackbox-bench"
 version = "0.1.0"
 dependencies = [
  "clap",
