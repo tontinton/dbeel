@@ -24,9 +24,15 @@ pub enum Error {
     #[error("Failed to parse to a socket address: {0}")]
     ParsingSocketAddress(std::io::Error),
 
+    #[cfg(feature = "glommio")]
     /// Failed to connect to a shard.
     #[error("Failed to connect to a shard: {0}")]
     ConnectToShard(glommio::GlommioError<()>),
+
+    #[cfg(feature = "tokio")]
+    /// Failed to connect to a shard.
+    #[error("Failed to connect to a shard: {0}")]
+    ConnectToShard(tokio::io::Error),
 
     /// Failed to communicate with a shard.
     #[error("Failed to communicate with a shard: {0}")]
@@ -58,6 +64,7 @@ pub enum Error {
     #[error("Failed to encode to a msgpack buffer")]
     MsgpackSerdeEncodeError(#[from] rmp_serde::encode::Error),
 
+    #[cfg(feature = "glommio")]
     /// Failed to set timeout on a socket.
     #[error("Failed to set timeout on a socket: {0}")]
     SetTimeout(glommio::GlommioError<()>),
