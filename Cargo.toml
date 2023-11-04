@@ -5,6 +5,7 @@ members = [
   "from_num",
   "rbtree_arena",
   "test_utils",
+  "tokio_example",
 ]
 
 [package]
