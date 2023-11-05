@@ -3,7 +3,7 @@ use std::{rc::Rc, time::Duration};
 use glommio::{executor, spawn_local_into, Latency, Shares, Task};
 use log::error;
 
-use crate::{error::Result, shards::MyShard};
+use crate::{error::Result, messages::ShardResponse, shards::MyShard};
 
 async fn run_shard_messages_receiver(my_shard: Rc<MyShard>) -> Result<()> {
     let shard_id = my_shard.id;
@@ -27,7 +27,19 @@ async fn run_shard_messages_receiver(my_shard: Rc<MyShard>) -> Result<()> {
                     }
                 }
             }
-            Err(e) => error!("Failed to handle shard message: {}", e),
+            Err(response_err) => {
+                if let Err(e) = packet
+                    .response_sender
+                    .unwrap()
+                    .send(ShardResponse::new_err(&response_err))
+                    .await
+                {
+                    error!(
+                        "Failed to reply error to local shard ({}): {}, {}",
+                        shard_id, e, response_err
+                    );
+                }
+            }
         }
     }
 }

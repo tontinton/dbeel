@@ -2,7 +2,11 @@ use async_channel::Sender;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{gossip::GossipEvent, storage_engine::EntryValue};
+use crate::{
+    error::{Error, ErrorKind},
+    gossip::GossipEvent,
+    storage_engine::EntryValue,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
@@ -15,6 +19,8 @@ pub enum ShardRequest {
     Ping,
     GetMetadata,
     GetCollections,
+    CreateCollection(String, u16),
+    DropCollection(String),
     Set(String, Vec<u8>, Vec<u8>, OffsetDateTime),
     Delete(String, Vec<u8>, OffsetDateTime),
     Get(String, Vec<u8>),
@@ -35,10 +41,18 @@ pub enum ShardResponse {
     Pong,
     GetMetadata(Vec<NodeMetadata>),
     GetCollections(Vec<(String, u16)>),
+    CreateCollection,
+    DropCollection,
     Set,
     Delete,
     Get(Option<EntryValue>),
-    Error(String),
+    Error(ErrorKind, String),
+}
+
+impl ShardResponse {
+    pub fn new_err(e: &Error) -> Self {
+        Self::Error(e.kind(), e.to_string())
+    }
 }
 
 /// Map a `ShardResponse` with a value to Result<T>.
@@ -48,7 +62,7 @@ macro_rules! response_to_result {
     ($response:expr, $identifier:path) => {
         match $response {
             $identifier(inner_value) => Ok(inner_value),
-            ShardResponse::Error(e) => Err(Error::ResponseError(e)),
+            ShardResponse::Error(kind, e) => Err(Error::ResponseError(kind, e)),
             _ => Err(Error::ResponseWrongType),
         }
     };
@@ -61,7 +75,7 @@ macro_rules! response_to_empty_result {
     ($response:expr, $identifier:path) => {
         match $response {
             $identifier => Ok(()),
-            ShardResponse::Error(e) => Err(Error::ResponseError(e)),
+            ShardResponse::Error(kind, e) => Err(Error::ResponseError(kind, e)),
             _ => Err(Error::ResponseWrongType),
         }
     };

@@ -34,9 +34,7 @@ async fn handle_remote_shard_client(
                 Err(e) => {
                     send_message_to_stream(
                         client,
-                        &ShardMessage::Response(ShardResponse::Error(
-                            e.to_string(),
-                        )),
+                        &ShardMessage::Response(ShardResponse::new_err(&e)),
                     )
                     .await?;
                 }
