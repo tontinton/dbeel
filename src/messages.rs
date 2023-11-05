@@ -4,13 +4,13 @@ use time::OffsetDateTime;
 
 use crate::{gossip::GossipEvent, storage_engine::EntryValue};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShardEvent {
     Gossip(GossipEvent),
     Set(String, Vec<u8>, Vec<u8>, OffsetDateTime),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShardRequest {
     Ping,
     GetMetadata,
@@ -30,7 +30,7 @@ pub struct NodeMetadata {
     pub db_port: u16,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShardResponse {
     Pong,
     GetMetadata(Vec<NodeMetadata>),
@@ -67,14 +67,15 @@ macro_rules! response_to_empty_result {
     };
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShardMessage {
     Event(ShardEvent),
     Request(ShardRequest),
     Response(ShardResponse),
 }
 
-// A packet that is sent between local shards.
+/// A packet that is sent between local shards.
+#[derive(Debug)]
 pub struct ShardPacket {
     pub source_id: u16,
     pub message: ShardMessage,
