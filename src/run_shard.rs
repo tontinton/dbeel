@@ -140,7 +140,6 @@ pub async fn run_shard(
 
         // Notify all nodes that we are now alive.
         my_shard
-            .clone()
             .gossip(GossipEvent::Alive(my_shard.get_node_metadata()))
             .await?;
     }
@@ -159,7 +158,6 @@ pub async fn run_shard(
     if is_node_managing {
         // Notify all nodes that we are now dead.
         my_shard
-            .clone()
             .gossip(GossipEvent::Dead(my_shard.args.name.clone()))
             .await?;
     }
