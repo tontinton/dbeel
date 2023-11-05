@@ -53,7 +53,6 @@ async fn handle_gossip_packet(
     let continue_with_gossip = if seen_first_time {
         trace!("Gossip: {:?}", message.event);
         my_shard
-            .clone()
             .broadcast_message_to_local_shards(&ShardMessage::Event(
                 ShardEvent::Gossip(message.event.clone()),
             ))
