@@ -1,8 +1,6 @@
 use clap::Parser;
 use dbeel_client::DbeelClient;
 use rmpv::{decode::read_value_ref, Value};
-use std::time::Duration;
-use tokio::time::sleep;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -29,10 +27,6 @@ async fn main() {
     let seed_nodes = [(args.ip.clone(), args.port)];
     let client = DbeelClient::from_seed_nodes(&seed_nodes).await.unwrap();
     let collection = client.create_collection(COLLECTION_NAME).await.unwrap();
-
-    // Wait for creation of collection to get through all shards.
-    // TODO: Wait in server for all local shards to respond and only then return.
-    sleep(Duration::from_millis(100)).await;
 
     let value = Value::String("value".into());
     collection

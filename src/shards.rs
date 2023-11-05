@@ -405,7 +405,9 @@ impl MyShard {
             .borrow()
             .iter()
             .filter_map(|p| match &p.connection {
-                ShardConnection::Local(c) => Some(c.sender.clone()),
+                ShardConnection::Local(c) if c.id != self.id => {
+                    Some(c.sender.clone())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -422,6 +424,40 @@ impl MyShard {
         }
 
         Ok(())
+    }
+
+    pub async fn send_request_to_local_shards<F, T>(
+        &self,
+        request: ShardRequest,
+        response_map_fn: F,
+    ) -> Result<Vec<T>>
+    where
+        F: Fn(ShardResponse) -> Result<T> + 'static,
+        T: 'static,
+    {
+        let connections = self
+            .shards
+            .borrow()
+            .iter()
+            .filter_map(|p| match &p.connection {
+                ShardConnection::Local(c) if c.id != self.id => Some(c.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let results = join_all(
+            connections
+                .iter()
+                .map(|c| c.send_request(self.id, request.clone())),
+        )
+        .await;
+
+        let mut responses = Vec::with_capacity(results.len());
+        for result in results {
+            responses.push(response_map_fn(result?)?);
+        }
+
+        Ok(responses)
     }
 
     pub async fn send_request_to_replicas<F, T>(
@@ -672,6 +708,14 @@ impl MyShard {
                     .map(|(n, c)| (n.clone(), c.metadata.replication_factor))
                     .collect::<Vec<_>>(),
             ),
+            ShardRequest::CreateCollection(name, replication_factor) => {
+                self.create_collection(name, replication_factor).await?;
+                ShardResponse::CreateCollection
+            }
+            ShardRequest::DropCollection(name) => {
+                self.drop_collection(&name).await?;
+                ShardResponse::DropCollection
+            }
             ShardRequest::Set(collection, key, value, timestamp) => {
                 self.handle_shard_set_message(
                     collection, key, value, timestamp,

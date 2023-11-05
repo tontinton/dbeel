@@ -2,8 +2,7 @@ use clap::Parser;
 use dbeel_client::{Collection, DbeelClient};
 use futures::future::join_all;
 use glommio::{
-    spawn_local, timer::sleep, CpuLocation, CpuSet, LocalExecutorBuilder,
-    Placement,
+    spawn_local, CpuLocation, CpuSet, LocalExecutorBuilder, Placement,
 };
 use rand::{seq::SliceRandom, thread_rng};
 use rmpv::{decode::read_value_ref, Value, ValueRef};
@@ -226,9 +225,6 @@ fn main() {
             let collection = Arc::new(
                 client.create_collection(COLLECTION_NAME).await.unwrap(),
             );
-
-            // Wait for creation of collection to get through all shards.
-            sleep(Duration::from_millis(100)).await;
 
             let set_results = run_benchmark(
                 collection.clone(),

@@ -1,11 +1,12 @@
 use async_channel::{RecvError, SendError};
 use kinded::Kinded;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::messages::ShardPacket;
 
 #[derive(Error, Debug, Kinded)]
-#[kinded(display = "snake_case")]
+#[kinded(display = "snake_case", derive(Serialize, Deserialize))]
 pub enum Error {
     #[error("creating the '{pattern}' regex failed")]
     RegexCreationError {
@@ -36,8 +37,8 @@ pub enum Error {
 
     #[error("response type not expected")]
     ResponseWrongType,
-    #[error("response failed with: '{0}'")]
-    ResponseError(String),
+    #[error("response '{0}' failed with: '{1}'")]
+    ResponseError(ErrorKind, String),
     #[error("no remote shards received from asking all seed nodes")]
     NoRemoteShardsFoundInSeedNodes,
 

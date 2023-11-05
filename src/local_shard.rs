@@ -30,13 +30,17 @@ impl LocalShardConnection {
 
     pub async fn send_request(
         &self,
+        sender_id: u16,
         request: ShardRequest,
     ) -> Result<ShardResponse> {
         let (sender, receiver) = async_channel::bounded(1);
         let message = ShardMessage::Request(request);
+
+        // Must clone sender, or the channel will be closed.
         self.sender
-            .send(ShardPacket::new_request(self.id, message, sender))
+            .send(ShardPacket::new_request(sender_id, message, sender.clone()))
             .await?;
+
         Ok(receiver.recv().await?)
     }
 }

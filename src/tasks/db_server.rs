@@ -155,6 +155,22 @@ async fn handle_request(
                 my_shard
                     .create_collection(name.clone(), replication_factor)
                     .await?;
+
+                let _ = my_shard
+                    .send_request_to_local_shards(
+                        ShardRequest::CreateCollection(
+                            name.clone(),
+                            replication_factor,
+                        ),
+                        |res| {
+                            response_to_empty_result!(
+                                res,
+                                ShardResponse::CreateCollection
+                            )
+                        },
+                    )
+                    .await?;
+
                 my_shard
                     .gossip(GossipEvent::CreateCollection(
                         name,
@@ -173,7 +189,21 @@ async fn handle_request(
             }
             Some("drop_collection") => {
                 let name = extract_field_as_str(&map, "name")?;
+
                 my_shard.drop_collection(&name).await?;
+
+                let _ = my_shard
+                    .send_request_to_local_shards(
+                        ShardRequest::DropCollection(name.clone()),
+                        |res| {
+                            response_to_empty_result!(
+                                res,
+                                ShardResponse::DropCollection
+                            )
+                        },
+                    )
+                    .await?;
+
                 my_shard.gossip(GossipEvent::DropCollection(name)).await?;
             }
             Some("set") => {
