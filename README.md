@@ -7,6 +7,7 @@ It's not production ready at all, but that doesn't mean there is no value in the
 If you ever wanted to read database code without getting overwhelmed by massive amounts of code, dbeel is for you.
 
 ## Traits
+* Stores documents in `msgpack` format
 * LSM Tree
   * Memtable is a red black tree
 * Thread per core
