@@ -6,7 +6,7 @@ use dbeel::{
     flow_events::FlowEvent,
     storage_engine::TOMBSTONE,
 };
-use dbeel_client::DbeelClient;
+use dbeel_client::{Consistency, DbeelClient};
 use event_listener::Event;
 use futures::{future::join_all, try_join};
 use once_cell::sync::Lazy;
@@ -121,14 +121,18 @@ fn migration_on_death(args: Args) -> Result<()> {
         .unwrap();
 
         collection
-            .set_consistent(Value::String("key".into()), Value::F32(42.0), 2)
+            .set_consistent(
+                Value::String("key".into()),
+                Value::F32(42.0),
+                Consistency::Fixed(2),
+            )
             .await
             .unwrap();
         collection
             .set_consistent(
                 Value::String("KEY".into()),
                 Value::Boolean(false),
-                2,
+                Consistency::Fixed(2),
             )
             .await
             .unwrap();
@@ -350,14 +354,18 @@ fn migration_on_new_node(args: Args) -> Result<()> {
         .unwrap();
 
         collection
-            .set_consistent(Value::String("key".into()), Value::F32(42.0), 2)
+            .set_consistent(
+                Value::String("key".into()),
+                Value::F32(42.0),
+                Consistency::Fixed(2),
+            )
             .await
             .unwrap();
         collection
             .set_consistent(
                 Value::String("KEY".into()),
                 Value::Boolean(false),
-                2,
+                Consistency::Fixed(2),
             )
             .await
             .unwrap();
