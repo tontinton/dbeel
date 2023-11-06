@@ -5,7 +5,7 @@ use dbeel::{
     error::Result,
     flow_events::FlowEvent,
 };
-use dbeel_client::DbeelClient;
+use dbeel_client::{Consistency, DbeelClient};
 use futures::try_join;
 use rmpv::{decode::read_value_ref, Value, ValueRef};
 use rstest::{fixture, rstest};
@@ -82,7 +82,7 @@ fn three_nodes_replication_test(
             .set_consistent(
                 Value::String("key".into()),
                 Value::F32(42.0),
-                set_consistency,
+                Consistency::Fixed(set_consistency),
             )
             .await
             .unwrap();
@@ -146,7 +146,10 @@ fn three_nodes_replication_test(
 
             let collection = client.collection("test").await.unwrap();
             let response = collection
-                .get_consistent(Value::String("key".into()), get_consistency)
+                .get_consistent(
+                    Value::String("key".into()),
+                    Consistency::Fixed(get_consistency),
+                )
                 .await
                 .unwrap();
             let value = read_value_ref(&mut &response[..]).unwrap();

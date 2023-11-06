@@ -460,15 +460,29 @@ impl DbeelClient {
     }
 }
 
+pub enum Consistency {
+    Fixed(u16),
+    Quorum,
+    All,
+}
+
+impl Consistency {
+    fn to_int(&self, replication_factor: u16) -> Integer {
+        match self {
+            Consistency::Fixed(x) => *x,
+            Consistency::Quorum => replication_factor / 2 + 1,
+            Consistency::All => replication_factor,
+        }
+        .into()
+    }
+}
+
 impl Collection {
-    pub async fn get_consistent<I>(
+    pub async fn get_consistent(
         &self,
         key: Value,
-        consistency: I,
-    ) -> Result<Vec<u8>>
-    where
-        I: Into<Integer>,
-    {
+        consistency: Consistency,
+    ) -> Result<Vec<u8>> {
         let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("get".into())),
@@ -480,7 +494,9 @@ impl Collection {
             ),
             (
                 Value::String("consistency".into()),
-                Value::Integer(consistency.into()),
+                Value::Integer(
+                    consistency.to_int(self.metadata.replication_factor),
+                ),
             ),
         ]);
         self.client
@@ -493,7 +509,7 @@ impl Collection {
     }
 
     pub async fn get(&self, key: Value) -> Result<Vec<u8>> {
-        self.get_consistent(key, 1).await
+        self.get_consistent(key, Consistency::Fixed(1)).await
     }
 
     pub async fn get_from_str_key<S>(&self, key: S) -> Result<Vec<u8>>
@@ -503,15 +519,12 @@ impl Collection {
         self.get(Value::String(key.into())).await
     }
 
-    pub async fn set_consistent<I>(
+    pub async fn set_consistent(
         &self,
         key: Value,
         value: Value,
-        consistency: I,
-    ) -> Result<Vec<u8>>
-    where
-        I: Into<Integer>,
-    {
+        consistency: Consistency,
+    ) -> Result<Vec<u8>> {
         let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("set".into())),
@@ -524,7 +537,9 @@ impl Collection {
             ),
             (
                 Value::String("consistency".into()),
-                Value::Integer(consistency.into()),
+                Value::Integer(
+                    consistency.to_int(self.metadata.replication_factor),
+                ),
             ),
         ]);
         self.client
@@ -537,7 +552,7 @@ impl Collection {
     }
 
     pub async fn set(&self, key: Value, value: Value) -> Result<Vec<u8>> {
-        self.set_consistent(key, value, 1).await
+        self.set_consistent(key, value, Consistency::Fixed(1)).await
     }
 
     pub async fn set_from_str_key<S: Into<Utf8String>>(
@@ -548,14 +563,11 @@ impl Collection {
         self.set(Value::String(key.into()), value).await
     }
 
-    pub async fn delete_consistent<I>(
+    pub async fn delete_consistent(
         &self,
         key: Value,
-        consistency: I,
-    ) -> Result<Vec<u8>>
-    where
-        I: Into<Integer>,
-    {
+        consistency: Consistency,
+    ) -> Result<Vec<u8>> {
         let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("delete".into())),
@@ -567,7 +579,9 @@ impl Collection {
             ),
             (
                 Value::String("consistency".into()),
-                Value::Integer(consistency.into()),
+                Value::Integer(
+                    consistency.to_int(self.metadata.replication_factor),
+                ),
             ),
         ]);
         self.client
@@ -580,7 +594,7 @@ impl Collection {
     }
 
     pub async fn delete(&self, key: Value) -> Result<Vec<u8>> {
-        self.delete_consistent(key, 1).await
+        self.delete_consistent(key, Consistency::Fixed(1)).await
     }
 
     pub async fn delete_from_str_key<S: Into<Utf8String>>(

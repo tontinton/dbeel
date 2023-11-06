@@ -1,5 +1,5 @@
 use clap::Parser;
-use dbeel_client::DbeelClient;
+use dbeel_client::{Consistency, DbeelClient};
 use rmpv::{decode::read_value_ref, Value};
 
 #[derive(Parser, Debug)]
@@ -21,22 +21,26 @@ struct Args {
 const COLLECTION_NAME: &str = "tokio";
 
 #[tokio::main]
-async fn main() {
+async fn main() -> dbeel_client::error::Result<()> {
     let args = Args::parse();
 
     let seed_nodes = [(args.ip.clone(), args.port)];
-    let client = DbeelClient::from_seed_nodes(&seed_nodes).await.unwrap();
-    let collection = client.create_collection(COLLECTION_NAME).await.unwrap();
+    let client = DbeelClient::from_seed_nodes(&seed_nodes).await?;
+    let collection = client.create_collection(COLLECTION_NAME).await?;
 
+    let key = Value::String("key".into());
     let value = Value::String("value".into());
-    collection
-        .set_from_str_key("key", value.clone())
-        .await
-        .unwrap();
 
-    let response_buffer = collection.get_from_str_key("key").await.unwrap();
-    let response = read_value_ref(&mut &response_buffer[..]).unwrap();
+    collection
+        .set_consistent(key.clone(), value.clone(), Consistency::Quorum)
+        .await?;
+
+    let response_buffer =
+        collection.get_consistent(key, Consistency::Quorum).await?;
+    let response = read_value_ref(&mut &response_buffer[..])?;
     assert_eq!(response, value.as_ref());
 
-    collection.drop().await.unwrap();
+    collection.drop().await?;
+
+    Ok(())
 }
