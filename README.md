@@ -1,7 +1,11 @@
 <img src="./logo.svg">
 
 ## Introduction
-dbeel is an attempt to learn modern database architecture.
+`dbeel` is an attempt to learn modern database architecture.
+
+The best one-liner to describe the db is: <em>A distributed thread-per-core document database written in rust.</em>
+
+So basically it has a document API like in `MongoDB` with leaderless replication like in `Cassandra` and thread-per-core architecture like in `ScyllaDB`.
 
 It's not production ready at all, but that doesn't mean there is no value in the project.
 If you ever wanted to read database code without getting overwhelmed by massive amounts of code, dbeel is for you.
