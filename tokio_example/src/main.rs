@@ -1,6 +1,6 @@
 use clap::Parser;
 use dbeel_client::{Consistency, DbeelClient};
-use rmpv::{decode::read_value_ref, Value};
+use rmpv::Value;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -26,19 +26,25 @@ async fn main() -> dbeel_client::error::Result<()> {
 
     let seed_nodes = [(args.ip.clone(), args.port)];
     let client = DbeelClient::from_seed_nodes(&seed_nodes).await?;
-    let collection = client.create_collection(COLLECTION_NAME).await?;
-
-    let key = Value::String("key".into());
-    let value = Value::String("value".into());
-
-    collection
-        .set_consistent(key.clone(), value.clone(), Consistency::Quorum)
+    let collection = client
+        .create_collection_with_replication(COLLECTION_NAME, 3)
         .await?;
 
-    let response_buffer =
-        collection.get_consistent(key, Consistency::Quorum).await?;
-    let response = read_value_ref(&mut &response_buffer[..])?;
-    assert_eq!(response, value.as_ref());
+    let key = Value::String("key".into());
+    let document = Value::Map(vec![
+        (Value::String("is_best_db".into()), Value::Boolean(true)),
+        (
+            Value::String("owner".into()),
+            Value::String("tontinton".into()),
+        ),
+    ]);
+
+    collection
+        .set_consistent(key.clone(), document.clone(), Consistency::Quorum)
+        .await?;
+
+    let response = collection.get_consistent(key, Consistency::Quorum).await?;
+    assert_eq!(response, document);
 
     collection.drop().await?;
 

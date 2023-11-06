@@ -14,7 +14,9 @@ use dbeel::{
 };
 use error::VecError;
 use rmp_serde::from_slice;
-use rmpv::{encode::write_value, Integer, Utf8String, Value};
+use rmpv::{
+    decode::read_value, encode::write_value, Integer, Utf8String, Value,
+};
 
 use crate::error::{Error, Result};
 
@@ -482,7 +484,7 @@ impl Collection {
         &self,
         key: Value,
         consistency: Consistency,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Value> {
         let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("get".into())),
@@ -499,20 +501,22 @@ impl Collection {
                 ),
             ),
         ]);
-        self.client
+        let response_buffer = self
+            .client
             .send_sharded_request(
                 hash,
                 request,
                 self.metadata.replication_factor,
             )
-            .await
+            .await?;
+        Ok(read_value(&mut &response_buffer[..])?)
     }
 
-    pub async fn get(&self, key: Value) -> Result<Vec<u8>> {
+    pub async fn get(&self, key: Value) -> Result<Value> {
         self.get_consistent(key, Consistency::Fixed(1)).await
     }
 
-    pub async fn get_from_str_key<S>(&self, key: S) -> Result<Vec<u8>>
+    pub async fn get_from_str_key<S>(&self, key: S) -> Result<Value>
     where
         S: Into<Utf8String>,
     {
@@ -524,7 +528,7 @@ impl Collection {
         key: Value,
         value: Value,
         consistency: Consistency,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Value> {
         let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("set".into())),
@@ -542,16 +546,19 @@ impl Collection {
                 ),
             ),
         ]);
-        self.client
+
+        let response_buffer = self
+            .client
             .send_sharded_request(
                 hash,
                 request,
                 self.metadata.replication_factor,
             )
-            .await
+            .await?;
+        Ok(read_value(&mut &response_buffer[..])?)
     }
 
-    pub async fn set(&self, key: Value, value: Value) -> Result<Vec<u8>> {
+    pub async fn set(&self, key: Value, value: Value) -> Result<Value> {
         self.set_consistent(key, value, Consistency::Fixed(1)).await
     }
 
@@ -559,7 +566,7 @@ impl Collection {
         &self,
         key: S,
         value: Value,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Value> {
         self.set(Value::String(key.into()), value).await
     }
 
@@ -567,7 +574,7 @@ impl Collection {
         &self,
         key: Value,
         consistency: Consistency,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Value> {
         let hash = hash_key(&key)?;
         let request = Value::Map(vec![
             (Value::String("type".into()), Value::String("delete".into())),
@@ -584,23 +591,25 @@ impl Collection {
                 ),
             ),
         ]);
-        self.client
+        let response_buffer = self
+            .client
             .send_sharded_request(
                 hash,
                 request,
                 self.metadata.replication_factor,
             )
-            .await
+            .await?;
+        Ok(read_value(&mut &response_buffer[..])?)
     }
 
-    pub async fn delete(&self, key: Value) -> Result<Vec<u8>> {
+    pub async fn delete(&self, key: Value) -> Result<Value> {
         self.delete_consistent(key, Consistency::Fixed(1)).await
     }
 
     pub async fn delete_from_str_key<S: Into<Utf8String>>(
         &self,
         key: S,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Value> {
         self.delete(Value::String(key.into())).await
     }
 

@@ -7,7 +7,7 @@ use dbeel::{
 };
 use dbeel_client::{Consistency, DbeelClient};
 use futures::try_join;
-use rmpv::{decode::read_value_ref, Value, ValueRef};
+use rmpv::Value;
 use rstest::{fixture, rstest};
 use serial_test::serial;
 use test_utils::{install_logger, next_node_args, test_node};
@@ -29,8 +29,8 @@ fn args() -> Args {
 
 fn three_nodes_replication_test(
     args: Args,
-    set_consistency: usize,
-    get_consistency: usize,
+    set_consistency: u16,
+    get_consistency: u16,
 ) -> Result<()> {
     let (seed_sender, seed_receiver) = async_channel::bounded(1);
     let (set1_sender, set1_receiver) = async_channel::bounded(1);
@@ -145,15 +145,14 @@ fn three_nodes_replication_test(
             client.set_write_timeout(Duration::from_secs(1));
 
             let collection = client.collection("test").await.unwrap();
-            let response = collection
+            let value = collection
                 .get_consistent(
                     Value::String("key".into()),
                     Consistency::Fixed(get_consistency),
                 )
                 .await
                 .unwrap();
-            let value = read_value_ref(&mut &response[..]).unwrap();
-            assert_eq!(value, ValueRef::F32(42.0));
+            assert_eq!(value, Value::F32(42.0));
 
             done_sender.send(()).await.unwrap();
             done_receiver.recv().await.unwrap();
