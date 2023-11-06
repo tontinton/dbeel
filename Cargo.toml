@@ -19,6 +19,7 @@ homepage = "https://github.com/tontinton/dbeel"
 keywords = ["database", "rust", "iouring", "thread-per-core", "linux"]
 categories = ["database-implementations"]
 readme = "./README.md"
+license = "Apache-2.0 OR MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
