@@ -7,14 +7,16 @@ It's not production ready at all, but that doesn't mean there is no value in the
 If you ever wanted to read database code without getting overwhelmed by massive amounts of code, dbeel is for you.
 
 ## Traits
-* Stores documents in `msgpack` format
-* LSM Tree
+* Documents + API in [msgpack](https://msgpack.org) format
+* [LSM Tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree)
   * Memtable is a red black tree
-* Thread per core (thanks `glommio`)
-* io_uring (thanks again `glommio`)
+* [Thread per core](https://seastar.io/shared-nothing) (thanks `glommio`)
+* [io_uring](https://unixism.net/loti/what_is_io_uring.html) (thanks again `glommio`)
 * Direct I/O
-  * Page cache implemented using WTiny-LFU eviction algorithm
-* Distributed events using gossip dissemination
+  * Page cache implemented using [WTiny-LFU](https://arxiv.org/pdf/1512.00727.pdf) eviction algorithm
+* Load balanced via [consistent hashing](https://en.wikipedia.org/wiki/Consistent_hashing)
+  * Each shard (core) is placed on the ring
+* Metadata events sent using [gossip dissemination](https://en.wikipedia.org/wiki/Gossip_protocol)
 * Leaderless replication with tunable consistency
   * `replication_factor` (parameter in `create_collection` command) - Number of nodes that will store a copy of data
   * Write `consistency` (parameter in `set` command) - Number of nodes that will acknowledge a write for it to succeed
