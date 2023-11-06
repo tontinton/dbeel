@@ -6,7 +6,7 @@ use dbeel::{
     tasks::db_server::ResponseError,
 };
 use dbeel_client::{self, DbeelClient};
-use rmpv::{decode::read_value_ref, Value, ValueRef};
+use rmpv::Value;
 use rstest::{fixture, rstest};
 use serial_test::serial;
 use test_utils::{install_logger, test_shard};
@@ -33,9 +33,8 @@ fn response_equals_error(
     }
 }
 
-fn response_ok(response: Vec<u8>) -> Result<bool> {
-    let value = read_value_ref(&mut &response[..])?;
-    Ok(value == ValueRef::String("OK".into()))
+fn response_ok(value: Value) -> Result<bool> {
+    Ok(value == Value::String("OK".into()))
 }
 
 #[fixture]
@@ -133,9 +132,8 @@ fn set_and_get_key(args: Args) -> Result<()> {
         assert!(response_ok(response).unwrap());
 
         for _ in 0..ASSERT_AMOUNT_OF_TIMES {
-            let response = collection.get_from_str_key("key").await.unwrap();
-            let value = read_value_ref(&mut &response[..]).unwrap();
-            assert_eq!(value, ValueRef::F32(100.0));
+            let value = collection.get_from_str_key("key").await.unwrap();
+            assert_eq!(value, Value::F32(100.0));
         }
     })?;
 
@@ -172,9 +170,8 @@ fn set_and_get_key_after_restart(args: Args) -> Result<()> {
 
         let collection = client.collection("test").await.unwrap();
         for _ in 0..ASSERT_AMOUNT_OF_TIMES {
-            let response = collection.get_from_str_key("key").await.unwrap();
-            let value = read_value_ref(&mut &response[..]).unwrap();
-            assert_eq!(value, ValueRef::F32(100.0));
+            let value = collection.get_from_str_key("key").await.unwrap();
+            assert_eq!(value, Value::F32(100.0));
         }
     })?;
 
@@ -240,9 +237,8 @@ fn multiple_collections(args: Args) -> Result<()> {
         }
 
         for collection in &collections {
-            let response = collection.get_from_str_key("key").await.unwrap();
-            let value = read_value_ref(&mut &response[..]).unwrap();
-            assert_eq!(value, ValueRef::F32(100.0));
+            let value = collection.get_from_str_key("key").await.unwrap();
+            assert_eq!(value, Value::F32(100.0));
         }
 
         collections[0].delete_from_str_key("key").await.unwrap();
@@ -253,9 +249,8 @@ fn multiple_collections(args: Args) -> Result<()> {
             &Error::KeyNotFound
         ));
 
-        let response = collections[1].get_from_str_key("key").await.unwrap();
-        let value = read_value_ref(&mut &response[..]).unwrap();
-        assert_eq!(value, ValueRef::F32(100.0));
+        let value = collections[1].get_from_str_key("key").await.unwrap();
+        assert_eq!(value, Value::F32(100.0));
 
         collections[1].delete_from_str_key("key").await.unwrap();
 

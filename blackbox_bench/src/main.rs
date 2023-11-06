@@ -5,7 +5,7 @@ use glommio::{
     spawn_local, CpuLocation, CpuSet, LocalExecutorBuilder, Placement,
 };
 use rand::{seq::SliceRandom, thread_rng};
-use rmpv::{decode::read_value_ref, Value, ValueRef};
+use rmpv::Value;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -69,9 +69,8 @@ async fn set_request(
         .set_from_str_key(key_str, Value::String(key_str.into()))
         .await
     {
-        Ok(response_buffer) => {
-            let response = read_value_ref(&mut &response_buffer[..]).unwrap();
-            if response != ValueRef::String("OK".into()) {
+        Ok(response) => {
+            if response != Value::String("OK".into()) {
                 eprintln!("Response not OK: {}", response);
                 return None;
             }
@@ -96,9 +95,8 @@ async fn get_request(
     let start_time = Instant::now();
 
     match collection.get_from_str_key(key_str).await {
-        Ok(response_buffer) => {
-            let response = read_value_ref(&mut &response_buffer[..]).unwrap();
-            if response != ValueRef::String(key_str.into()) {
+        Ok(response) => {
+            if response != Value::String(key_str.into()) {
                 eprintln!("Response not OK: {}", response);
                 return None;
             }
