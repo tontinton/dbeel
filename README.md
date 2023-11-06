@@ -10,8 +10,8 @@ If you ever wanted to read database code without getting overwhelmed by massive 
 * Stores documents in `msgpack` format
 * LSM Tree
   * Memtable is a red black tree
-* Thread per core
-* io_uring
+* Thread per core (thanks `glommio`)
+* io_uring (thanks again `glommio`)
 * Direct I/O
   * Page cache implemented using WTiny-LFU eviction algorithm
 * Distributed events using gossip dissemination
