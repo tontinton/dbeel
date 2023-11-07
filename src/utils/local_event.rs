@@ -7,8 +7,6 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use pin_project_lite::pin_project;
-
 type SharedListeners = Rc<RefCell<BTreeMap<u64, ListenerState>>>;
 
 struct ListenerState {
@@ -16,32 +14,26 @@ struct ListenerState {
     done: bool,
 }
 
-pin_project! {
-    pub struct LocalEventListener {
-        #[pin]
-        id: u64,
-
-        #[pin]
-        listeners: SharedListeners,
-    }
+pub struct LocalEventListener {
+    id: u64,
+    listeners: SharedListeners,
 }
 
 impl Future for LocalEventListener {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let mut listeners = this.listeners.borrow_mut();
+        let mut listeners = self.listeners.borrow_mut();
 
-        if let Some(state) = listeners.get(&this.id) {
+        if let Some(state) = listeners.get(&self.id) {
             if state.done {
-                listeners.remove(&this.id);
+                listeners.remove(&self.id);
                 return Poll::Ready(());
             }
         }
 
         listeners.insert(
-            *this.id,
+            self.id,
             ListenerState {
                 waker: Some(cx.waker().clone()),
                 done: false,
