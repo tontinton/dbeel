@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use dbeel::{
     args::Args,
@@ -7,6 +7,7 @@ use dbeel::{
     local_shard::LocalShardConnection,
     run_shard::{create_shard, run_shard},
     shards::MyShard,
+    utils::timeout::timeout,
 };
 
 use async_channel::Receiver;
@@ -15,6 +16,8 @@ use glommio::{
     enclose, spawn_local, ExecutorJoinHandle, LocalExecutorBuilder, Placement,
 };
 use pretty_env_logger::formatted_timed_builder;
+
+const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn install_logger() {
     let mut log_builder = formatted_timed_builder();
@@ -46,22 +49,29 @@ where
 {
     let builder = LocalExecutorBuilder::new(Placement::Unbound);
     let handle = builder.name("test").spawn(|| async move {
-        let id = 0;
-        let shard = create_shard(args, id, vec![LocalShardConnection::new(id)]);
-        let start_event_receiver =
-            shard.subscribe_to_flow_event(FlowEvent::StartTasks.into());
-        let shard_run_handle =
-            spawn_local(enclose!((shard.clone() => shard) async move {
-                run_shard(shard, false).await.unwrap();
-            }));
-        start_event_receiver.recv().await.unwrap();
+        let run_test = async {
+            let id = 0;
+            let shard =
+                create_shard(args, id, vec![LocalShardConnection::new(id)]);
+            let start_event_receiver =
+                shard.subscribe_to_flow_event(FlowEvent::StartTasks.into());
+            let shard_run_handle =
+                spawn_local(enclose!((shard.clone() => shard) async move {
+                    run_shard(shard, false).await.unwrap();
+                }));
+            start_event_receiver.recv().await?;
 
-        // Test start
-        test_future(shard.clone()).await;
-        // Test end
+            // Test start
+            test_future(shard.clone()).await;
+            // Test end
 
-        shard.stop().await.unwrap();
-        shard_run_handle.await;
+            shard.stop().await.unwrap();
+            shard_run_handle.await;
+
+            Ok(())
+        };
+
+        timeout(TEST_TIMEOUT, run_test).await.unwrap();
     })?;
     handle.join()?;
     Ok(())
@@ -82,44 +92,52 @@ where
 
     let builder = LocalExecutorBuilder::new(Placement::Unbound);
     let handle = builder.name("test").spawn(move || async move {
-        let local_connections = (0..number_of_shards)
-            .map(LocalShardConnection::new)
-            .collect::<Vec<_>>();
+        let run_test = async {
+            let local_connections = (0..number_of_shards)
+                .map(LocalShardConnection::new)
+                .collect::<Vec<_>>();
 
-        let mut shards = (0..number_of_shards)
-            .map(|id| create_shard(args.clone(), id, local_connections.clone()))
-            .rev()
-            .collect::<Vec<_>>();
+            let mut shards = (0..number_of_shards)
+                .map(|id| {
+                    create_shard(args.clone(), id, local_connections.clone())
+                })
+                .rev()
+                .collect::<Vec<_>>();
 
-        let start_event_receivers =
-            subscribe_to_flow_events(&shards, FlowEvent::StartTasks);
+            let start_event_receivers =
+                subscribe_to_flow_events(&shards, FlowEvent::StartTasks);
 
-        let node_shard = shards.pop().unwrap();
-        let shard_run_handle =
-            spawn_local(enclose!((node_shard.clone() => node_shard,
-                                  shards.clone() => shards) async move {
-                let mut futures = Vec::with_capacity(shards.len() + 1);
-                futures.push(run_shard(node_shard, true));
-                futures.extend(shards
-                    .into_iter()
-                    .map(|shard| run_shard(shard, false)));
+            let node_shard = shards.pop().unwrap();
+            let shard_run_handle =
+                spawn_local(enclose!((node_shard.clone() => node_shard,
+                                      shards.clone() => shards) async move {
+                    let mut futures = Vec::with_capacity(shards.len() + 1);
+                    futures.push(run_shard(node_shard, true));
+                    futures.extend(shards
+                        .into_iter()
+                        .map(|shard| run_shard(shard, false)));
+                    try_join_all(futures).await.unwrap();
+                }));
+            wait_for_flow_events(start_event_receivers).await.unwrap();
+
+            // Test start
+            test_future(node_shard.clone(), shards.clone()).await;
+            // Test end
+
+            if crash_at_shutdown {
+                shard_run_handle.cancel().await;
+            } else {
+                let mut futures =
+                    shards.iter().map(|s| s.stop()).collect::<Vec<_>>();
+                futures.push(node_shard.stop());
                 try_join_all(futures).await.unwrap();
-            }));
-        wait_for_flow_events(start_event_receivers).await.unwrap();
+                shard_run_handle.await;
+            }
 
-        // Test start
-        test_future(node_shard.clone(), shards.clone()).await;
-        // Test end
+            Ok(())
+        };
 
-        if crash_at_shutdown {
-            shard_run_handle.cancel().await;
-        } else {
-            let mut futures =
-                shards.iter().map(|s| s.stop()).collect::<Vec<_>>();
-            futures.push(node_shard.stop());
-            try_join_all(futures).await.unwrap();
-            shard_run_handle.await;
-        }
+        timeout(TEST_TIMEOUT, run_test).await.unwrap();
     })?;
 
     Ok(handle)
