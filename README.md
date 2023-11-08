@@ -10,6 +10,8 @@ So basically it has a document API like in `MongoDB` with leaderless replication
 It's not production ready at all, but that doesn't mean there is no value in the project.
 If you ever wanted to read database code without getting overwhelmed by massive amounts of code, dbeel is for you.
 
+You can try it out by running `cargo install dbeel`.
+
 ## Traits
 * Documents + API in [msgpack](https://msgpack.org) format
 * [LSM Tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree)
@@ -80,8 +82,8 @@ assert_eq!(response, value);
 collection.drop().await?;
 ```
 
-## Try it out
-To compile the DB:
+## Try out the benchmarks yourself
+To compile the DB (you can skip building the db by running `cargo install dbeel`):
 ``` sh
 cargo build --release
 ./target/release/dbeel --help
@@ -96,6 +98,7 @@ cargo build --release
 To run the benchmarks:
 
 ``` sh
+# If you installed using cargo instead of building, dbeel should be in your PATH.
 ./target/release/dbeel               # On first terminal
 ./target/release/blackbox-bench      # On second terminal
 ```
