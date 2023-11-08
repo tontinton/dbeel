@@ -39,10 +39,10 @@ async-channel = "1.8.0"
 bincode = "1.3.3"
 bloomfilter = { version = "1.0.12", features = ["serde"] }
 clap = { version = "4.2.7", features = ["derive"] }
-from-num = { path = "from_num" }
+from-num = { version = "0.1.0", path = "from_num" }
 futures = "0.3.28"
 futures-lite = "1.12.0"
-glommio = { git = "https://github.com/tontinton/glommio.git", branch = "my-master" }
+glommio = { version = "0.8.0", git = "https://github.com/tontinton/glommio.git", branch = "my-master" }
 itertools = "0.11.0"
 kinded = "0.3.0"
 log = "0.4.17"
@@ -51,7 +51,7 @@ once_cell = "1.17.1"
 pin-project-lite = "0.2.9"
 pretty_env_logger = "0.4.0"
 rand = "0.8.5"
-rbtree-arena = { path = "rbtree_arena" }
+rbtree-arena = { version = "0.1.0", path = "rbtree_arena" }
 regex = "1.7.1"
 rmp = "0.8.11"
 rmp-serde = "1.1.2"
