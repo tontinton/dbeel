@@ -2,7 +2,7 @@
 members = [
   "blackbox_bench",
   "dbeel_client",
-  "from_num",
+  "stupid_from_num",
   "rbtree_arena",
   "test_utils",
   "tokio_example",
@@ -39,7 +39,7 @@ async-channel = "1.8.0"
 bincode = "1.3.3"
 bloomfilter = { version = "1.0.12", features = ["serde"] }
 clap = { version = "4.2.7", features = ["derive"] }
-from-num = { version = "0.1.0", path = "from_num" }
+stupid-from-num = { version = "0.1.0", path = "stupid_from_num" }
 futures = "0.3.28"
 futures-lite = "1.12.0"
 glommio = { version = "0.8.0", git = "https://github.com/tontinton/glommio.git", branch = "my-master" }
