@@ -737,7 +737,6 @@ dependencies = [
  "dbeel",
  "dbeel-client",
  "event-listener 3.0.1",
- "from-num",
  "futures",
  "futures-lite",
  "glommio",
@@ -758,6 +757,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serial_test",
+ "stupid-from-num",
  "tempfile",
  "test-utils",
  "thiserror",
@@ -1058,14 +1058,6 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
-
-[[package]]
-name = "from-num"
-version = "0.1.0"
-dependencies = [
- "quote",
- "syn 2.0.38",
-]
 
 [[package]]
 name = "futures"
@@ -2507,6 +2499,14 @@ name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
+
+[[package]]
+name = "stupid-from-num"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.38",
+]
 
 [[package]]
 name = "subtle"
