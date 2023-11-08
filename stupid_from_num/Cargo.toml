@@ -8,6 +8,7 @@ repository = "https://github.com/tontinton/dbeel/stupid_from_num"
 homepage = "https://github.com/tontinton/dbeel/stupid_from_num"
 keywords = ["library", "derive", "rust"]
 categories = []
+readme = "./README.md"
 license = "Apache-2.0 OR MIT"
 
 [lib]

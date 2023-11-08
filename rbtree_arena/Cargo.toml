@@ -8,6 +8,7 @@ repository = "https://github.com/tontinton/dbeel/rbtree_arena"
 homepage = "https://github.com/tontinton/dbeel/rbtree_arena"
 keywords = ["library", "tree", "rust"]
 categories = ["data-structures", "algorithms"]
+readme = "./README.md"
 license = "Apache-2.0 OR MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
