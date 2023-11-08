@@ -2,6 +2,7 @@
 members = [
   "blackbox_bench",
   "dbeel_client",
+  "mongo_bench",
   "stupid_from_num",
   "rbtree_arena",
   "test_utils",
