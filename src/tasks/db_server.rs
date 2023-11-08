@@ -1,6 +1,5 @@
 use std::{cmp::min, rc::Rc, time::Duration};
 
-use from_num::FromNum;
 use futures::{
     future::try_join, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
 };
@@ -16,6 +15,7 @@ use rmpv::{
     Value, ValueRef,
 };
 use serde::{Deserialize, Serialize};
+use stupid_from_num::FromNum;
 use time::OffsetDateTime;
 
 use crate::{
