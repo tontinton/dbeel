@@ -6,6 +6,7 @@ members = [
   "stupid_from_num",
   "rbtree_arena",
   "test_utils",
+  "tokio_bench",
   "tokio_example",
 ]
 
