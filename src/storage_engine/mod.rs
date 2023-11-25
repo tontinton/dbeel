@@ -15,7 +15,7 @@ pub const TOMBSTONE: Vec<u8> = vec![];
 
 const DMA_STREAM_NUMBER_OF_BUFFERS: usize = 16;
 
-pub const DEFAULT_TREE_CAPACITY: usize = 4096;
+pub const DEFAULT_TREE_CAPACITY: usize = 8192;
 pub const DEFAULT_SSTABLE_BLOOM_MIN_SIZE: u64 = 1_048_576;
 
 const INDEX_PADDING: usize = 20; // Number of integers in max u64.
