@@ -857,12 +857,6 @@ impl LSMTree {
         self.flush_memtable
             .replace(Some(self.active_memtable.replace(memtable_to_flush)));
 
-        let flush_wal_path = get_file_path(
-            &self.dir,
-            self.memtable_index.get(),
-            MEMTABLE_FILE_EXT,
-        );
-
         self.memtable_index.set(self.memtable_index.get() + 2);
 
         let next_wal_path = get_file_path(
@@ -870,7 +864,8 @@ impl LSMTree {
             self.memtable_index.get(),
             MEMTABLE_FILE_EXT,
         );
-        self.wal_file
+        let old_wal_file = self
+            .wal_file
             .replace(Rc::new(DmaFile::create(&next_wal_path).await?));
         self.wal_offset.set(0);
         self.wal_sync_event.replace(None);
@@ -921,7 +916,8 @@ impl LSMTree {
 
         self.flush_done_event.notify();
 
-        remove(&flush_wal_path).await?;
+        old_wal_file.clone().close_rc().await?;
+        old_wal_file.remove().await?;
 
         Ok(())
     }
