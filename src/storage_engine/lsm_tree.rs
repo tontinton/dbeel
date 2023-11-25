@@ -120,6 +120,14 @@ impl SSTable {
             bloom,
         })
     }
+
+    async fn close(&self) -> Result<()> {
+        try_join!(
+            self.data_file.clone().close_rc(),
+            self.index_file.clone().close_rc()
+        )?;
+        Ok(())
+    }
 }
 
 enum IterState {
@@ -1107,10 +1115,17 @@ impl LSMTree {
         let old_sstables = self.sstables.borrow().clone();
 
         {
-            let mut sstables: Vec<SSTable> =
-                old_sstables.iter().cloned().collect();
+            let (sstables_to_close, mut sstables): (
+                Vec<SSTable>,
+                Vec<SSTable>,
+            ) = old_sstables
+                .iter()
+                .cloned()
+                .partition(|x| indices_to_compact.contains(&x.index));
 
-            sstables.retain(|x| !indices_to_compact.contains(&x.index));
+            for x in sstables_to_close {
+                x.close().await?;
+            }
             sstables.push(
                 SSTable::new(
                     &self.dir,
