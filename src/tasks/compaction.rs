@@ -79,14 +79,22 @@ async fn compact_tree(tree: Rc<LSMTree>, compaction_factor: usize) {
             .extend(items);
     }
 
-    for items in optimized_groups.into_values() {
+    for (i, items) in optimized_groups.into_values().enumerate() {
         if items.len() < MIN_COMPACTION_FACTOR
             || items.len() < compaction_factor
         {
             continue;
         }
+
         let indices = items.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
-        if let Err(e) = tree.compact(&indices, index_to_compact).await {
+
+        // To avoid data resurrection, remove tombstones only on the final level.
+        let keep_tombstones = i > 0;
+
+        if let Err(e) = tree
+            .compact(&indices, index_to_compact, keep_tombstones)
+            .await
+        {
             error!("Failed to compact files: {}", e);
         }
         index_to_compact += 2;
