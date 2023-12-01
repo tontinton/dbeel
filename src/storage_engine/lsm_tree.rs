@@ -951,6 +951,7 @@ impl LSMTree {
         &self,
         indices_to_compact: &[usize],
         output_index: usize,
+        keep_tombstones: bool,
     ) -> Result<()> {
         let sstable_paths: Vec<(PathBuf, PathBuf, PathBuf)> =
             indices_to_compact
@@ -1041,7 +1042,8 @@ impl LSMTree {
             if let Some(next) = heap.peek() {
                 should_write_current &= next.entry.key != current.entry.key;
             }
-            should_write_current &= current.entry.value.data != TOMBSTONE;
+            should_write_current &=
+                keep_tombstones || current.entry.value.data != TOMBSTONE;
 
             if should_write_current {
                 if let Some(ref mut bloom) = maybe_bloom {
@@ -1429,7 +1431,7 @@ mod tests {
                 ]
             );
 
-            tree.compact(&[0, 2, 4], 5).await?;
+            tree.compact(&[0, 2, 4], 5, false).await?;
             validate_tree_after_compaction(&tree).await?;
         }
 
