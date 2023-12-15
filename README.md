@@ -12,6 +12,8 @@ If you ever wanted to read database code without getting overwhelmed by massive 
 
 You can try it out by running `cargo install dbeel`.
 
+I've also posted a <a href="https://tontinton.com/posts/database-fundementals/">blog post</a> as a summary of what I've learned working on this project.
+
 ## Traits
 * Documents + API in [msgpack](https://msgpack.org) format
 * [LSM Tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree)
